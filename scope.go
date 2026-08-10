@@ -277,3 +277,38 @@ func (s *Scope) Discard(child *Scope) error {
 	child.state = ScopeDiscarded
 	return nil
 }
+
+// Halt forces this scope into the discarded state and records a
+// supervisor halt event in the trace. Unlike Discard, Halt operates
+// on the scope itself (not a child) and is used by the supervisor
+// to force-stop a sub-agent.
+//
+// Halt is idempotent — calling it on an already-discarded scope
+// returns nil.
+func (s *Scope) Halt() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.state == ScopeDiscarded {
+		return nil // already halted
+	}
+
+	_, err := s.store.Append(TrustedAppendContext, AppendBatch{
+		AppendIntentID: fmt.Sprintf("%s:halt:%d", s.ownerID, time.Now().UnixNano()),
+		Groups: []AppendGroup{{
+			TraceOwnerID: s.ownerID,
+			FactDrafts: []RecordDraft{{
+				Mode:      Declaration,
+				SchemaRef: SchemaSupervisorHalt,
+				KindLabel: "supervisor:halt",
+				Payload:   map[string]any{},
+			}},
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("record halt event: %w", err)
+	}
+
+	s.state = ScopeDiscarded
+	return nil
+}

@@ -902,20 +902,11 @@ func (s *SQLiteTraceStore) readOwnerCutoff(frontierID string) (Frontier, error) 
 	}
 
 	payload := frontierFact.Body.Payload
-	frontierIDVal, _ := payload["frontier_id"].(string)
-	targetOwnerVal, _ := payload["target_trace_owner_id"].(string)
-	throughFactVal, _ := payload["through_fact_id"].(string)
-	throughOrdinalRaw, _ := payload["through_owner_ordinal"].(float64)
-	publisherVal, _ := payload["publisher_trace_owner_id"].(string)
-
-	expected := Frontier{
-		FrontierID:          frontierIDVal,
-		TargetTraceOwnerID:  targetOwnerVal,
-		ThroughFactID:       throughFactVal,
-		ThroughOwnerOrdinal: int(throughOrdinalRaw),
-		PublisherOwnerID:    publisherVal,
-		CreatedByFactID:     f.CreatedByFactID,
+	expected, err := frontierFromPayload(payload, f.CreatedByFactID)
+	if err != nil {
+		return Frontier{}, err
 	}
+
 	if f.FrontierID != expected.FrontierID ||
 		f.TargetTraceOwnerID != expected.TargetTraceOwnerID ||
 		f.ThroughFactID != expected.ThroughFactID ||
@@ -924,6 +915,38 @@ func (s *SQLiteTraceStore) readOwnerCutoff(frontierID string) (Frontier, error) 
 	}
 
 	return f, nil
+}
+
+// frontierFromPayload extracts a Frontier from a retained frontier fact's
+// payload map. Returns an error if any required field is missing or has
+// the wrong type — never silently uses a zero value.
+func frontierFromPayload(payload map[string]any, createdByFactID string) (Frontier, error) {
+	frontierID, ok := payload["frontier_id"].(string)
+	if !ok || frontierID == "" {
+		return Frontier{}, &TraceStoreError{"frontier fact missing or invalid frontier_id"}
+	}
+	targetOwner, ok := payload["target_trace_owner_id"].(string)
+	if !ok || targetOwner == "" {
+		return Frontier{}, &TraceStoreError{"frontier fact missing or invalid target_trace_owner_id"}
+	}
+	throughFact, ok := payload["through_fact_id"].(string)
+	if !ok || throughFact == "" {
+		return Frontier{}, &TraceStoreError{"frontier fact missing or invalid through_fact_id"}
+	}
+	throughOrdinalRaw, ok := payload["through_owner_ordinal"].(float64)
+	if !ok {
+		return Frontier{}, &TraceStoreError{"frontier fact missing or invalid through_owner_ordinal"}
+	}
+	publisher, _ := payload["publisher_trace_owner_id"].(string) // optional
+
+	return Frontier{
+		FrontierID:          frontierID,
+		TargetTraceOwnerID:  targetOwner,
+		ThroughFactID:       throughFact,
+		ThroughOwnerOrdinal: int(throughOrdinalRaw),
+		PublisherOwnerID:    publisher,
+		CreatedByFactID:     createdByFactID,
+	}, nil
 }
 
 func (s *SQLiteTraceStore) readFrontierRow(frontierID string) (*sql.Row, error) {

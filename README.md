@@ -75,7 +75,7 @@ fmt.Println(event.Payload)    // map[cmd:go test ./...]
 Create isolated execution branches for speculative work. Fork records the branch point in the trace; merge or discard the branch later:
 
 ```go
-mgr := shepherd.NewScopeManager(store, bus)
+mgr := shepherd.NewScopeManager(store)
 
 parent, _ := mgr.Create("agent:main")
 child, _ := mgr.Fork(parent.ID(), "agent:experimental")
@@ -220,7 +220,7 @@ bus.Publish(event)                     // non-blocking
 ### Scope Manager
 
 ```go
-mgr := shepherd.NewScopeManager(store, bus)
+mgr := shepherd.NewScopeManager(store)
 
 scope, err := mgr.Create("owner-id")
 scope, err := mgr.Fork("parent-scope-id", "child-owner-id")

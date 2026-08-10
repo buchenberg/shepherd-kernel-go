@@ -188,28 +188,7 @@ func (s *Supervisor) Halt(scopeID string) error {
 		return fmt.Errorf("scope %s not found", scopeID)
 	}
 
-	_, err := scope.store.Append(TrustedAppendContext, AppendBatch{
-		AppendIntentID: fmt.Sprintf("%s:supervisor:halt:%d", scope.OwnerID(), time.Now().UnixNano()),
-		Groups: []AppendGroup{{
-			TraceOwnerID: scope.OwnerID(),
-			FactDrafts: []RecordDraft{{
-				Mode:      Declaration,
-				SchemaRef: SchemaSupervisorHalt,
-				KindLabel: "supervisor:halt",
-				Payload:   map[string]any{},
-			}},
-		}},
-	})
-	if err != nil {
-		return err
-	}
-
-	// Mark scope as discarded (halt is a forced discard)
-	scope.mu.Lock()
-	scope.state = ScopeDiscarded
-	scope.mu.Unlock()
-
-	return nil
+	return scope.Halt()
 }
 
 // --- Built-in rules ---
