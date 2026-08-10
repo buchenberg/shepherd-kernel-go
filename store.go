@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -38,6 +39,17 @@ type SQLiteTraceStore struct {
 	path string
 	db   *sql.DB
 	mu   sync.Mutex
+	bus  *EffectBus // optional; nil = no real-time publishing
+}
+
+// WithBus attaches an effect bus to the store. When set, every successful
+// Append publishes an EffectEvent for each retained record. This enables
+// real-time supervision without modifying the store's persistence behavior.
+//
+// The bus is optional — existing code that doesn't set a bus sees no change.
+func (s *SQLiteTraceStore) WithBus(bus *EffectBus) *SQLiteTraceStore {
+	s.bus = bus
+	return s
 }
 
 // NewSQLiteTraceStore creates a new trace store at the given path.
@@ -97,7 +109,7 @@ func (s *SQLiteTraceStore) Append(ctx AppendContext, batch AppendBatch) (AppendR
 		return AppendReceipt{}, fmt.Errorf("begin transaction: %w", err)
 	}
 
-	receipt, err := s.appendInTx(tx, opCtx, batch)
+	receipt, isNew, err := s.appendInTx(tx, opCtx, batch)
 	if err != nil {
 		tx.Rollback()
 		return AppendReceipt{}, err
@@ -106,7 +118,48 @@ func (s *SQLiteTraceStore) Append(ctx AppendContext, batch AppendBatch) (AppendR
 	if err := tx.Commit(); err != nil {
 		return AppendReceipt{}, fmt.Errorf("commit: %w", err)
 	}
+
+	// Publish effect events after successful commit. Only for new appends,
+	// not idempotent retries — the store is the durable record, the bus is
+	// ephemeral. Idempotent appends return existing receipts without
+	// inserting new records, so publishing would be a no-op at best.
+	if isNew {
+		s.publishAppendEvents(batch, receipt)
+	}
+
 	return receipt, nil
+}
+
+// publishAppendEvents publishes an EffectEvent for each retained record
+// in a successfully committed batch. Called after tx.Commit() so the bus
+// never blocks or fails the persistence path.
+func (s *SQLiteTraceStore) publishAppendEvents(batch AppendBatch, receipt AppendReceipt) {
+	if s.bus == nil {
+		return
+	}
+
+	now := time.Now()
+	factIdx := 0
+	for _, group := range batch.Groups {
+		for _, draft := range group.FactDrafts {
+			if factIdx >= len(receipt.FactIDs) {
+				return
+			}
+			event := EffectEvent{
+				RecordID:      receipt.FactIDs[factIdx],
+				IntentID:      batch.AppendIntentID,
+				TraceOwnerID:  group.TraceOwnerID,
+				Mode:          draft.Mode,
+				SchemaRef:     draft.SchemaRef,
+				KindLabel:     draft.KindLabel,
+				Payload:       draft.Payload,
+				CausalParents: append(group.CausalParents, draft.CausedByFactIDs...),
+				Timestamp:     now,
+			}
+			s.bus.Publish(event)
+			factIdx++
+		}
+	}
 }
 
 // PreviewRecordIDs returns the durable record IDs this batch would allocate if committed.
@@ -421,13 +474,13 @@ func (s *SQLiteTraceStore) createSchema() error {
 
 // --- Append ---
 
-func (s *SQLiteTraceStore) appendInTx(tx *sql.Tx, ctx OperationContext, batch AppendBatch) (AppendReceipt, error) {
+func (s *SQLiteTraceStore) appendInTx(tx *sql.Tx, ctx OperationContext, batch AppendBatch) (AppendReceipt, bool, error) {
 	if err := validateBatchShape(batch, ctx); err != nil {
-		return AppendReceipt{}, err
+		return AppendReceipt{}, false, err
 	}
 	batchDigest, err := batchDigest(batch, ctx)
 	if err != nil {
-		return AppendReceipt{}, err
+		return AppendReceipt{}, false, err
 	}
 
 	// Check idempotency
@@ -439,25 +492,26 @@ func (s *SQLiteTraceStore) appendInTx(tx *sql.Tx, ctx OperationContext, batch Ap
 	).Scan(&existingDigest, &existingReceiptJSON)
 	if err == nil {
 		if existingDigest != batchDigest {
-			return AppendReceipt{}, &AppendIntentConflictError{
+			return AppendReceipt{}, false, &AppendIntentConflictError{
 				fmt.Sprintf("append intent %q was already committed with different content", batch.AppendIntentID),
 			}
 		}
-		return receiptFromJSON(existingReceiptJSON)
+		receipt, err := receiptFromJSON(existingReceiptJSON)
+		return receipt, false, err // false = idempotent, no new records
 	}
 	if err != sql.ErrNoRows {
-		return AppendReceipt{}, fmt.Errorf("query append intent: %w", err)
+		return AppendReceipt{}, false, fmt.Errorf("query append intent: %w", err)
 	}
 
 	// Prepare append
 	contexts, witnessPlans, facts, receipt, err := s.prepareAppend(tx, batch, ctx)
 	if err != nil {
-		return AppendReceipt{}, err
+		return AppendReceipt{}, false, err
 	}
 
 	receiptJSON, err := receiptToJSON(receipt)
 	if err != nil {
-		return AppendReceipt{}, err
+		return AppendReceipt{}, false, err
 	}
 
 	_, err = tx.Exec(
@@ -465,24 +519,24 @@ func (s *SQLiteTraceStore) appendInTx(tx *sql.Tx, ctx OperationContext, batch Ap
 		batch.AppendIntentID, batchDigest, receiptJSON,
 	)
 	if err != nil {
-		return AppendReceipt{}, fmt.Errorf("insert append intent: %w", err)
+		return AppendReceipt{}, false, fmt.Errorf("insert append intent: %w", err)
 	}
 
 	for _, ctx := range contexts {
 		if err := s.insertContextTx(tx, ctx, batch.AppendIntentID); err != nil {
-			return AppendReceipt{}, err
+			return AppendReceipt{}, false, err
 		}
 	}
 
 	for _, plan := range witnessPlans {
 		if err := s.insertWitnessRecordIfMissingTx(tx, plan, batch.AppendIntentID); err != nil {
-			return AppendReceipt{}, err
+			return AppendReceipt{}, false, err
 		}
 	}
 
 	for i, fact := range facts {
 		if err := s.insertFactRowTx(tx, fact, receipt.CommitReceipts[i], batch.AppendIntentID); err != nil {
-			return AppendReceipt{}, err
+			return AppendReceipt{}, false, err
 		}
 	}
 
@@ -493,18 +547,18 @@ func (s *SQLiteTraceStore) appendInTx(tx *sql.Tx, ctx OperationContext, batch Ap
 			owner, rng[1]+1,
 		)
 		if err != nil {
-			return AppendReceipt{}, fmt.Errorf("update owner ordinal: %w", err)
+			return AppendReceipt{}, false, fmt.Errorf("update owner ordinal: %w", err)
 		}
 	}
 
 	if len(receipt.CommitReceipts) > 0 {
 		nextSeq := nextCommitSeq(receipt.CommitReceipts)
 		if _, err := tx.Exec("UPDATE meta SET value = ? WHERE key = 'next_commit_seq'", fmt.Sprintf("%d", nextSeq)); err != nil {
-			return AppendReceipt{}, fmt.Errorf("update commit seq: %w", err)
+			return AppendReceipt{}, false, fmt.Errorf("update commit seq: %w", err)
 		}
 	}
 
-	return receipt, nil
+	return receipt, true, nil // true = new append
 }
 
 func (s *SQLiteTraceStore) prepareAppend(tx *sql.Tx, batch AppendBatch, ctx OperationContext) (
@@ -785,7 +839,7 @@ func (s *SQLiteTraceStore) publishFrontierInTx(tx *sql.Tx, ctx OperationContext,
 		}},
 	}
 
-	receipt, err := s.appendInTx(tx, ctx, batch)
+	receipt, _, err := s.appendInTx(tx, ctx, batch)
 	if err != nil {
 		return Frontier{}, err
 	}
@@ -846,14 +900,13 @@ func (s *SQLiteTraceStore) readOwnerCutoff(frontierID string) (Frontier, error) 
 	if err != nil {
 		return Frontier{}, err
 	}
-	expected := Frontier{
-		FrontierID:          frontierFact.Body.Payload["frontier_id"].(string),
-		TargetTraceOwnerID:  frontierFact.Body.Payload["target_trace_owner_id"].(string),
-		ThroughFactID:       frontierFact.Body.Payload["through_fact_id"].(string),
-		ThroughOwnerOrdinal: int(frontierFact.Body.Payload["through_owner_ordinal"].(float64)),
-		PublisherOwnerID:    frontierFact.Body.Payload["publisher_trace_owner_id"].(string),
-		CreatedByFactID:     f.CreatedByFactID,
+
+	payload := frontierFact.Body.Payload
+	expected, err := frontierFromPayload(payload, f.CreatedByFactID)
+	if err != nil {
+		return Frontier{}, err
 	}
+
 	if f.FrontierID != expected.FrontierID ||
 		f.TargetTraceOwnerID != expected.TargetTraceOwnerID ||
 		f.ThroughFactID != expected.ThroughFactID ||
@@ -862,6 +915,38 @@ func (s *SQLiteTraceStore) readOwnerCutoff(frontierID string) (Frontier, error) 
 	}
 
 	return f, nil
+}
+
+// frontierFromPayload extracts a Frontier from a retained frontier fact's
+// payload map. Returns an error if any required field is missing or has
+// the wrong type — never silently uses a zero value.
+func frontierFromPayload(payload map[string]any, createdByFactID string) (Frontier, error) {
+	frontierID, ok := payload["frontier_id"].(string)
+	if !ok || frontierID == "" {
+		return Frontier{}, &TraceStoreError{"frontier fact missing or invalid frontier_id"}
+	}
+	targetOwner, ok := payload["target_trace_owner_id"].(string)
+	if !ok || targetOwner == "" {
+		return Frontier{}, &TraceStoreError{"frontier fact missing or invalid target_trace_owner_id"}
+	}
+	throughFact, ok := payload["through_fact_id"].(string)
+	if !ok || throughFact == "" {
+		return Frontier{}, &TraceStoreError{"frontier fact missing or invalid through_fact_id"}
+	}
+	throughOrdinalRaw, ok := payload["through_owner_ordinal"].(float64)
+	if !ok {
+		return Frontier{}, &TraceStoreError{"frontier fact missing or invalid through_owner_ordinal"}
+	}
+	publisher, _ := payload["publisher_trace_owner_id"].(string) // optional
+
+	return Frontier{
+		FrontierID:          frontierID,
+		TargetTraceOwnerID:  targetOwner,
+		ThroughFactID:       throughFact,
+		ThroughOwnerOrdinal: int(throughOrdinalRaw),
+		PublisherOwnerID:    publisher,
+		CreatedByFactID:     createdByFactID,
+	}, nil
 }
 
 func (s *SQLiteTraceStore) readFrontierRow(frontierID string) (*sql.Row, error) {
