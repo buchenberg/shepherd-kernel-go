@@ -61,6 +61,18 @@ func NewSQLiteTraceStore(path string) (*SQLiteTraceStore, error) {
 	}
 	db.SetMaxOpenConns(1) // SQLite is single-writer
 
+	// WAL mode allows concurrent readers with a single writer.
+	// Busy timeout makes SQLite wait for the lock instead of returning
+	// SQLITE_BUSY immediately when the middleware and tools write
+	// concurrently.
+	if _, err := db.Exec("PRAGMA journal_mode = WAL"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("set WAL mode: %w", err)
+	}
+	if _, err := db.Exec("PRAGMA busy_timeout = 5000"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("set busy timeout: %w", err)
+	}
 	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
