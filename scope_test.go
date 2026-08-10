@@ -7,7 +7,7 @@ import (
 
 func TestScope_NewRootScope(t *testing.T) {
 	store := newMemStore(t)
-	scope := NewScope(store, nil, "sub:root")
+	scope := NewScope(store, "sub:root")
 
 	if scope.ID() != "scope:sub:root" {
 		t.Errorf("expected ID scope:sub:root, got %s", scope.ID())
@@ -34,7 +34,7 @@ func TestScope_Fork(t *testing.T) {
 	bus := NewEffectBus(64)
 	defer bus.Close()
 
-	parent := NewScope(store, bus, "sub:parent")
+	parent := NewScope(store, "sub:parent")
 
 	child, err := parent.Fork("sub:child", nil)
 	if err != nil {
@@ -66,7 +66,7 @@ func TestScope_ForkRecordsInTrace(t *testing.T) {
 	bus := NewEffectBus(64)
 	defer bus.Close()
 
-	parent := NewScope(store, bus, "sub:trace-parent")
+	parent := NewScope(store, "sub:trace-parent")
 	child, err := parent.Fork("sub:trace-child", nil)
 	if err != nil {
 		t.Fatalf("fork failed: %v", err)
@@ -107,7 +107,7 @@ func TestScope_Merge(t *testing.T) {
 	bus := NewEffectBus(64)
 	defer bus.Close()
 
-	parent := NewScope(store, bus, "sub:merge-parent")
+	parent := NewScope(store, "sub:merge-parent")
 	child, err := parent.Fork("sub:merge-child", nil)
 	if err != nil {
 		t.Fatalf("fork failed: %v", err)
@@ -154,7 +154,7 @@ func TestScope_Discard(t *testing.T) {
 	bus := NewEffectBus(64)
 	defer bus.Close()
 
-	parent := NewScope(store, bus, "sub:discard-parent")
+	parent := NewScope(store, "sub:discard-parent")
 	child, err := parent.Fork("sub:discard-child", nil)
 	if err != nil {
 		t.Fatalf("fork failed: %v", err)
@@ -197,7 +197,7 @@ func TestScope_ForkThenDiscard_LeavesParentUnchanged(t *testing.T) {
 	bus := NewEffectBus(64)
 	defer bus.Close()
 
-	parent := NewScope(store, bus, "sub:parent")
+	parent := NewScope(store, "sub:parent")
 	child, _ := parent.Fork("sub:child", nil)
 
 	// Record something in the child's trace
@@ -235,7 +235,7 @@ func TestScope_ForkThenDiscard_LeavesParentUnchanged(t *testing.T) {
 
 func TestScope_CannotForkNonActive(t *testing.T) {
 	store := newMemStore(t)
-	parent := NewScope(store, nil, "sub:parent")
+	parent := NewScope(store, "sub:parent")
 	child, _ := parent.Fork("sub:child", nil)
 	parent.Discard(child)
 
@@ -247,7 +247,7 @@ func TestScope_CannotForkNonActive(t *testing.T) {
 
 func TestScope_CannotMergeNonActive(t *testing.T) {
 	store := newMemStore(t)
-	parent := NewScope(store, nil, "sub:parent")
+	parent := NewScope(store, "sub:parent")
 	child, _ := parent.Fork("sub:child", nil)
 	parent.Discard(child)
 
@@ -259,8 +259,8 @@ func TestScope_CannotMergeNonActive(t *testing.T) {
 
 func TestScope_CannotMergeWrongParent(t *testing.T) {
 	store := newMemStore(t)
-	parent1 := NewScope(store, nil, "sub:p1")
-	parent2 := NewScope(store, nil, "sub:p2")
+	parent1 := NewScope(store, "sub:p1")
+	parent2 := NewScope(store, "sub:p2")
 	child, _ := parent1.Fork("sub:child", nil)
 
 	err := parent2.Merge(child)
@@ -271,7 +271,7 @@ func TestScope_CannotMergeWrongParent(t *testing.T) {
 
 func TestScope_MultipleChildren(t *testing.T) {
 	store := newMemStore(t)
-	parent := NewScope(store, nil, "sub:parent")
+	parent := NewScope(store, "sub:parent")
 
 	c1, _ := parent.Fork("sub:c1", nil)
 	c2, _ := parent.Fork("sub:c2", nil)
@@ -299,7 +299,7 @@ func TestScope_MultipleChildren(t *testing.T) {
 
 func TestScope_NestedFork(t *testing.T) {
 	store := newMemStore(t)
-	root := NewScope(store, nil, "sub:root")
+	root := NewScope(store, "sub:root")
 
 	child, _ := root.Fork("sub:child", nil)
 	grandchild, _ := child.Fork("sub:grandchild", nil)
@@ -327,7 +327,7 @@ func TestScope_NestedFork(t *testing.T) {
 
 func TestScopeManager_Create(t *testing.T) {
 	store := newMemStore(t)
-	mgr := NewScopeManager(store, nil)
+	mgr := NewScopeManager(store)
 
 	scope, err := mgr.Create("sub:managed")
 	if err != nil {
@@ -346,7 +346,7 @@ func TestScopeManager_Create(t *testing.T) {
 
 func TestScopeManager_Get(t *testing.T) {
 	store := newMemStore(t)
-	mgr := NewScopeManager(store, nil)
+	mgr := NewScopeManager(store)
 
 	mgr.Create("sub:findme")
 
@@ -369,7 +369,7 @@ func TestScopeManager_Fork(t *testing.T) {
 	bus := NewEffectBus(64)
 	defer bus.Close()
 
-	mgr := NewScopeManager(store, bus)
+	mgr := NewScopeManager(store)
 	parent, _ := mgr.Create("sub:parent")
 
 	child, err := mgr.Fork(parent.ID(), "sub:child", nil)
@@ -389,7 +389,7 @@ func TestScopeManager_Fork(t *testing.T) {
 
 func TestScopeManager_ForkParentNotFound(t *testing.T) {
 	store := newMemStore(t)
-	mgr := NewScopeManager(store, nil)
+	mgr := NewScopeManager(store)
 
 	_, err := mgr.Fork("scope:nonexistent", "sub:child", nil)
 	if err == nil {
@@ -402,7 +402,7 @@ func TestScopeManager_Merge(t *testing.T) {
 	bus := NewEffectBus(64)
 	defer bus.Close()
 
-	mgr := NewScopeManager(store, bus)
+	mgr := NewScopeManager(store)
 	parent, _ := mgr.Create("sub:parent")
 	child, _ := mgr.Fork(parent.ID(), "sub:child", nil)
 
@@ -420,7 +420,7 @@ func TestScopeManager_Discard(t *testing.T) {
 	bus := NewEffectBus(64)
 	defer bus.Close()
 
-	mgr := NewScopeManager(store, bus)
+	mgr := NewScopeManager(store)
 	parent, _ := mgr.Create("sub:parent")
 	child, _ := mgr.Fork(parent.ID(), "sub:child", nil)
 
@@ -438,7 +438,7 @@ func TestScopeManager_ActiveScopes(t *testing.T) {
 	bus := NewEffectBus(64)
 	defer bus.Close()
 
-	mgr := NewScopeManager(store, bus)
+	mgr := NewScopeManager(store)
 	p, _ := mgr.Create("sub:parent")
 	c1, _ := mgr.Fork(p.ID(), "sub:c1", nil)
 	c2, _ := mgr.Fork(p.ID(), "sub:c2", nil)
@@ -456,7 +456,7 @@ func TestScopeManager_ActiveScopes(t *testing.T) {
 
 func TestScopeManager_MergeRootScopeFails(t *testing.T) {
 	store := newMemStore(t)
-	mgr := NewScopeManager(store, nil)
+	mgr := NewScopeManager(store)
 	root, _ := mgr.Create("sub:root")
 
 	err := mgr.Merge(root.ID())
@@ -470,7 +470,7 @@ func TestScopeManager_ConcurrentFork(t *testing.T) {
 	bus := NewEffectBus(256)
 	defer bus.Close()
 
-	mgr := NewScopeManager(store, bus)
+	mgr := NewScopeManager(store)
 	parent, _ := mgr.Create("sub:concurrent")
 
 	var wg sync.WaitGroup
@@ -496,7 +496,7 @@ func TestScopeManager_ConcurrentFork(t *testing.T) {
 
 func TestScope_SnapshotNilForRoot(t *testing.T) {
 	store := newMemStore(t)
-	scope := NewScope(store, nil, "sub:root")
+	scope := NewScope(store, "sub:root")
 
 	if scope.Snapshot() != nil {
 		t.Error("root scope should have nil snapshot")
@@ -505,7 +505,7 @@ func TestScope_SnapshotNilForRoot(t *testing.T) {
 
 func TestScope_SnapshotPreservedOnFork(t *testing.T) {
 	store := newMemStore(t)
-	parent := NewScope(store, nil, "sub:parent")
+	parent := NewScope(store, "sub:parent")
 
 	type fakeConversation struct {
 		Messages []string
@@ -533,7 +533,7 @@ func TestScope_SnapshotPreservedOnFork(t *testing.T) {
 
 func TestScope_SnapshotOpaquelyTyped(t *testing.T) {
 	store := newMemStore(t)
-	parent := NewScope(store, nil, "sub:parent")
+	parent := NewScope(store, "sub:parent")
 
 	// Snapshot can be anything — []byte, struct, slice, etc.
 	byteSnapshot := []byte(`{"messages":[{"role":"user","content":"hi"}]}`)
@@ -550,7 +550,7 @@ func TestScope_SnapshotOpaquelyTyped(t *testing.T) {
 
 func TestScope_SnapshotIndependent(t *testing.T) {
 	store := newMemStore(t)
-	parent := NewScope(store, nil, "sub:parent")
+	parent := NewScope(store, "sub:parent")
 
 	// Two forks from same parent with different snapshots
 	snap1 := []string{"strategy-A"}
@@ -572,7 +572,7 @@ func TestScope_SnapshotIndependent(t *testing.T) {
 
 func TestScope_SnapshotNestedFork(t *testing.T) {
 	store := newMemStore(t)
-	root := NewScope(store, nil, "sub:root")
+	root := NewScope(store, "sub:root")
 
 	type state struct{ Turn int }
 	child, _ := root.Fork("sub:child", &state{Turn: 5})

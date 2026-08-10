@@ -12,16 +12,16 @@ import (
 // The manager is safe for concurrent use.
 type ScopeManager struct {
 	store  *SQLiteTraceStore
-	bus    *EffectBus
 	scopes map[string]*Scope
 	mu     sync.RWMutex
 }
 
 // NewScopeManager creates a scope manager backed by the given store.
-func NewScopeManager(store *SQLiteTraceStore, bus *EffectBus) *ScopeManager {
+// If the store has a bus attached (via WithBus), scope lifecycle events
+// will be published automatically.
+func NewScopeManager(store *SQLiteTraceStore) *ScopeManager {
 	return &ScopeManager{
 		store:  store,
-		bus:    bus,
 		scopes: make(map[string]*Scope),
 	}
 }
@@ -37,7 +37,7 @@ func (m *ScopeManager) Create(ownerID string) (*Scope, error) {
 		return nil, fmt.Errorf("scope %s already exists", id)
 	}
 
-	scope := NewScope(m.store, m.bus, ownerID)
+	scope := NewScope(m.store, ownerID)
 	m.scopes[id] = scope
 	return scope, nil
 }
@@ -53,13 +53,21 @@ func (m *ScopeManager) Get(id string) (*Scope, bool) {
 // Fork creates a child scope branched from the parent. The child is
 // automatically registered with the manager. The snapshot parameter
 // captures execution state at fork time (pass nil if not needed).
+//
+// Returns an error if the parent doesn't exist or a scope with the
+// child owner ID already exists.
 func (m *ScopeManager) Fork(parentID, childOwnerID string, snapshot any) (*Scope, error) {
 	m.mu.Lock()
-	parent, ok := m.scopes[parentID]
-	m.mu.Unlock()
+	defer m.mu.Unlock()
 
+	parent, ok := m.scopes[parentID]
 	if !ok {
 		return nil, fmt.Errorf("parent scope %s not found", parentID)
+	}
+
+	childID := fmt.Sprintf("scope:%s", childOwnerID)
+	if _, exists := m.scopes[childID]; exists {
+		return nil, fmt.Errorf("scope %s already exists", childID)
 	}
 
 	child, err := parent.Fork(childOwnerID, snapshot)
@@ -67,10 +75,7 @@ func (m *ScopeManager) Fork(parentID, childOwnerID string, snapshot any) (*Scope
 		return nil, err
 	}
 
-	m.mu.Lock()
 	m.scopes[child.id] = child
-	m.mu.Unlock()
-
 	return child, nil
 }
 

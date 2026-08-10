@@ -10,7 +10,7 @@ func TestSupervisor_BasicRuleMatch(t *testing.T) {
 	bus := NewEffectBus(64)
 	defer bus.Close()
 
-	mgr := NewScopeManager(store, bus)
+	mgr := NewScopeManager(store)
 	supervisor := NewSupervisor(mgr, bus)
 
 	matched := false
@@ -64,7 +64,7 @@ func TestSupervisor_NonMatchingRule(t *testing.T) {
 	bus := NewEffectBus(64)
 	defer bus.Close()
 
-	mgr := NewScopeManager(store, bus)
+	mgr := NewScopeManager(store)
 	supervisor := NewSupervisor(mgr, bus)
 
 	supervisor.AddRule(SupervisionRule{
@@ -100,7 +100,7 @@ func TestSupervisor_FirstRuleWins(t *testing.T) {
 	bus := NewEffectBus(64)
 	defer bus.Close()
 
-	mgr := NewScopeManager(store, bus)
+	mgr := NewScopeManager(store)
 	supervisor := NewSupervisor(mgr, bus)
 
 	var first, second bool
@@ -141,7 +141,7 @@ func TestSupervisor_ObserveOnlyRule(t *testing.T) {
 	bus := NewEffectBus(64)
 	defer bus.Close()
 
-	mgr := NewScopeManager(store, bus)
+	mgr := NewScopeManager(store)
 	supervisor := NewSupervisor(mgr, bus)
 
 	// Rule that matches but returns nil (observe-only)
@@ -171,7 +171,7 @@ func TestSupervisor_Inject(t *testing.T) {
 	bus := NewEffectBus(64)
 	defer bus.Close()
 
-	mgr := NewScopeManager(store, bus)
+	mgr := NewScopeManager(store)
 	mgr.Create("sub:inject-target")
 
 	supervisor := NewSupervisor(mgr, bus)
@@ -204,7 +204,7 @@ func TestSupervisor_Halt(t *testing.T) {
 	bus := NewEffectBus(64)
 	defer bus.Close()
 
-	mgr := NewScopeManager(store, bus)
+	mgr := NewScopeManager(store)
 	scope, _ := mgr.Create("sub:halt-target")
 
 	supervisor := NewSupervisor(mgr, bus)
@@ -239,7 +239,7 @@ func TestSupervisor_Halt(t *testing.T) {
 
 func TestSupervisor_ScopeNotFound(t *testing.T) {
 	store := newMemStore(t)
-	mgr := NewScopeManager(store, nil)
+	mgr := NewScopeManager(store)
 	supervisor := NewSupervisor(mgr, nil)
 
 	err := supervisor.Inject("scope:nonexistent", "hello")

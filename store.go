@@ -900,12 +900,20 @@ func (s *SQLiteTraceStore) readOwnerCutoff(frontierID string) (Frontier, error) 
 	if err != nil {
 		return Frontier{}, err
 	}
+
+	payload := frontierFact.Body.Payload
+	frontierIDVal, _ := payload["frontier_id"].(string)
+	targetOwnerVal, _ := payload["target_trace_owner_id"].(string)
+	throughFactVal, _ := payload["through_fact_id"].(string)
+	throughOrdinalRaw, _ := payload["through_owner_ordinal"].(float64)
+	publisherVal, _ := payload["publisher_trace_owner_id"].(string)
+
 	expected := Frontier{
-		FrontierID:          frontierFact.Body.Payload["frontier_id"].(string),
-		TargetTraceOwnerID:  frontierFact.Body.Payload["target_trace_owner_id"].(string),
-		ThroughFactID:       frontierFact.Body.Payload["through_fact_id"].(string),
-		ThroughOwnerOrdinal: int(frontierFact.Body.Payload["through_owner_ordinal"].(float64)),
-		PublisherOwnerID:    frontierFact.Body.Payload["publisher_trace_owner_id"].(string),
+		FrontierID:          frontierIDVal,
+		TargetTraceOwnerID:  targetOwnerVal,
+		ThroughFactID:       throughFactVal,
+		ThroughOwnerOrdinal: int(throughOrdinalRaw),
+		PublisherOwnerID:    publisherVal,
 		CreatedByFactID:     f.CreatedByFactID,
 	}
 	if f.FrontierID != expected.FrontierID ||

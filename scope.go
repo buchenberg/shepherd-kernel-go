@@ -32,6 +32,13 @@ const (
 //
 // The scope records lifecycle events (forked, merged, discarded) in the
 // trace store so the supervisor can inspect the full branching history.
+// If the store has a bus attached (via WithBus), lifecycle events are
+// also published to the bus automatically — no separate bus field needed.
+//
+// Lock ordering: Merge and Discard always lock parent before child.
+// Never lock child then parent — that deadlocks. If a future API needs
+// to lock from the child side, it must acquire parent first or use a
+// try-lock pattern.
 //
 // Snapshots
 //
@@ -49,7 +56,6 @@ type Scope struct {
 	id        string
 	ownerID   string
 	store     *SQLiteTraceStore
-	bus       *EffectBus
 	parent    *Scope
 	forkPoint string   // record ID at fork time (empty for root scopes)
 	snapshot  any      // execution state at fork time (nil for root scopes)
@@ -59,12 +65,13 @@ type Scope struct {
 }
 
 // NewScope creates a root scope (no parent) for the given trace owner.
-func NewScope(store *SQLiteTraceStore, bus *EffectBus, ownerID string) *Scope {
+// If the store has a bus attached (via WithBus), lifecycle events will
+// be published automatically.
+func NewScope(store *SQLiteTraceStore, ownerID string) *Scope {
 	return &Scope{
 		id:      fmt.Sprintf("scope:%s", ownerID),
 		ownerID: ownerID,
 		store:   store,
-		bus:     bus,
 		state:   ScopeActive,
 	}
 }
@@ -162,7 +169,6 @@ func (s *Scope) Fork(childOwnerID string, snapshot any) (*Scope, error) {
 		id:        fmt.Sprintf("scope:%s", childOwnerID),
 		ownerID:   childOwnerID,
 		store:     s.store,
-		bus:       s.bus,
 		parent:    s,
 		forkPoint: forkPointID,
 		snapshot:  snapshot,

@@ -70,6 +70,12 @@ func (b *EffectBus) Unsubscribe(id string) {
 
 // Publish sends an event to all subscribers. It never blocks — if a
 // subscriber's buffer is full, the oldest event is dropped.
+//
+// Ordering: Events from a single publisher arrive in order per subscriber.
+// Events from concurrent publishers may interleave — there is no global
+// ordering guarantee across goroutines. The trace store publishes events
+// after each committed append, so events from a single store are ordered
+// by append order.
 func (b *EffectBus) Publish(event EffectEvent) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()

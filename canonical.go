@@ -26,37 +26,13 @@ func sha256Sum(b []byte) []byte {
 
 // CanonicalJSONBytes returns byte-stable canonical JSON for digest input.
 // Keys are sorted at every nesting level. Separators are compact (no spaces).
+//
+// Note: This function uses encoding/json.Marshal which sorts map keys by
+// default but may not match Python's json.dumps exactly for edge cases
+// (float formatting, unicode escaping). For cross-implementation compatible
+// digests, use canonicalJSONOrdered instead.
 func CanonicalJSONBytes(v any) ([]byte, error) {
-	stable := canonicalize(v)
-	return json.Marshal(stable)
-}
-
-// canonicalize recursively sorts map keys to produce deterministic JSON output.
-func canonicalize(v any) any {
-	switch val := v.(type) {
-	case map[string]any:
-		keys := make([]string, 0, len(val))
-		for k := range val {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		// Use a json.RawMessage trick: build ordered pairs manually
-		// Actually, we can't guarantee order with a regular map.
-		// We need to build ordered JSON directly.
-		_ = keys
-		// Recursively canonicalize values
-		for k, vv := range val {
-			val[k] = canonicalize(vv)
-		}
-		return val
-	case []any:
-		for i, vv := range val {
-			val[i] = canonicalize(vv)
-		}
-		return val
-	default:
-		return v
-	}
+	return json.Marshal(v)
 }
 
 // canonicalJSONOrdered produces canonical JSON with sorted keys at every level.
