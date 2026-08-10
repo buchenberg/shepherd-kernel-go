@@ -6,14 +6,9 @@ A content-addressed, append-only, causally-linked execution trace store over SQL
 
 ## What It Is
 
-Shepherd treats agent execution as a first-class object: inspectable, forkable, reversible, replayable. This Go module implements:
+The kernel records agent actions as durable, inspectable, reversible traces. Every tool call, every file mutation, every agent decision becomes a record in a causal DAG with content-addressed identity.
 
-1. **Trace Kernel** — content-addressed record store with causal DAG, witnesses, and frontiers
-2. **Effect Bus** — real-time pub/sub for observing agent actions as they happen
-3. **Scope Manager** — fork/merge/discard execution branches
-4. **Supervisor** — rule-based engine for intervening in agent execution
-
-Compatible with the Python reference (`shepherd2`) — byte-identical digests from the same golden test vectors.
+This is a standalone Go module implementing `shepherd.kernel.abi.v0` — the same frozen ABI as the Python reference (`shepherd2`) and produces byte-identical digests from the same golden test vectors.
 
 ## Install
 
