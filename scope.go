@@ -285,6 +285,34 @@ func (s *Scope) Discard(child *Scope) error {
 	return nil
 }
 
+// Inject records a supervisor inject action in this scope's trace.
+// The guidance text is recorded as a declaration that the sub-agent
+// can see in its next turn.
+func (s *Scope) Inject(guidance string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.state != ScopeActive {
+		return fmt.Errorf("cannot inject into scope %s in state %s", s.id, s.state)
+	}
+
+	_, err := s.store.Append(TrustedAppendContext, AppendBatch{
+		AppendIntentID: fmt.Sprintf("%s:inject:%d", s.ownerID, time.Now().UnixNano()),
+		Groups: []AppendGroup{{
+			TraceOwnerID: s.ownerID,
+			FactDrafts: []RecordDraft{{
+				Mode:      Declaration,
+				SchemaRef: SchemaSupervisorInject,
+				KindLabel: "supervisor:inject",
+				Payload: map[string]any{
+					"guidance": guidance,
+				},
+			}},
+		}},
+	})
+	return err
+}
+
 // Halt forces this scope into the discarded state and records a
 // supervisor halt event in the trace. Unlike Discard, Halt operates
 // on the scope itself (not a child) and is used by the supervisor

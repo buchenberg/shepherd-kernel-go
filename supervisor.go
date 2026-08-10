@@ -177,21 +177,7 @@ func (s *Supervisor) Inject(scopeID, guidance string) error {
 		return fmt.Errorf("scope %s not found", scopeID)
 	}
 
-	_, err := scope.store.Append(TrustedAppendContext, AppendBatch{
-		AppendIntentID: fmt.Sprintf("%s:supervisor:inject:%d", scope.OwnerID(), time.Now().UnixNano()),
-		Groups: []AppendGroup{{
-			TraceOwnerID: scope.OwnerID(),
-			FactDrafts: []RecordDraft{{
-				Mode:      Declaration,
-				SchemaRef: SchemaSupervisorInject,
-				KindLabel: "supervisor:inject",
-				Payload: map[string]any{
-					"guidance": guidance,
-				},
-			}},
-		}},
-	})
-	return err
+	return scope.Inject(guidance)
 }
 
 // Halt records a supervisor halt action and marks the scope as discarded.
