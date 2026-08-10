@@ -4,9 +4,9 @@ Go port of the [Shepherd](https://github.com/shepherd-agents/shepherd) trace ker
 
 ## What It Is
 
-The kernel records agent actions as durable, inspectable, reversible traces. Every tool call, every file mutation, every agent decision becomes a record in a causal DAG with content-addressed identity. Nothing touches your files until you accept it.
+The kernel records agent actions as durable, inspectable, reversible traces. Every tool call, every file mutation, every agent decision becomes a record in a causal DAG with content-addressed identity.
 
-This is a standalone Go module implementing `shepherd.kernel.abi.v0` — the same frozen ABI as the Python reference (`shepherd2`) and the .NET port (`Shepherd.Kernel`). All three produce byte-identical digests from the same golden test vectors.
+This is a standalone Go module implementing `shepherd.kernel.abi.v0` — the same frozen ABI as the Python reference (`shepherd2`) and produces byte-identical digests from the same golden test vectors.
 
 ## Install
 
