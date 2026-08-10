@@ -1,0 +1,12 @@
+# Binaries
+/shepherd-kernel-go
+
+# Test binary
+*.test
+
+# Coverage
+*.out
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,208 @@
+{
+  "abi_version": "shepherd.kernel.abi.v0",
+  "alternate_witness": {
+    "body": {
+      "active_binding_refs": [
+        "binding:task"
+      ],
+      "actor_ref": "runtime:test",
+      "authority_refs": [
+        "trusted:internal"
+      ],
+      "containment": "contained",
+      "provenance_policy_refs": [],
+      "semantic_environment_refs": [
+        "schema-set:test"
+      ],
+      "substrate_ref": "fs.local.v1",
+      "visibility_policy_refs": [
+        "visibility:payload"
+      ]
+    },
+    "body_digest": "sha256:804c2de7767e07962e0255418988dde38c3bb4ddef1af5b32c138e29e3afd19f",
+    "record_id": "sha256:bf611d809144f8ae32be5f25b7ff5982f54fcc777e8a4a3c559423b4dbcb5738",
+    "record_input": {
+      "body": {
+        "active_binding_refs": [
+          "binding:task"
+        ],
+        "actor_ref": "runtime:test",
+        "authority_refs": [
+          "trusted:internal"
+        ],
+        "containment": "contained",
+        "provenance_policy_refs": [],
+        "semantic_environment_refs": [
+          "schema-set:test"
+        ],
+        "substrate_ref": "fs.local.v1",
+        "visibility_policy_refs": [
+          "visibility:payload"
+        ]
+      },
+      "caused_by": [],
+      "kind": "record",
+      "mode": "capture",
+      "schema_ref": "kernel.witness.v1",
+      "witness": "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777"
+    },
+    "schema_ref": "kernel.witness.v1"
+  },
+  "alternate_witness_record": {
+    "digest": "sha256:5effd5ca235d0e4e6125bda70534c2e34d505ce58a7355fe2a5caa2470af94df",
+    "input": {
+      "body": {
+        "name": "alpha",
+        "value": 1
+      },
+      "caused_by": [],
+      "kind": "record",
+      "mode": "capture",
+      "schema_ref": "example.kernel.item.v1",
+      "witness": "sha256:bf611d809144f8ae32be5f25b7ff5982f54fcc777e8a4a3c559423b4dbcb5738"
+    }
+  },
+  "canonical_version": "shepherd.kernel.canonical.v2",
+  "capture_record": {
+    "digest": "sha256:3d1a2264d4c0272117b4d5434b2b28fd50e639c46a61a761e6e5c8092fa9077b",
+    "input": {
+      "body": {
+        "name": "alpha",
+        "value": 1
+      },
+      "caused_by": [],
+      "kind": "record",
+      "mode": "capture",
+      "schema_ref": "example.kernel.item.v1",
+      "witness": "sha256:8872c210b2476cb0a9c2ab06d303d39d785393b761c0a24c3172317c19ba4bf1"
+    }
+  },
+  "declaration_record": {
+    "digest": "sha256:001522dc69433a2a8be8f41d45cd30fb6ee6f55d7dbce33538c1388ebf53adc9",
+    "input": {
+      "body": {
+        "name": "alpha",
+        "value": 1
+      },
+      "caused_by": [],
+      "kind": "record",
+      "mode": "declaration",
+      "schema_ref": "example.kernel.item.v1",
+      "witness": "sha256:8872c210b2476cb0a9c2ab06d303d39d785393b761c0a24c3172317c19ba4bf1"
+    }
+  },
+  "ordered_parent_record": {
+    "digest": "sha256:2520d192bc07334adf50f780d5879c05aee4d16930d2e0557341a9a2fc419310",
+    "input": {
+      "body": {
+        "name": "alpha",
+        "value": 1
+      },
+      "caused_by": [
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      ],
+      "kind": "record",
+      "mode": "capture",
+      "schema_ref": "example.kernel.item.v1",
+      "witness": "sha256:8872c210b2476cb0a9c2ab06d303d39d785393b761c0a24c3172317c19ba4bf1"
+    }
+  },
+  "ordinary_witness": {
+    "body": {
+      "active_binding_refs": [
+        "binding:task"
+      ],
+      "actor_ref": "runtime:test",
+      "authority_refs": [
+        "trusted:internal"
+      ],
+      "containment": "contained",
+      "provenance_policy_refs": [],
+      "semantic_environment_refs": [
+        "schema-set:test"
+      ],
+      "substrate_ref": "sqlite.local.v1",
+      "visibility_policy_refs": [
+        "visibility:payload"
+      ]
+    },
+    "body_digest": "sha256:82cba50c5c64677abdfd40e743e92ce32dbd02bd05b90224c6e78c05ff9d60eb",
+    "record_id": "sha256:8872c210b2476cb0a9c2ab06d303d39d785393b761c0a24c3172317c19ba4bf1",
+    "record_input": {
+      "body": {
+        "active_binding_refs": [
+          "binding:task"
+        ],
+        "actor_ref": "runtime:test",
+        "authority_refs": [
+          "trusted:internal"
+        ],
+        "containment": "contained",
+        "provenance_policy_refs": [],
+        "semantic_environment_refs": [
+          "schema-set:test"
+        ],
+        "substrate_ref": "sqlite.local.v1",
+        "visibility_policy_refs": [
+          "visibility:payload"
+        ]
+      },
+      "caused_by": [],
+      "kind": "record",
+      "mode": "capture",
+      "schema_ref": "kernel.witness.v1",
+      "witness": "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777"
+    },
+    "schema_ref": "kernel.witness.v1"
+  },
+  "reversed_parent_record": {
+    "digest": "sha256:1cf6c8e9bc28c1ca8d344e0a4cd2c39321c953426c7a1b6d33b8bb7ffa024b2f",
+    "input": {
+      "body": {
+        "name": "alpha",
+        "value": 1
+      },
+      "caused_by": [
+        "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      ],
+      "kind": "record",
+      "mode": "capture",
+      "schema_ref": "example.kernel.item.v1",
+      "witness": "sha256:8872c210b2476cb0a9c2ab06d303d39d785393b761c0a24c3172317c19ba4bf1"
+    }
+  },
+  "root_witness": {
+    "body": {
+      "active_binding_refs": [],
+      "actor_ref": "kernel:root",
+      "authority_refs": [],
+      "containment": "full",
+      "provenance_policy_refs": [],
+      "semantic_environment_refs": [],
+      "substrate_ref": "kernel",
+      "visibility_policy_refs": []
+    },
+    "body_digest": "sha256:28aa527e305e6eac5d81cebaf44d969f84ebc6faaa453fb8ebef6346fdb1f0a9",
+    "record_id": "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777",
+    "record_input": {
+      "body": {
+        "active_binding_refs": [],
+        "actor_ref": "kernel:root",
+        "authority_refs": [],
+        "containment": "full",
+        "provenance_policy_refs": [],
+        "semantic_environment_refs": [],
+        "substrate_ref": "kernel",
+        "visibility_policy_refs": []
+      },
+      "caused_by": [],
+      "kind": "record",
+      "mode": "capture",
+      "schema_ref": "kernel.witness.root.v1",
+      "witness": ""
+    },
+    "schema_ref": "kernel.witness.root.v1"
+  }
+}
