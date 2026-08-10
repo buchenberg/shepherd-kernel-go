@@ -135,11 +135,11 @@ func (s *Scope) Children() []*Scope {
 // A "scope.forked" declaration is recorded in the parent's trace.
 func (s *Scope) Fork(childOwnerID string, snapshot any) (*Scope, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.state != ScopeActive {
+		s.mu.Unlock()
 		return nil, fmt.Errorf("cannot fork scope %s in state %s", s.id, s.state)
 	}
+	s.mu.Unlock()
 
 	// Record the fork event in the parent's trace to get a fork-point record.
 	forkReceipt, err := s.store.Append(TrustedAppendContext, AppendBatch{
@@ -160,10 +160,10 @@ func (s *Scope) Fork(childOwnerID string, snapshot any) (*Scope, error) {
 		return nil, fmt.Errorf("record fork event: %w", err)
 	}
 
-	forkPointID := ""
-	if len(forkReceipt.FactIDs) > 0 {
-		forkPointID = forkReceipt.FactIDs[0]
+	if len(forkReceipt.FactIDs) == 0 {
+		return nil, fmt.Errorf("record fork event: no fact ID returned for scope %s", s.id)
 	}
+	forkPointID := forkReceipt.FactIDs[0]
 
 	child := &Scope{
 		id:        fmt.Sprintf("scope:%s", childOwnerID),
@@ -175,7 +175,14 @@ func (s *Scope) Fork(childOwnerID string, snapshot any) (*Scope, error) {
 		state:     ScopeActive,
 	}
 
+	s.mu.Lock()
+	if s.state != ScopeActive {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("scope %s was %s during fork", s.id, s.state)
+	}
 	s.children = append(s.children, child)
+	s.mu.Unlock()
+
 	return child, nil
 }
 

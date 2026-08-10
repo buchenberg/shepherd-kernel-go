@@ -2,6 +2,7 @@ package shepherd
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -49,13 +50,15 @@ type SupervisionRule struct {
 // The supervisor is stateless by default — rules that need state (error
 // rates, repetition tracking) maintain their own via closures.
 type Supervisor struct {
-	manager      *ScopeManager
-	bus          *EffectBus
-	rules        []SupervisionRule
+	manager       *ScopeManager
+	bus           *EffectBus
+	rules         []SupervisionRule
 	interventions chan Intervention
-	subscription <-chan EffectEvent
-	done         chan struct{}
-	mu           sync.RWMutex
+	subscription  <-chan EffectEvent
+	subscriberID  string
+	done          chan struct{}
+	closeOnce     sync.Once
+	mu            sync.RWMutex
 }
 
 // NewSupervisor creates a supervisor that watches the given bus and
@@ -89,7 +92,11 @@ func (s *Supervisor) Start(subscriberID string) {
 	if s.subscription != nil {
 		return // already started
 	}
+	if s.bus == nil {
+		return // no bus to watch
+	}
 
+	s.subscriberID = subscriberID
 	s.subscription = s.bus.Subscribe(subscriberID)
 	go s.loop()
 }
@@ -100,13 +107,14 @@ func (s *Supervisor) Interventions() <-chan Intervention {
 }
 
 // Close stops the supervisor and closes the interventions channel.
+// It unsubscribes from the bus. Safe to call multiple times.
 func (s *Supervisor) Close() {
-	select {
-	case <-s.done:
-		// already closed
-	default:
+	s.closeOnce.Do(func() {
 		close(s.done)
-	}
+		if s.bus != nil && s.subscriberID != "" {
+			s.bus.Unsubscribe(s.subscriberID)
+		}
+	})
 }
 
 func (s *Supervisor) loop() {
@@ -131,29 +139,34 @@ func (s *Supervisor) evaluate(event EffectEvent) {
 	copy(rules, s.rules)
 	s.mu.RUnlock()
 
+	var chosen *Intervention
 	for _, rule := range rules {
 		if !rule.Match(event) {
 			continue
 		}
 		intervention := rule.Action(event)
-		if intervention == nil {
+		if intervention == nil || chosen != nil {
 			continue
 		}
-		// Non-blocking send — drop if the orchestrator is too slow.
+		chosen = intervention
+	}
+	if chosen == nil {
+		return
+	}
+
+	// Non-blocking send — drop if the orchestrator is too slow.
+	select {
+	case s.interventions <- *chosen:
+	default:
+		// Drop oldest
 		select {
-		case s.interventions <- *intervention:
+		case <-s.interventions:
 		default:
-			// Drop oldest
-			select {
-			case <-s.interventions:
-			default:
-			}
-			select {
-			case s.interventions <- *intervention:
-			default:
-			}
 		}
-		return // first matching rule wins
+		select {
+		case s.interventions <- *chosen:
+		default:
+		}
 	}
 }
 
@@ -247,6 +260,9 @@ func isDestructiveToolCall(e EffectEvent) bool {
 //
 // This rule maintains per-owner state via closures.
 func HighErrorRateRule(threshold float64, window int) SupervisionRule {
+	if window <= 0 {
+		window = 10
+	}
 	type ownerState struct {
 		results []bool // true = success, false = error
 	}
@@ -259,7 +275,6 @@ func HighErrorRateRule(threshold float64, window int) SupervisionRule {
 			if e.Mode != Capture || e.KindLabel == "turn:started" || e.KindLabel == "turn:completed" || e.KindLabel == "turn:failed" {
 				return false
 			}
-			// Only match capture events that have a success field
 			_, hasSuccess := e.Payload["success"]
 			return hasSuccess
 		},
@@ -276,7 +291,6 @@ func HighErrorRateRule(threshold float64, window int) SupervisionRule {
 			success, _ := e.Payload["success"].(bool)
 			st.results = append(st.results, success)
 
-			// Trim to window size
 			if len(st.results) > window {
 				st.results = st.results[len(st.results)-window:]
 			}
@@ -295,6 +309,7 @@ func HighErrorRateRule(threshold float64, window int) SupervisionRule {
 			rate := float64(errors) / float64(len(st.results))
 
 			if rate >= threshold {
+				st.results = nil // reset to avoid repeated warnings
 				return &Intervention{
 					Type:    InterventionInject,
 					ScopeID: fmt.Sprintf("scope:%s", e.TraceOwnerID),
@@ -334,10 +349,17 @@ func StuckDetectionRule(repeatThreshold int) SupervisionRule {
 				states[e.TraceOwnerID] = st
 			}
 
-			// Build a call signature from kind + args
+			// Build a call signature from kind label + all payload keys in sorted order
 			callSig := e.KindLabel
-			if args, ok := e.Payload["args"]; ok {
-				callSig += fmt.Sprintf(":%v", args)
+			if len(e.Payload) > 0 {
+				keys := make([]string, 0, len(e.Payload))
+				for k := range e.Payload {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				for _, k := range keys {
+					callSig += fmt.Sprintf(":%s=%v", k, e.Payload[k])
+				}
 			}
 
 			if callSig == st.lastCall {

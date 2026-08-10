@@ -103,12 +103,12 @@ func TestSupervisor_FirstRuleWins(t *testing.T) {
 	mgr := NewScopeManager(store)
 	supervisor := NewSupervisor(mgr, bus)
 
-	var first, second bool
+	var firstCalled bool
 	supervisor.AddRule(SupervisionRule{
 		Name: "first",
 		Match: func(e EffectEvent) bool { return true },
 		Action: func(e EffectEvent) *Intervention {
-			first = true
+			firstCalled = true
 			return &Intervention{Type: InterventionInject, ScopeID: "x"}
 		},
 	})
@@ -116,7 +116,6 @@ func TestSupervisor_FirstRuleWins(t *testing.T) {
 		Name: "second",
 		Match: func(e EffectEvent) bool { return true },
 		Action: func(e EffectEvent) *Intervention {
-			second = true
 			return &Intervention{Type: InterventionHalt, ScopeID: "x"}
 		},
 	})
@@ -126,13 +125,16 @@ func TestSupervisor_FirstRuleWins(t *testing.T) {
 
 	bus.Publish(EffectEvent{KindLabel: "test"})
 
-	<-supervisor.Interventions()
-
-	if !first {
-		t.Error("first rule should have matched")
-	}
-	if second {
-		t.Error("second rule should NOT have matched (first wins)")
+	select {
+	case iv := <-supervisor.Interventions():
+		if !firstCalled {
+			t.Error("first rule Action should have been called")
+		}
+		if iv.Type != InterventionInject {
+			t.Errorf("expected InterventionInject from first rule, got %s", iv.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for intervention")
 	}
 }
 
@@ -325,42 +327,44 @@ func TestDestructiveToolRule_IgnoresCaptures(t *testing.T) {
 func TestHighErrorRateRule_Triggers(t *testing.T) {
 	rule := HighErrorRateRule(0.5, 6) // 50% threshold, window of 6
 
-	// Simulate 4 errors out of 6 calls (67% error rate)
-	for i := 0; i < 4; i++ {
-		event := EffectEvent{
-			TraceOwnerID: "sub:error-prone",
-			Mode:         Capture,
-			KindLabel:    "bash:result",
-			Payload:      map[string]any{"success": false, "error": "command failed"},
-		}
-		rule.Match(event) // register the event
-		iv := rule.Action(event)
-		if i < 2 && iv != nil {
-			t.Errorf("should not trigger on error %d (not enough data yet)", i)
-		}
-	}
-
-	// Now add 2 successes
+	// First: add 2 errors — not enough data yet (need windows/2 = 3)
 	for i := 0; i < 2; i++ {
 		event := EffectEvent{
 			TraceOwnerID: "sub:error-prone",
 			Mode:         Capture,
 			KindLabel:    "bash:result",
-			Payload:      map[string]any{"success": true},
+			Payload:      map[string]any{"success": false},
 		}
 		rule.Match(event)
+		iv := rule.Action(event)
+		if iv != nil {
+			t.Errorf("should not trigger with only %d errors", i+1)
+		}
 	}
 
-	// Next error should trigger (4 errors / 6 window = 67% > 50%)
+	// 3rd error — triggers (3/3 = 100% >= 50%)
 	event := EffectEvent{
 		TraceOwnerID: "sub:error-prone",
 		Mode:         Capture,
 		KindLabel:    "bash:result",
-		Payload:      map[string]any{"success": false, "error": "failed again"},
+		Payload:      map[string]any{"success": false},
 	}
+	rule.Match(event)
 	iv := rule.Action(event)
 	if iv == nil {
 		t.Error("should trigger when error rate exceeds threshold")
+	}
+
+	// After trigger, results are reset. Next single error should not trigger.
+	event2 := EffectEvent{
+		TraceOwnerID: "sub:error-prone",
+		Mode:         Capture,
+		KindLabel:    "bash:result",
+		Payload:      map[string]any{"success": false},
+	}
+	rule.Match(event2)
+	if iv = rule.Action(event2); iv != nil {
+		t.Error("should not trigger again after reset (only 1 error in buffer)")
 	}
 }
 

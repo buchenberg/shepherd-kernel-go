@@ -31,9 +31,6 @@ func TestScope_NewRootScope(t *testing.T) {
 
 func TestScope_Fork(t *testing.T) {
 	store := newMemStore(t)
-	bus := NewEffectBus(64)
-	defer bus.Close()
-
 	parent := NewScope(store, "sub:parent")
 
 	child, err := parent.Fork("sub:child", nil)
@@ -63,9 +60,6 @@ func TestScope_Fork(t *testing.T) {
 
 func TestScope_ForkRecordsInTrace(t *testing.T) {
 	store := newMemStore(t)
-	bus := NewEffectBus(64)
-	defer bus.Close()
-
 	parent := NewScope(store, "sub:trace-parent")
 	child, err := parent.Fork("sub:trace-child", nil)
 	if err != nil {
@@ -104,9 +98,6 @@ func TestScope_ForkRecordsInTrace(t *testing.T) {
 
 func TestScope_Merge(t *testing.T) {
 	store := newMemStore(t)
-	bus := NewEffectBus(64)
-	defer bus.Close()
-
 	parent := NewScope(store, "sub:merge-parent")
 	child, err := parent.Fork("sub:merge-child", nil)
 	if err != nil {
@@ -151,9 +142,6 @@ func TestScope_Merge(t *testing.T) {
 
 func TestScope_Discard(t *testing.T) {
 	store := newMemStore(t)
-	bus := NewEffectBus(64)
-	defer bus.Close()
-
 	parent := NewScope(store, "sub:discard-parent")
 	child, err := parent.Fork("sub:discard-child", nil)
 	if err != nil {
@@ -194,14 +182,11 @@ func TestScope_Discard(t *testing.T) {
 
 func TestScope_ForkThenDiscard_LeavesParentUnchanged(t *testing.T) {
 	store := newMemStore(t)
-	bus := NewEffectBus(64)
-	defer bus.Close()
-
 	parent := NewScope(store, "sub:parent")
 	child, _ := parent.Fork("sub:child", nil)
 
 	// Record something in the child's trace
-	store.Append(TrustedAppendContext, AppendBatch{
+	_, err := store.Append(TrustedAppendContext, AppendBatch{
 		AppendIntentID: "child:work:1",
 		Groups: []AppendGroup{{
 			TraceOwnerID: "sub:child",
@@ -213,12 +198,18 @@ func TestScope_ForkThenDiscard_LeavesParentUnchanged(t *testing.T) {
 			}},
 		}},
 	})
+	if err != nil {
+		t.Fatalf("append to child failed: %v", err)
+	}
 
 	// Discard the child
 	parent.Discard(child)
 
 	// Parent trace should NOT have the child's tool call
-	parentSlice, _ := store.ReadOwnerPrefix(TrustedReadContext, "sub:parent", 99, ModeDeclarationsOnly)
+	parentSlice, err := store.ReadOwnerPrefix(TrustedReadContext, "sub:parent", 99, ModeDeclarationsOnly)
+	if err != nil {
+		t.Fatalf("read parent trace: %v", err)
+	}
 	for _, id := range parentSlice.FactIDs() {
 		rec := parentSlice.FactsByID[id]
 		if rec.GetEnvelope().SchemaRef == "yaah.tool.bash.v1" {
@@ -227,7 +218,10 @@ func TestScope_ForkThenDiscard_LeavesParentUnchanged(t *testing.T) {
 	}
 
 	// But the child's records should still be in the store (append-only)
-	childSlice, _ := store.ReadOwnerPrefix(TrustedReadContext, "sub:child", 99, ModeDeclarationsOnly)
+	childSlice, err := store.ReadOwnerPrefix(TrustedReadContext, "sub:child", 99, ModeDeclarationsOnly)
+	if err != nil {
+		t.Fatalf("read child trace: %v", err)
+	}
 	if len(childSlice.FactIDs()) == 0 {
 		t.Error("discarded child's records should still exist in store (append-only)")
 	}
@@ -366,9 +360,6 @@ func TestScopeManager_Get(t *testing.T) {
 
 func TestScopeManager_Fork(t *testing.T) {
 	store := newMemStore(t)
-	bus := NewEffectBus(64)
-	defer bus.Close()
-
 	mgr := NewScopeManager(store)
 	parent, _ := mgr.Create("sub:parent")
 
@@ -399,9 +390,6 @@ func TestScopeManager_ForkParentNotFound(t *testing.T) {
 
 func TestScopeManager_Merge(t *testing.T) {
 	store := newMemStore(t)
-	bus := NewEffectBus(64)
-	defer bus.Close()
-
 	mgr := NewScopeManager(store)
 	parent, _ := mgr.Create("sub:parent")
 	child, _ := mgr.Fork(parent.ID(), "sub:child", nil)
@@ -417,9 +405,6 @@ func TestScopeManager_Merge(t *testing.T) {
 
 func TestScopeManager_Discard(t *testing.T) {
 	store := newMemStore(t)
-	bus := NewEffectBus(64)
-	defer bus.Close()
-
 	mgr := NewScopeManager(store)
 	parent, _ := mgr.Create("sub:parent")
 	child, _ := mgr.Fork(parent.ID(), "sub:child", nil)
@@ -435,9 +420,6 @@ func TestScopeManager_Discard(t *testing.T) {
 
 func TestScopeManager_ActiveScopes(t *testing.T) {
 	store := newMemStore(t)
-	bus := NewEffectBus(64)
-	defer bus.Close()
-
 	mgr := NewScopeManager(store)
 	p, _ := mgr.Create("sub:parent")
 	c1, _ := mgr.Fork(p.ID(), "sub:c1", nil)
@@ -467,9 +449,6 @@ func TestScopeManager_MergeRootScopeFails(t *testing.T) {
 
 func TestScopeManager_ConcurrentFork(t *testing.T) {
 	store := newMemStore(t)
-	bus := NewEffectBus(256)
-	defer bus.Close()
-
 	mgr := NewScopeManager(store)
 	parent, _ := mgr.Create("sub:concurrent")
 
