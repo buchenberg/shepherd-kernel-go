@@ -32,6 +32,19 @@ const (
 //
 // The scope records lifecycle events (forked, merged, discarded) in the
 // trace store so the supervisor can inspect the full branching history.
+//
+// Snapshots
+//
+// A scope can carry a snapshot — an opaque value captured at fork time
+// that represents the execution state (typically conversation history).
+// Snapshots enable:
+//   - Retry from checkpoint (fork from snapshot, inject guidance, retry suffix)
+//   - Parallel strategy exploration (N forks from same snapshot, different prompts)
+//   - Guard-and-retry (halt dangerous branch, fork safe branch from snapshot)
+//   - Counterfactual replay (fork from mid-point, try different continuation)
+//
+// The snapshot is `any` so callers can store whatever they need ([]byte,
+// []types.Message, etc.) without the scope package importing their types.
 type Scope struct {
 	id        string
 	ownerID   string
@@ -39,6 +52,7 @@ type Scope struct {
 	bus       *EffectBus
 	parent    *Scope
 	forkPoint string   // record ID at fork time (empty for root scopes)
+	snapshot  any      // execution state at fork time (nil for root scopes)
 	children  []*Scope
 	state     ScopeState
 	mu        sync.RWMutex
@@ -83,6 +97,17 @@ func (s *Scope) ForkPoint() string {
 	return s.forkPoint
 }
 
+// Snapshot returns the execution state captured at fork time. For root
+// scopes this is nil. For forked scopes, it's the value passed to Fork.
+//
+// The caller knows the concrete type — typically []types.Message for
+// yaah conversation history, or []byte for serialized state.
+func (s *Scope) Snapshot() any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.snapshot
+}
+
 // Children returns a copy of the child scopes.
 func (s *Scope) Children() []*Scope {
 	s.mu.RLock()
@@ -96,8 +121,12 @@ func (s *Scope) Children() []*Scope {
 // The child gets a new trace owner ID and inherits the parent's causal
 // context — its first record cites the parent's head as a causal parent.
 //
+// The snapshot parameter captures the execution state at fork time
+// (typically the conversation history). It's stored opaquely — the
+// scope doesn't inspect it. Pass nil if no snapshot is needed.
+//
 // A "scope.forked" declaration is recorded in the parent's trace.
-func (s *Scope) Fork(childOwnerID string) (*Scope, error) {
+func (s *Scope) Fork(childOwnerID string, snapshot any) (*Scope, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -136,6 +165,7 @@ func (s *Scope) Fork(childOwnerID string) (*Scope, error) {
 		bus:       s.bus,
 		parent:    s,
 		forkPoint: forkPointID,
+		snapshot:  snapshot,
 		state:     ScopeActive,
 	}
 

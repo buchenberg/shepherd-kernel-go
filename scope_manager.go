@@ -51,8 +51,9 @@ func (m *ScopeManager) Get(id string) (*Scope, bool) {
 }
 
 // Fork creates a child scope branched from the parent. The child is
-// automatically registered with the manager.
-func (m *ScopeManager) Fork(parentID, childOwnerID string) (*Scope, error) {
+// automatically registered with the manager. The snapshot parameter
+// captures execution state at fork time (pass nil if not needed).
+func (m *ScopeManager) Fork(parentID, childOwnerID string, snapshot any) (*Scope, error) {
 	m.mu.Lock()
 	parent, ok := m.scopes[parentID]
 	m.mu.Unlock()
@@ -61,7 +62,7 @@ func (m *ScopeManager) Fork(parentID, childOwnerID string) (*Scope, error) {
 		return nil, fmt.Errorf("parent scope %s not found", parentID)
 	}
 
-	child, err := parent.Fork(childOwnerID)
+	child, err := parent.Fork(childOwnerID, snapshot)
 	if err != nil {
 		return nil, err
 	}
