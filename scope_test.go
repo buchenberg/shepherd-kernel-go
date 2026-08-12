@@ -1,8 +1,10 @@
 package shepherd
 
 import (
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestScope_NewRootScope(t *testing.T) {
@@ -562,5 +564,84 @@ func TestScope_SnapshotNestedFork(t *testing.T) {
 	}
 	if grandchild.Snapshot().(*state).Turn != 10 {
 		t.Errorf("grandchild snapshot turn should be 10")
+	}
+}
+
+// --- Phase 3: ScopeManager checkpoint tests ---
+
+func TestScopeManager_CreateCheckpoint(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	scope, _ := mgr.Create("sub:cp-managed")
+	repo := newTestRepo(t)
+
+	cp, err := mgr.CreateCheckpoint(scope.ID(), repo, []byte("snapshot"))
+	if err != nil {
+		t.Fatalf("CreateCheckpoint: %v", err)
+	}
+	if cp.ScopeID != scope.ID() {
+		t.Errorf("expected scope %s, got %s", scope.ID(), cp.ScopeID)
+	}
+}
+
+func TestScopeManager_RestoreCheckpoint(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	scope, _ := mgr.Create("sub:cp-restore")
+	repo := newTestRepo(t)
+
+	writeFile(t, repo, "main.go", "original")
+	mustGit(t, repo, "add", "-A")
+	mustGit(t, repo, "commit", "-m", "add main")
+
+	cp, _ := mgr.CreateCheckpoint(scope.ID(), repo, []byte("conversation"))
+
+	// Make changes
+	writeFile(t, repo, "main.go", "CHANGED")
+
+	// Restore
+	snapshot, err := mgr.RestoreCheckpoint(cp.ID)
+	if err != nil {
+		t.Fatalf("RestoreCheckpoint: %v", err)
+	}
+	if string(snapshot) != "conversation" {
+		t.Errorf("expected 'conversation', got %q", snapshot)
+	}
+	got := readFile(t, repo, "main.go")
+	if strings.TrimSpace(got) != "original" {
+		t.Errorf("expected 'original', got %q", got)
+	}
+}
+
+func TestScopeManager_LatestCheckpoint(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	scope, _ := mgr.Create("sub:cp-latest")
+	repo := newTestRepo(t)
+
+	cp1, _ := mgr.CreateCheckpoint(scope.ID(), repo, nil)
+
+	// Small delay so timestamps differ
+	time.Sleep(10 * time.Millisecond)
+
+	cp2, _ := mgr.CreateCheckpoint(scope.ID(), repo, nil)
+
+	latest := mgr.LatestCheckpoint(scope.ID())
+	if latest == nil {
+		t.Fatal("expected non-nil latest checkpoint")
+	}
+	if latest.ID != cp2.ID {
+		t.Errorf("expected cp2 (%s), got %s", cp2.ID, latest.ID)
+	}
+	_ = cp1 // suppress unused
+}
+
+func TestScopeManager_CheckpointScopeNotFound(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+
+	_, err := mgr.CreateCheckpoint("scope:nonexistent", ".", nil)
+	if err == nil {
+		t.Error("CreateCheckpoint on nonexistent scope should fail")
 	}
 }

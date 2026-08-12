@@ -22,6 +22,7 @@ const (
 	InterventionFork    InterventionType = "fork"    // fork before risky action
 	InterventionDiscard InterventionType = "discard" // discard failed branch
 	InterventionHalt    InterventionType = "halt"    // stop sub-agent
+	InterventionDeny    InterventionType = "deny"    // block the tool call before execution
 )
 
 // Intervention is a supervisor action on a sub-agent scope.
@@ -133,6 +134,36 @@ func (s *Supervisor) loop() {
 	}
 }
 
+// CheckCall evaluates rules synchronously against a tool-call event.
+// Returns nil if the call is approved (no rule matched or all rules
+// returned nil). Returns a non-nil Intervention if a rule wants to
+// block or modify the call.
+//
+// This is the synchronous counterpart to the async bus loop. The caller
+// (agent loop, pre-tool hook) calls this BEFORE executing the tool and
+// checks the result:
+//   - nil → proceed with the tool call
+//   - InterventionDeny → block the tool call, return the reason to the model
+//   - InterventionInject → proceed but inject guidance into the next turn
+//   - InterventionHalt → stop the sub-agent entirely
+func (s *Supervisor) CheckCall(event EffectEvent) *Intervention {
+	s.mu.RLock()
+	rules := make([]SupervisionRule, len(s.rules))
+	copy(rules, s.rules)
+	s.mu.RUnlock()
+
+	for _, rule := range rules {
+		if !rule.Match(event) {
+			continue
+		}
+		iv := rule.Action(event)
+		if iv != nil {
+			return iv
+		}
+	}
+	return nil
+}
+
 func (s *Supervisor) evaluate(event EffectEvent) {
 	s.mu.RLock()
 	rules := make([]SupervisionRule, len(s.rules))
@@ -219,7 +250,7 @@ func isDestructiveToolCall(e EffectEvent) bool {
 	// Check bash commands for destructive patterns
 	if e.SchemaRef == "yaah.tool.bash.v1" || e.KindLabel == "bash" {
 		if cmd, ok := e.Payload["cmd"].(string); ok {
-			destructive := []string{"rm ", "rm\t", "rmdir", "mv ", "chmod", "chown", "mkfs", "dd ", "format", "> /", ">> /"}
+			destructive := []string{"rm ", "rm	", "rmdir", "mv ", "chmod", "chown", "mkfs", "dd ", "format", "> /", ">> /"}
 			for _, pattern := range destructive {
 				if strings.Contains(cmd, pattern) {
 					return true
@@ -239,6 +270,33 @@ func isDestructiveToolCall(e EffectEvent) bool {
 	}
 
 	return false
+}
+
+// DestructiveToolGuard returns a rule that DENIES destructive tool calls
+// (blocking them before execution). This is the synchronous variant of
+// DestructiveToolRule — use with CheckCall for pre-execution interception.
+//
+// Where DestructiveToolRule (the async variant) returns InterventionInject
+// (a warning injected after the fact), DestructiveToolGuard returns
+// InterventionDeny to actually prevent the operation.
+func DestructiveToolGuard() SupervisionRule {
+	return SupervisionRule{
+		Name: "destructive_file_block",
+		Match: func(e EffectEvent) bool {
+			if e.Mode != Declaration {
+				return false // only intercept intents, not outcomes
+			}
+			return isDestructiveToolCall(e)
+		},
+		Action: func(e EffectEvent) *Intervention {
+			return &Intervention{
+				Type:    InterventionDeny,
+				ScopeID: fmt.Sprintf("scope:%s", e.TraceOwnerID),
+				Payload: fmt.Sprintf("Blocked destructive operation (%s). Supervisor denied.", e.KindLabel),
+				Time:    time.Now(),
+			}
+		},
+	}
 }
 
 // HighErrorRateRule intervenes when a sub-agent's error rate exceeds a
