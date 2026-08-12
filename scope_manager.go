@@ -167,6 +167,12 @@ func (m *ScopeManager) CreateCheckpoint(scopeID, repoPath string, snapshot []byt
 	}
 
 	m.mu.Lock()
+	if existing, exists := m.checkpoints[cp.ID]; exists {
+		// Should be impossible with a monotonic sequence, but reject an
+		// unexpected ID collision rather than silently replacing a checkpoint.
+		m.mu.Unlock()
+		return nil, fmt.Errorf("checkpoint ID collision: %s already exists (scope %s)", cp.ID, existing.ScopeID)
+	}
 	m.checkpoints[cp.ID] = cp
 	m.mu.Unlock()
 
@@ -197,6 +203,9 @@ func (m *ScopeManager) RestoreCheckpoint(checkpointID string) ([]byte, error) {
 // LatestCheckpoint returns the most recent valid checkpoint for a scope,
 // or nil if none exists. Only checkpoints still in the Valid state are
 // considered — a used or invalid checkpoint is not a candidate for restore.
+//
+// Ordering is by the monotonic Seq (creation order), not CreatedAt, which
+// can tie for concurrent checkpoints and would leave selection ambiguous.
 func (m *ScopeManager) LatestCheckpoint(scopeID string) *GitCheckpoint {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -204,7 +213,7 @@ func (m *ScopeManager) LatestCheckpoint(scopeID string) *GitCheckpoint {
 	var latest *GitCheckpoint
 	for _, cp := range m.checkpoints {
 		if cp.ScopeID == scopeID && cp.State == CheckpointValid {
-			if latest == nil || cp.CreatedAt.After(latest.CreatedAt) {
+			if latest == nil || cp.Seq > latest.Seq {
 				latest = cp
 			}
 		}

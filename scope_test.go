@@ -4,7 +4,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestScope_NewRootScope(t *testing.T) {
@@ -627,9 +626,6 @@ func TestScopeManager_LatestCheckpoint(t *testing.T) {
 		t.Fatalf("CreateCheckpoint cp1: %v", err)
 	}
 
-	// Small delay so timestamps differ
-	time.Sleep(10 * time.Millisecond)
-
 	cp2, err := mgr.CreateCheckpoint(scope.ID(), repo, nil)
 	if err != nil {
 		t.Fatalf("CreateCheckpoint cp2: %v", err)
@@ -645,8 +641,53 @@ func TestScopeManager_LatestCheckpoint(t *testing.T) {
 	if cp1.ID == cp2.ID {
 		t.Errorf("checkpoint IDs must be unique, both are %s", cp1.ID)
 	}
-	if !cp2.CreatedAt.After(cp1.CreatedAt) {
-		t.Errorf("cp2 (%s) must be newer than cp1 (%s)", cp2.CreatedAt, cp1.CreatedAt)
+	if cp2.Seq <= cp1.Seq {
+		t.Errorf("cp2 seq (%d) must exceed cp1 seq (%d)", cp2.Seq, cp1.Seq)
+	}
+}
+
+func TestScopeManager_ConcurrentCheckpointsUniqueIDs(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	scope, _ := mgr.Create("sub:cp-concurrent")
+
+	// Each goroutine checkpoints a distinct repo: git serializes on
+	// index.lock, so concurrent checkpoints against the SAME repo contend
+	// at the git layer. What we're verifying here is ID/sequence uniqueness
+	// under concurrency, independent of git's per-repo locking.
+	//
+	// Repos are created sequentially before the goroutines because
+	// newTestRepo uses t.Setenv (global env mutation), which is not safe
+	// to call concurrently.
+	const n = 20
+	repos := make([]string, n)
+	for i := range repos {
+		repos[i] = newTestRepo(t)
+	}
+
+	ids := make(chan string, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(repo string) {
+			defer wg.Done()
+			cp, err := mgr.CreateCheckpoint(scope.ID(), repo, nil)
+			if err != nil {
+				t.Errorf("CreateCheckpoint: %v", err)
+				return
+			}
+			ids <- cp.ID
+		}(repos[i])
+	}
+	wg.Wait()
+	close(ids)
+
+	seen := make(map[string]bool, n)
+	for id := range ids {
+		if seen[id] {
+			t.Errorf("duplicate checkpoint ID %s under concurrency", id)
+		}
+		seen[id] = true
 	}
 }
 

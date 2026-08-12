@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,6 +23,12 @@ const (
 // on a credential prompt or a dead NFS mount) must not block the caller
 // indefinitely.
 const gitTimeout = 30 * time.Second
+
+// nextCheckpointSeq is a process-wide monotonic sequence for checkpoint
+// identity and ordering. Wall-clock time is intentionally NOT used for either:
+// time.Now().UnixNano() can return the same value for concurrent callers, and
+// equal CreatedAt values would leave ordering ambiguous (map iteration order).
+var nextCheckpointSeq atomic.Uint64
 
 // CheckpointState tracks whether a checkpoint is usable.
 type CheckpointState string
@@ -45,8 +52,13 @@ type GitCheckpoint struct {
 	// mu guards State and Snapshot across concurrent restore attempts.
 	mu sync.Mutex
 
-	// ID is a unique checkpoint identifier (auto-generated).
+	// ID is a unique checkpoint identifier (auto-generated from a monotonic
+	// sequence — never from wall-clock time, which can collide under
+	// concurrency).
 	ID string
+	// Seq is a process-wide monotonic creation order. It is the authoritative
+	// ordering key (CreatedAt is informational and can tie).
+	Seq uint64
 	// ScopeID is the scope this checkpoint belongs to.
 	ScopeID string
 	// RepoPath is the git repo path, stored at creation so RestoreCheckpoint
@@ -196,8 +208,10 @@ func (s *Scope) CreateCheckpoint(repoPath string, snapshot []byte) (*GitCheckpoi
 		return nil, fmt.Errorf("checkpoint: git rev-parse HEAD: %w", err)
 	}
 
+	seq := nextCheckpointSeq.Add(1)
 	cp := &GitCheckpoint{
-		ID:        fmt.Sprintf("cp:%s:%d", s.ownerID, time.Now().UnixNano()),
+		ID:        fmt.Sprintf("cp:%s:%d", s.ownerID, seq),
+		Seq:       seq,
 		ScopeID:   s.id,
 		RepoPath:  repoPath,
 		StashSHA:  stashSHA,
@@ -215,7 +229,7 @@ func (s *Scope) CreateCheckpoint(repoPath string, snapshot []byte) (*GitCheckpoi
 		"has_snapshot":  len(snapshot) > 0,
 	}
 	_, err = s.store.Append(TrustedAppendContext, AppendBatch{
-		AppendIntentID: fmt.Sprintf("%s:checkpoint:%d", s.ownerID, time.Now().UnixNano()),
+		AppendIntentID: fmt.Sprintf("%s:checkpoint:%d", s.ownerID, seq),
 		Groups: []AppendGroup{{
 			TraceOwnerID: s.ownerID,
 			FactDrafts: []RecordDraft{{
@@ -311,7 +325,7 @@ func (s *Scope) RestoreCheckpoint(cp *GitCheckpoint) ([]byte, error) {
 
 	// Record in trace (advisory — log and continue on failure).
 	_, err := s.store.Append(TrustedAppendContext, AppendBatch{
-		AppendIntentID: fmt.Sprintf("%s:restore:%d", s.ownerID, time.Now().UnixNano()),
+		AppendIntentID: fmt.Sprintf("%s:restore:%d", s.ownerID, cp.Seq),
 		Groups: []AppendGroup{{
 			TraceOwnerID: s.ownerID,
 			FactDrafts: []RecordDraft{{
