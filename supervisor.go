@@ -22,6 +22,7 @@ const (
 	InterventionFork    InterventionType = "fork"    // fork before risky action
 	InterventionDiscard InterventionType = "discard" // discard failed branch
 	InterventionHalt    InterventionType = "halt"    // stop sub-agent
+	InterventionDeny    InterventionType = "deny"    // block the tool call before execution
 )
 
 // Intervention is a supervisor action on a sub-agent scope.
@@ -133,6 +134,36 @@ func (s *Supervisor) loop() {
 	}
 }
 
+// CheckCall evaluates rules synchronously against a tool-call event.
+// Returns nil if the call is approved (no rule matched or all rules
+// returned nil). Returns a non-nil Intervention if a rule wants to
+// block or modify the call.
+//
+// This is the synchronous counterpart to the async bus loop. The caller
+// (agent loop, pre-tool hook) calls this BEFORE executing the tool and
+// checks the result:
+//   - nil → proceed with the tool call
+//   - InterventionDeny → block the tool call, return the reason to the model
+//   - InterventionInject → proceed but inject guidance into the next turn
+//   - InterventionHalt → stop the sub-agent entirely
+func (s *Supervisor) CheckCall(event EffectEvent) *Intervention {
+	s.mu.RLock()
+	rules := make([]SupervisionRule, len(s.rules))
+	copy(rules, s.rules)
+	s.mu.RUnlock()
+
+	for _, rule := range rules {
+		if !rule.Match(event) {
+			continue
+		}
+		iv := rule.Action(event)
+		if iv != nil {
+			return iv
+		}
+	}
+	return nil
+}
+
 func (s *Supervisor) evaluate(event EffectEvent) {
 	s.mu.RLock()
 	rules := make([]SupervisionRule, len(s.rules))
@@ -215,11 +246,17 @@ func DestructiveToolRule() SupervisionRule {
 	}
 }
 
+// isDestructiveToolCall implements the ADVISORY destructive-file matcher.
+// It uses a blacklist of bash patterns plus write/delete tool checks. This
+// is fine for DestructiveToolRule (which only injects a warning), but it is
+// NOT a security boundary: shell expansion (e.g. `rm${IFS}-rf /`) bypasses
+// substring matching. The blocking DestructiveToolGuard uses default-deny
+// for bash instead (see isBlockableToolCall).
 func isDestructiveToolCall(e EffectEvent) bool {
 	// Check bash commands for destructive patterns
 	if e.SchemaRef == "yaah.tool.bash.v1" || e.KindLabel == "bash" {
 		if cmd, ok := e.Payload["cmd"].(string); ok {
-			destructive := []string{"rm ", "rm\t", "rmdir", "mv ", "chmod", "chown", "mkfs", "dd ", "format", "> /", ">> /"}
+			destructive := []string{"rm ", "rm	", "rmdir", "mv ", "chmod", "chown", "mkfs", "dd ", "format", "> /", ">> /"}
 			for _, pattern := range destructive {
 				if strings.Contains(cmd, pattern) {
 					return true
@@ -239,6 +276,64 @@ func isDestructiveToolCall(e EffectEvent) bool {
 	}
 
 	return false
+}
+
+// isBlockableToolCall implements the BLOCKING matcher for DestructiveToolGuard.
+// Unlike the advisory blacklist, this defaults to deny for any bash command:
+// a shell interpreter can execute arbitrary code via expansion, IFS tricks,
+// and nested invocations that substring matching cannot reliably catch.
+// A blacklist here would give false confidence in a security boundary.
+//
+// Structured tools (write/delete) are precise and blockable individually;
+// they don't invoke a shell.
+func isBlockableToolCall(e EffectEvent) bool {
+	// Default-deny: any bash command goes through a shell and is
+	// potentially destructive beyond what pattern matching can verify.
+	if e.SchemaRef == "yaah.tool.bash.v1" || e.KindLabel == "bash" {
+		return true
+	}
+
+	if e.SchemaRef == "yaah.tool.write.v1" || e.KindLabel == "write" {
+		return true
+	}
+
+	if e.SchemaRef == "yaah.tool.delete.v1" || e.KindLabel == "delete" {
+		return true
+	}
+
+	return false
+}
+
+// DestructiveToolGuard returns a rule that DENIES destructive tool calls
+// (blocking them before execution). This is the synchronous variant of
+// DestructiveToolRule — use with CheckCall for pre-execution interception.
+//
+// Where DestructiveToolRule (the async variant) returns InterventionInject
+// (a warning injected after the fact), DestructiveToolGuard returns
+// InterventionDeny to actually prevent the operation.
+//
+// Because this is a blocking security boundary, it uses default-deny for
+// bash commands (isBlockableToolCall) rather than the advisory blacklist:
+// shell expansion makes a blacklist trivially bypassable, and a blocking
+// guard must not give false confidence.
+func DestructiveToolGuard() SupervisionRule {
+	return SupervisionRule{
+		Name: "destructive_file_block",
+		Match: func(e EffectEvent) bool {
+			if e.Mode != Declaration {
+				return false // only intercept intents, not outcomes
+			}
+			return isBlockableToolCall(e)
+		},
+		Action: func(e EffectEvent) *Intervention {
+			return &Intervention{
+				Type:    InterventionDeny,
+				ScopeID: fmt.Sprintf("scope:%s", e.TraceOwnerID),
+				Payload: fmt.Sprintf("Blocked destructive operation (%s). Supervisor denied.", e.KindLabel),
+				Time:    time.Now(),
+			}
+		},
+	}
 }
 
 // HighErrorRateRule intervenes when a sub-agent's error rate exceeds a

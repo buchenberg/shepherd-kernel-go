@@ -1,6 +1,7 @@
 package shepherd
 
 import (
+	"strings"
 	"sync"
 	"testing"
 )
@@ -562,5 +563,140 @@ func TestScope_SnapshotNestedFork(t *testing.T) {
 	}
 	if grandchild.Snapshot().(*state).Turn != 10 {
 		t.Errorf("grandchild snapshot turn should be 10")
+	}
+}
+
+// --- Phase 3: ScopeManager checkpoint tests ---
+
+func TestScopeManager_CreateCheckpoint(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	scope, _ := mgr.Create("sub:cp-managed")
+	repo := newTestRepo(t)
+
+	cp, err := mgr.CreateCheckpoint(scope.ID(), repo, []byte("snapshot"))
+	if err != nil {
+		t.Fatalf("CreateCheckpoint: %v", err)
+	}
+	if cp.ScopeID != scope.ID() {
+		t.Errorf("expected scope %s, got %s", scope.ID(), cp.ScopeID)
+	}
+}
+
+func TestScopeManager_RestoreCheckpoint(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	scope, _ := mgr.Create("sub:cp-restore")
+	repo := newTestRepo(t)
+
+	writeFile(t, repo, "main.go", "original")
+	mustGit(t, repo, "add", "-A")
+	mustGit(t, repo, "commit", "-m", "add main")
+
+	cp, err := mgr.CreateCheckpoint(scope.ID(), repo, []byte("conversation"))
+	if err != nil {
+		t.Fatalf("CreateCheckpoint: %v", err)
+	}
+
+	// Make changes
+	writeFile(t, repo, "main.go", "CHANGED")
+
+	// Restore
+	snapshot, err := mgr.RestoreCheckpoint(cp.ID)
+	if err != nil {
+		t.Fatalf("RestoreCheckpoint: %v", err)
+	}
+	if string(snapshot) != "conversation" {
+		t.Errorf("expected 'conversation', got %q", snapshot)
+	}
+	got := readFile(t, repo, "main.go")
+	if strings.TrimSpace(got) != "original" {
+		t.Errorf("expected 'original', got %q", got)
+	}
+}
+
+func TestScopeManager_LatestCheckpoint(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	scope, _ := mgr.Create("sub:cp-latest")
+	repo := newTestRepo(t)
+
+	cp1, err := mgr.CreateCheckpoint(scope.ID(), repo, nil)
+	if err != nil {
+		t.Fatalf("CreateCheckpoint cp1: %v", err)
+	}
+
+	cp2, err := mgr.CreateCheckpoint(scope.ID(), repo, nil)
+	if err != nil {
+		t.Fatalf("CreateCheckpoint cp2: %v", err)
+	}
+
+	latest := mgr.LatestCheckpoint(scope.ID())
+	if latest == nil {
+		t.Fatal("expected non-nil latest checkpoint")
+	}
+	if latest.ID != cp2.ID {
+		t.Errorf("expected cp2 (%s), got %s", cp2.ID, latest.ID)
+	}
+	if cp1.ID == cp2.ID {
+		t.Errorf("checkpoint IDs must be unique, both are %s", cp1.ID)
+	}
+	if cp2.Seq <= cp1.Seq {
+		t.Errorf("cp2 seq (%d) must exceed cp1 seq (%d)", cp2.Seq, cp1.Seq)
+	}
+}
+
+func TestScopeManager_ConcurrentCheckpointsUniqueIDs(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	scope, _ := mgr.Create("sub:cp-concurrent")
+
+	// Each goroutine checkpoints a distinct repo: git serializes on
+	// index.lock, so concurrent checkpoints against the SAME repo contend
+	// at the git layer. What we're verifying here is ID/sequence uniqueness
+	// under concurrency, independent of git's per-repo locking.
+	//
+	// Repos are created sequentially before the goroutines because
+	// newTestRepo uses t.Setenv (global env mutation), which is not safe
+	// to call concurrently.
+	const n = 20
+	repos := make([]string, n)
+	for i := range repos {
+		repos[i] = newTestRepo(t)
+	}
+
+	ids := make(chan string, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(repo string) {
+			defer wg.Done()
+			cp, err := mgr.CreateCheckpoint(scope.ID(), repo, nil)
+			if err != nil {
+				t.Errorf("CreateCheckpoint: %v", err)
+				return
+			}
+			ids <- cp.ID
+		}(repos[i])
+	}
+	wg.Wait()
+	close(ids)
+
+	seen := make(map[string]bool, n)
+	for id := range ids {
+		if seen[id] {
+			t.Errorf("duplicate checkpoint ID %s under concurrency", id)
+		}
+		seen[id] = true
+	}
+}
+
+func TestScopeManager_CheckpointScopeNotFound(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+
+	_, err := mgr.CreateCheckpoint("scope:nonexistent", ".", nil)
+	if err == nil {
+		t.Error("CreateCheckpoint on nonexistent scope should fail")
 	}
 }

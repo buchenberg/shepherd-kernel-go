@@ -105,7 +105,7 @@ func TestSupervisor_FirstRuleWins(t *testing.T) {
 
 	var firstCalled bool
 	supervisor.AddRule(SupervisionRule{
-		Name: "first",
+		Name:  "first",
 		Match: func(e EffectEvent) bool { return true },
 		Action: func(e EffectEvent) *Intervention {
 			firstCalled = true
@@ -113,7 +113,7 @@ func TestSupervisor_FirstRuleWins(t *testing.T) {
 		},
 	})
 	supervisor.AddRule(SupervisionRule{
-		Name: "second",
+		Name:  "second",
 		Match: func(e EffectEvent) bool { return true },
 		Action: func(e EffectEvent) *Intervention {
 			return &Intervention{Type: InterventionHalt, ScopeID: "x"}
@@ -148,7 +148,7 @@ func TestSupervisor_ObserveOnlyRule(t *testing.T) {
 
 	// Rule that matches but returns nil (observe-only)
 	supervisor.AddRule(SupervisionRule{
-		Name: "observer",
+		Name:  "observer",
 		Match: func(e EffectEvent) bool { return true },
 		Action: func(e EffectEvent) *Intervention {
 			return nil // observe only
@@ -437,5 +437,184 @@ func TestStuckDetectionRule_IgnoresCaptures(t *testing.T) {
 
 	if rule.Match(event) {
 		t.Error("captures should not match stuck detection")
+	}
+}
+
+// --- Phase 2: CheckCall tests ---
+
+func TestSupervisor_CheckCall_Approved(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	supervisor := NewSupervisor(mgr, nil)
+
+	// Non-matching rule
+	supervisor.AddRule(SupervisionRule{
+		Name: "bash_only",
+		Match: func(e EffectEvent) bool {
+			return e.KindLabel == "bash"
+		},
+		Action: func(e EffectEvent) *Intervention {
+			return &Intervention{Type: InterventionDeny, ScopeID: "x"}
+		},
+	})
+
+	// Event that doesn't match
+	iv := supervisor.CheckCall(EffectEvent{
+		Mode:      Declaration,
+		KindLabel: "read_file",
+	})
+	if iv != nil {
+		t.Errorf("expected nil (approved), got %v", iv)
+	}
+}
+
+func TestSupervisor_CheckCall_Deny(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	supervisor := NewSupervisor(mgr, nil)
+
+	supervisor.AddRule(DestructiveToolGuard())
+
+	iv := supervisor.CheckCall(EffectEvent{
+		Mode:      Declaration,
+		KindLabel: "bash",
+		SchemaRef: "yaah.tool.bash.v1",
+		Payload:   map[string]any{"cmd": "rm -rf /tmp"},
+	})
+	if iv == nil {
+		t.Fatal("expected intervention, got nil")
+	}
+	if iv.Type != InterventionDeny {
+		t.Errorf("expected deny, got %s", iv.Type)
+	}
+}
+
+func TestSupervisor_CheckCall_FirstRuleWins(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	supervisor := NewSupervisor(mgr, nil)
+
+	supervisor.AddRule(SupervisionRule{
+		Name:  "first",
+		Match: func(e EffectEvent) bool { return true },
+		Action: func(e EffectEvent) *Intervention {
+			return &Intervention{Type: InterventionInject, ScopeID: "x"}
+		},
+	})
+	supervisor.AddRule(SupervisionRule{
+		Name:  "second",
+		Match: func(e EffectEvent) bool { return true },
+		Action: func(e EffectEvent) *Intervention {
+			return &Intervention{Type: InterventionHalt, ScopeID: "x"}
+		},
+	})
+
+	iv := supervisor.CheckCall(EffectEvent{Mode: Declaration, KindLabel: "test"})
+	if iv == nil {
+		t.Fatal("expected intervention")
+	}
+	if iv.Type != InterventionInject {
+		t.Errorf("expected inject from first rule, got %s", iv.Type)
+	}
+}
+
+func TestSupervisor_CheckCall_ObserveOnly(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	supervisor := NewSupervisor(mgr, nil)
+
+	supervisor.AddRule(SupervisionRule{
+		Name:  "observer",
+		Match: func(e EffectEvent) bool { return true },
+		Action: func(e EffectEvent) *Intervention {
+			return nil // observe only
+		},
+	})
+
+	iv := supervisor.CheckCall(EffectEvent{Mode: Declaration})
+	if iv != nil {
+		t.Error("observe-only rule should return nil")
+	}
+}
+
+func TestDestructiveToolGuard_BashRm(t *testing.T) {
+	rule := DestructiveToolGuard()
+
+	event := EffectEvent{
+		Mode:      Declaration,
+		KindLabel: "bash",
+		SchemaRef: "yaah.tool.bash.v1",
+		Payload:   map[string]any{"cmd": "rm -rf /tmp/test"},
+	}
+
+	if !rule.Match(event) {
+		t.Error("rm command should match guard")
+	}
+
+	iv := rule.Action(event)
+	if iv == nil {
+		t.Fatal("guard should produce intervention")
+	}
+	if iv.Type != InterventionDeny {
+		t.Errorf("expected deny, got %s", iv.Type)
+	}
+}
+
+// TestDestructiveToolGuard_BashDefaultDeny verifies that the blocking guard
+// defaults to denying ANY bash command — even a benign `ls` — because shell
+// expansion makes a blacklist trivially bypassable for a security boundary.
+func TestDestructiveToolGuard_BashDefaultDeny(t *testing.T) {
+	rule := DestructiveToolGuard()
+
+	event := EffectEvent{
+		Mode:      Declaration,
+		KindLabel: "bash",
+		SchemaRef: "yaah.tool.bash.v1",
+		Payload:   map[string]any{"cmd": "ls -la"},
+	}
+
+	if !rule.Match(event) {
+		t.Error("bash should match guard (default-deny for shell commands)")
+	}
+}
+
+// TestDestructiveToolGuard_BashBypassAttempt verifies that a shell-expansion
+// bypass attempt (rm${IFS}-rf) is still caught — it's bash, so default-deny
+// applies regardless of the specific command text.
+func TestDestructiveToolGuard_BashBypassAttempt(t *testing.T) {
+	rule := DestructiveToolGuard()
+
+	event := EffectEvent{
+		Mode:      Declaration,
+		KindLabel: "bash",
+		SchemaRef: "yaah.tool.bash.v1",
+		Payload:   map[string]any{"cmd": "rm${IFS}-rf /important"},
+	}
+
+	if !rule.Match(event) {
+		t.Error("bypass attempt should match guard (default-deny for bash)")
+	}
+}
+
+func TestDestructiveToolGuard_Write(t *testing.T) {
+	rule := DestructiveToolGuard()
+
+	event := EffectEvent{
+		Mode:      Declaration,
+		KindLabel: "write",
+		SchemaRef: "yaah.tool.write.v1",
+		Payload:   map[string]any{"path": "/tmp/test"},
+	}
+
+	if !rule.Match(event) {
+		t.Error("write should match guard")
+	}
+
+	iv := rule.Action(event)
+	if iv == nil {
+		t.Fatal("guard should produce intervention for write")
+	}
+	if iv.Type != InterventionDeny {
+		t.Errorf("expected deny, got %s", iv.Type)
 	}
 }
