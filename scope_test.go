@@ -594,7 +594,10 @@ func TestScopeManager_RestoreCheckpoint(t *testing.T) {
 	mustGit(t, repo, "add", "-A")
 	mustGit(t, repo, "commit", "-m", "add main")
 
-	cp, _ := mgr.CreateCheckpoint(scope.ID(), repo, []byte("conversation"))
+	cp, err := mgr.CreateCheckpoint(scope.ID(), repo, []byte("conversation"))
+	if err != nil {
+		t.Fatalf("CreateCheckpoint: %v", err)
+	}
 
 	// Make changes
 	writeFile(t, repo, "main.go", "CHANGED")
@@ -619,12 +622,18 @@ func TestScopeManager_LatestCheckpoint(t *testing.T) {
 	scope, _ := mgr.Create("sub:cp-latest")
 	repo := newTestRepo(t)
 
-	cp1, _ := mgr.CreateCheckpoint(scope.ID(), repo, nil)
+	cp1, err := mgr.CreateCheckpoint(scope.ID(), repo, nil)
+	if err != nil {
+		t.Fatalf("CreateCheckpoint cp1: %v", err)
+	}
 
 	// Small delay so timestamps differ
 	time.Sleep(10 * time.Millisecond)
 
-	cp2, _ := mgr.CreateCheckpoint(scope.ID(), repo, nil)
+	cp2, err := mgr.CreateCheckpoint(scope.ID(), repo, nil)
+	if err != nil {
+		t.Fatalf("CreateCheckpoint cp2: %v", err)
+	}
 
 	latest := mgr.LatestCheckpoint(scope.ID())
 	if latest == nil {
@@ -633,7 +642,12 @@ func TestScopeManager_LatestCheckpoint(t *testing.T) {
 	if latest.ID != cp2.ID {
 		t.Errorf("expected cp2 (%s), got %s", cp2.ID, latest.ID)
 	}
-	_ = cp1 // suppress unused
+	if cp1.ID == cp2.ID {
+		t.Errorf("checkpoint IDs must be unique, both are %s", cp1.ID)
+	}
+	if !cp2.CreatedAt.After(cp1.CreatedAt) {
+		t.Errorf("cp2 (%s) must be newer than cp1 (%s)", cp2.CreatedAt, cp1.CreatedAt)
+	}
 }
 
 func TestScopeManager_CheckpointScopeNotFound(t *testing.T) {

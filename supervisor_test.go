@@ -105,7 +105,7 @@ func TestSupervisor_FirstRuleWins(t *testing.T) {
 
 	var firstCalled bool
 	supervisor.AddRule(SupervisionRule{
-		Name: "first",
+		Name:  "first",
 		Match: func(e EffectEvent) bool { return true },
 		Action: func(e EffectEvent) *Intervention {
 			firstCalled = true
@@ -113,7 +113,7 @@ func TestSupervisor_FirstRuleWins(t *testing.T) {
 		},
 	})
 	supervisor.AddRule(SupervisionRule{
-		Name: "second",
+		Name:  "second",
 		Match: func(e EffectEvent) bool { return true },
 		Action: func(e EffectEvent) *Intervention {
 			return &Intervention{Type: InterventionHalt, ScopeID: "x"}
@@ -148,7 +148,7 @@ func TestSupervisor_ObserveOnlyRule(t *testing.T) {
 
 	// Rule that matches but returns nil (observe-only)
 	supervisor.AddRule(SupervisionRule{
-		Name: "observer",
+		Name:  "observer",
 		Match: func(e EffectEvent) bool { return true },
 		Action: func(e EffectEvent) *Intervention {
 			return nil // observe only
@@ -560,7 +560,10 @@ func TestDestructiveToolGuard_BashRm(t *testing.T) {
 	}
 }
 
-func TestDestructiveToolGuard_BashSafe(t *testing.T) {
+// TestDestructiveToolGuard_BashDefaultDeny verifies that the blocking guard
+// defaults to denying ANY bash command — even a benign `ls` — because shell
+// expansion makes a blacklist trivially bypassable for a security boundary.
+func TestDestructiveToolGuard_BashDefaultDeny(t *testing.T) {
 	rule := DestructiveToolGuard()
 
 	event := EffectEvent{
@@ -570,8 +573,26 @@ func TestDestructiveToolGuard_BashSafe(t *testing.T) {
 		Payload:   map[string]any{"cmd": "ls -la"},
 	}
 
-	if rule.Match(event) {
-		t.Error("ls command should NOT match guard")
+	if !rule.Match(event) {
+		t.Error("bash should match guard (default-deny for shell commands)")
+	}
+}
+
+// TestDestructiveToolGuard_BashBypassAttempt verifies that a shell-expansion
+// bypass attempt (rm${IFS}-rf) is still caught — it's bash, so default-deny
+// applies regardless of the specific command text.
+func TestDestructiveToolGuard_BashBypassAttempt(t *testing.T) {
+	rule := DestructiveToolGuard()
+
+	event := EffectEvent{
+		Mode:      Declaration,
+		KindLabel: "bash",
+		SchemaRef: "yaah.tool.bash.v1",
+		Payload:   map[string]any{"cmd": "rm${IFS}-rf /important"},
+	}
+
+	if !rule.Match(event) {
+		t.Error("bypass attempt should match guard (default-deny for bash)")
 	}
 }
 
@@ -592,5 +613,8 @@ func TestDestructiveToolGuard_Write(t *testing.T) {
 	iv := rule.Action(event)
 	if iv == nil {
 		t.Fatal("guard should produce intervention for write")
+	}
+	if iv.Type != InterventionDeny {
+		t.Errorf("expected deny, got %s", iv.Type)
 	}
 }

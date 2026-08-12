@@ -131,7 +131,8 @@ func TestIntegration_SynchronousDeny(t *testing.T) {
 		t.Errorf("expected scope:sub:worker, got %s", iv.ScopeID)
 	}
 
-	// Verify the same command that's safe is NOT denied
+	// Verify that even a benign bash command is denied under default-deny —
+	// shell commands cannot be safely allowlisted by text matching.
 	safeEvent := EffectEvent{
 		Mode:         Declaration,
 		TraceOwnerID: "sub:worker",
@@ -140,8 +141,21 @@ func TestIntegration_SynchronousDeny(t *testing.T) {
 		Payload:      map[string]any{"cmd": "go test ./..."},
 	}
 	safeIV := supervisor.CheckCall(safeEvent)
-	if safeIV != nil {
-		t.Errorf("safe command should be approved, got intervention: %v", safeIV)
+	if safeIV == nil || safeIV.Type != InterventionDeny {
+		t.Errorf("bash should be denied under default-deny, got intervention: %v", safeIV)
+	}
+
+	// Verify that a non-bash, non-write, non-delete tool is approved.
+	readEvent := EffectEvent{
+		Mode:         Declaration,
+		TraceOwnerID: "sub:worker",
+		KindLabel:    "read_file",
+		SchemaRef:    "yaah.tool.read.v1",
+		Payload:      map[string]any{"path": "/tmp/x"},
+	}
+	readIV := supervisor.CheckCall(readEvent)
+	if readIV != nil {
+		t.Errorf("read_file should be approved, got intervention: %v", readIV)
 	}
 }
 
@@ -231,6 +245,9 @@ func TestIntegration_MultipleCheckpoints(t *testing.T) {
 
 	// LatestCheckpoint should be cp2
 	latest := mgr.LatestCheckpoint(scope.ID())
+	if latest == nil {
+		t.Fatal("expected non-nil latest checkpoint")
+	}
 	if latest.ID != cp2.ID {
 		t.Errorf("expected latest to be cp2, got %s", latest.ID)
 	}

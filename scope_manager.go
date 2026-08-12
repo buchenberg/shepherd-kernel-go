@@ -148,11 +148,15 @@ func (m *ScopeManager) AllScopes() []*Scope {
 // CreateCheckpoint creates a checkpoint for a scope and registers it.
 // The checkpoint captures the git workspace state at repoPath plus the
 // opaque caller-provided snapshot (typically serialized conversation history).
+//
+// The manager lock is NOT held during the git subprocess calls — resolving
+// the scope takes a read lock, the (potentially slow) git operations run
+// outside it, and only the final map registration takes the write lock.
 func (m *ScopeManager) CreateCheckpoint(scopeID, repoPath string, snapshot []byte) (*GitCheckpoint, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	m.mu.RLock()
 	scope, ok := m.scopes[scopeID]
+	m.mu.RUnlock()
+
 	if !ok {
 		return nil, fmt.Errorf("scope %s not found", scopeID)
 	}
@@ -162,7 +166,10 @@ func (m *ScopeManager) CreateCheckpoint(scopeID, repoPath string, snapshot []byt
 		return nil, err
 	}
 
+	m.mu.Lock()
 	m.checkpoints[cp.ID] = cp
+	m.mu.Unlock()
+
 	return cp, nil
 }
 
@@ -171,14 +178,16 @@ func (m *ScopeManager) CreateCheckpoint(scopeID, repoPath string, snapshot []byt
 func (m *ScopeManager) RestoreCheckpoint(checkpointID string) ([]byte, error) {
 	m.mu.RLock()
 	cp, ok := m.checkpoints[checkpointID]
+	var scope *Scope
+	if ok {
+		scope, ok = m.scopes[cp.ScopeID]
+	}
 	m.mu.RUnlock()
 
 	if !ok {
-		return nil, fmt.Errorf("checkpoint %s not found", checkpointID)
-	}
-
-	scope, ok := m.scopes[cp.ScopeID]
-	if !ok {
+		if cp == nil {
+			return nil, fmt.Errorf("checkpoint %s not found", checkpointID)
+		}
 		return nil, fmt.Errorf("scope %s for checkpoint %s not found", cp.ScopeID, checkpointID)
 	}
 
@@ -186,18 +195,37 @@ func (m *ScopeManager) RestoreCheckpoint(checkpointID string) ([]byte, error) {
 }
 
 // LatestCheckpoint returns the most recent valid checkpoint for a scope,
-// or nil if none exists.
+// or nil if none exists. Only checkpoints still in the Valid state are
+// considered — a used or invalid checkpoint is not a candidate for restore.
 func (m *ScopeManager) LatestCheckpoint(scopeID string) *GitCheckpoint {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	var latest *GitCheckpoint
 	for _, cp := range m.checkpoints {
-		if cp.ScopeID == scopeID {
+		if cp.ScopeID == scopeID && cp.State == CheckpointValid {
 			if latest == nil || cp.CreatedAt.After(latest.CreatedAt) {
 				latest = cp
 			}
 		}
 	}
 	return latest
+}
+
+// PruneCheckpoints removes all checkpoints belonging to a scope. Call this
+// when a scope is discarded or merged so consumed checkpoint metadata (and
+// any still-retained snapshot) is not held for the process lifetime.
+// RestoreCheckpoint already releases the snapshot on use; this handles
+// checkpoints that were never restored.
+func (m *ScopeManager) PruneCheckpoints(scopeID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, cp := range m.checkpoints {
+		if cp.ScopeID == scopeID {
+			cp.mu.Lock()
+			cp.Snapshot = nil
+			cp.mu.Unlock()
+			delete(m.checkpoints, id)
+		}
+	}
 }

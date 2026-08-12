@@ -357,7 +357,7 @@ patterns**, and only one is partially ported:
 what the Go port approximates. But there's a critical timing issue:
 
 In the Go port, the bus publishes events **after** the store append
-succeedurs (store.go line 134-171). The trace middleware records tool
+succeeds (store.go line 134-171). The trace middleware records tool
 calls in `PostTool` — **after** the tool has already executed. So the
 supervisor sees the event **after the damage is done**. The
 `DestructiveToolRule` can inject a warning, but it can't prevent the

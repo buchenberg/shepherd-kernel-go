@@ -2,15 +2,27 @@ package shepherd
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// newTestRepo creates a temp git repo with an initial commit.
+// newTestRepo creates a temp git repo with an initial commit, isolated from
+// the developer's global and system git config (gpgsign, hooksPath, commit
+// templates, etc.) so a host-machine setting can't break the tests.
 func newTestRepo(t *testing.T) string {
 	t.Helper()
+	requireGit(t)
+
 	dir := t.TempDir()
+
+	// Point git at empty global/system config so inherited settings
+	// (commit.gpgsign=true, core.hooksPath, commit.template, ...) don't
+	// make the test commit fail in ways that look like checkpoint defects.
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
+	t.Setenv("GIT_CONFIG_SYSTEM", filepath.Join(t.TempDir(), "gitconfig-system"))
+
 	mustGit(t, dir, "init")
 	mustGit(t, dir, "config", "user.email", "test@test.com")
 	mustGit(t, dir, "config", "user.name", "Test")
@@ -20,6 +32,15 @@ func newTestRepo(t *testing.T) string {
 	mustGit(t, dir, "add", "-A")
 	mustGit(t, dir, "commit", "-m", "init")
 	return dir
+}
+
+// requireGit skips the test when the git binary is unavailable, producing a
+// clear skip instead of a confusing failure mid-test.
+func requireGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
 }
 
 // mustGit runs git in a dir, fails the test on error.
@@ -336,18 +357,29 @@ func TestCheckpoint_NotOnActiveScope(t *testing.T) {
 	scope := NewScope(store, "sub:halted")
 	repo := newTestRepo(t)
 
-	// Halt the scope
+	// Create a checkpoint while the scope is active.
+	cp, err := scope.CreateCheckpoint(repo, nil)
+	if err != nil {
+		t.Fatalf("CreateCheckpoint: %v", err)
+	}
+
+	// Halt the scope.
 	if err := scope.Halt(); err != nil {
 		t.Fatalf("Halt: %v", err)
 	}
 
-	_, err := scope.CreateCheckpoint(repo, nil)
+	// CreateCheckpoint on a halted scope must fail.
+	_, err = scope.CreateCheckpoint(repo, nil)
 	if err == nil {
 		t.Error("CreateCheckpoint on halted scope should fail")
 	}
 
-	// Also test restore on halted scope: need a valid checkpoint first
-	// (halted scope can't create one, so we'll skip the restore test here)
+	// RestoreCheckpoint on a halted scope must fail too — the checkpoint
+	// was created while active, but the scope is now halted.
+	_, err = scope.RestoreCheckpoint(cp)
+	if err == nil {
+		t.Error("RestoreCheckpoint on halted scope should fail")
+	}
 }
 
 func TestCheckpoint_StashApplyConflict(t *testing.T) {
@@ -366,24 +398,30 @@ func TestCheckpoint_StashApplyConflict(t *testing.T) {
 		t.Fatalf("CreateCheckpoint: %v", err)
 	}
 
-	// Modify the same file differently — the stash apply will need to
-	// re-apply the old version, but reset --hard already wiped to HEAD.
-	// So the stash apply should succeed because reset restored HEAD state.
+	// Modify the same file differently and commit.
 	writeFile(t, repo, "main.go", "package main\n\nfunc b() {}\n")
 	mustGit(t, repo, "add", "-A")
 	mustGit(t, repo, "commit", "-m", "change main.go")
 
-	// Restore should work — reset --hard goes to latest HEAD (func b),
-	// then stash apply re-applies the checkpointed state (func a).
-	// This may produce a merge conflict since HEAD changed.
-	// We accept either success or a conflict error — the key is no crash.
+	// Restore should work — reset --hard goes back to the checkpoint's
+	// HeadSHA, then the stash (captured when the tree was clean) applies
+	// cleanly. Both outcomes are explicitly asserted.
 	_, err = scope.RestoreCheckpoint(cp)
 	if err != nil {
-		// Conflict is acceptable — the checkpoint state can't be cleanly
-		// applied after HEAD moved. State should be invalid.
+		// A conflict is acceptable — the stash apply can fail if the
+		// checkpoint's HEAD differs from where the stash was created.
 		if cp.State != CheckpointInvalid {
 			t.Errorf("expected invalid state after failed restore, got %s", cp.State)
 		}
+		return
+	}
+	// Success path: checkpoint must be marked used and content restored.
+	if cp.State != CheckpointUsed {
+		t.Errorf("expected used state after successful restore, got %s", cp.State)
+	}
+	got := readFile(t, repo, "main.go")
+	if !strings.Contains(got, "func a()") {
+		t.Errorf("expected checkpointed content with func a(), got %q", got)
 	}
 }
 
