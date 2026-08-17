@@ -71,8 +71,13 @@ func (s *Scope) CaptureTree(repoPath string) (*TreeState, error) {
 		return nil, fmt.Errorf("capture tree: git rev-parse HEAD: %w", err)
 	}
 
+	// Record in trace (advisory — log and continue on failure). The
+	// intent ID carries the monotonic tree sequence so recapturing the
+	// same HEAD with different content (e.g. fork flows) is a distinct
+	// intent, not a collision.
+	treeSeq := nextCheckpointSeq.Add(1)
 	_, err = s.store.Append(TrustedAppendContext, AppendBatch{
-		AppendIntentID: fmt.Sprintf("%s:tree:capture:%s", s.ownerID, headSHA),
+		AppendIntentID: fmt.Sprintf("%s:tree:capture:%d", s.ownerID, treeSeq),
 		Groups: []AppendGroup{{
 			TraceOwnerID: s.ownerID,
 			FactDrafts: []RecordDraft{{
@@ -118,8 +123,9 @@ func (s *Scope) ApplyTree(repoPath string, ts *TreeState) error {
 		return err
 	}
 
+	applySeq := nextCheckpointSeq.Add(1)
 	_, err := s.store.Append(TrustedAppendContext, AppendBatch{
-		AppendIntentID: fmt.Sprintf("%s:tree:apply:%s", s.ownerID, ts.HeadSHA),
+		AppendIntentID: fmt.Sprintf("%s:tree:apply:%d", s.ownerID, applySeq),
 		Groups: []AppendGroup{{
 			TraceOwnerID: s.ownerID,
 			FactDrafts: []RecordDraft{{
