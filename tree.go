@@ -37,9 +37,8 @@ type TreeState struct {
 // created, not popped).
 //
 // Capture performs `git add -A` first so untracked files are included
-// in the stash — the same staging behavior as CreateCheckpoint, with
-// the same caveat that the caller's staging state is not reproduced on
-// apply.
+// in the stash, then `git reset` to un-stage so the caller's index is
+// left unmodified (same non-mutating contract as CreateCheckpoint).
 //
 // Records a "tree.captured" declaration in the scope's trace. The trace
 // record is advisory: a failure to append it does not fail the capture.
@@ -64,6 +63,11 @@ func (s *Scope) CaptureTree(repoPath string) (*TreeState, error) {
 	stashSHA, err := g.stashCreate()
 	if err != nil {
 		return nil, fmt.Errorf("capture tree: git stash create: %w", err)
+	}
+
+	// Un-stage so the capture is non-mutating w.r.t. the caller's index.
+	if err := g.unstageAll(); err != nil {
+		return nil, fmt.Errorf("capture tree: git reset: %w", err)
 	}
 
 	headSHA, err := g.headSHA()

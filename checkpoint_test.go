@@ -449,3 +449,49 @@ func TestCheckpoint_RestorePreservesCleanRepo(t *testing.T) {
 		t.Errorf("expected '# Test', got %q", got)
 	}
 }
+
+func TestCheckpoint_DoesNotLeaveIndexStaged(t *testing.T) {
+	store := newMemStore(t)
+	scope := NewScope(store, "sub:index")
+	repo := newTestRepo(t)
+
+	// Dirty the tree both ways: a modified tracked file and a new
+	// untracked file. A checkpoint must capture both in the stash but
+	// leave the caller's index unmodified.
+	writeFile(t, repo, "README.md", "# Modified")
+	writeFile(t, repo, "untracked.txt", "new untracked")
+
+	cp, err := scope.CreateCheckpoint(repo, nil)
+	if err != nil {
+		t.Fatalf("CreateCheckpoint: %v", err)
+	}
+	if cp.StashSHA == "" {
+		t.Fatal("expected a stash for a dirty tree")
+	}
+
+	// Nothing may remain staged after the checkpoint.
+	g := &gitRunner{repoPath: repo}
+	staged, err := g.run("diff", "--cached", "--name-only")
+	if err != nil {
+		t.Fatalf("git diff --cached: %v", err)
+	}
+	if staged != "" {
+		t.Errorf("index left staged after checkpoint: %q", staged)
+	}
+
+	// The working tree is untouched.
+	if got := readFile(t, repo, "README.md"); got != "# Modified" {
+		t.Errorf("README.md = %q, want %q", got, "# Modified")
+	}
+	if got := readFile(t, repo, "untracked.txt"); got != "new untracked" {
+		t.Errorf("untracked.txt = %q, want %q", got, "new untracked")
+	}
+
+	// The stash still captured both changes: restore reproduces them.
+	if _, err := scope.RestoreCheckpoint(cp); err != nil {
+		t.Fatalf("RestoreCheckpoint: %v", err)
+	}
+	if got := readFile(t, repo, "untracked.txt"); got != "new untracked" {
+		t.Errorf("after restore untracked.txt = %q, want %q", got, "new untracked")
+	}
+}

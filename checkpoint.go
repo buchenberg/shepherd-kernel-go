@@ -119,6 +119,15 @@ func (g *gitRunner) stageAll() error {
 	return err
 }
 
+// unstageAll runs `git reset` (a mixed reset to HEAD). It resets the index
+// to HEAD while leaving the working tree untouched, undoing the staging
+// performed by stageAll. Must run AFTER stashCreate so the stash still
+// captured the staged (and therefore untracked-file) state.
+func (g *gitRunner) unstageAll() error {
+	_, err := g.run("reset")
+	return err
+}
+
 // stashCreate runs `git stash create` and returns the stash commit SHA.
 // Returns empty string if the working tree is clean (no changes to stash).
 // Untracked files must be staged first (see stageAll).
@@ -165,16 +174,18 @@ func (g *gitRunner) isRepo() bool {
 // Workspace state is captured via git:
 //  1. `git add -A` — stage untracked files so the stash includes them
 //  2. `git stash create` — create a stash commit (returns SHA, or empty if clean)
-//  3. `git rev-parse HEAD` — record HEAD for restore.
+//  3. `git reset` — un-stage, resetting the index to HEAD (working tree kept)
+//  4. `git rev-parse HEAD` — record HEAD for restore.
 //
 // The stash is NOT popped — the working tree is unchanged after checkpoint.
 // The stash SHA lets us restore to this exact state later.
 //
-// NOTE: `git add -A` stages the caller's files. The checkpoint covers file
-// CONTENTS and untracked-file presence, not the git index/staging state.
-// `git stash apply` (without --index) on restore does not reproduce the
-// original staged set. Callers that depend on staging must re-stage after
-// restore, or avoid checkpoints while a deliberate staging state is held.
+// NOTE: `git add -A` is only a vehicle to get untracked files into the
+// stash; the following `git reset` restores the index to HEAD so a
+// checkpoint is non-mutating w.r.t. the caller's staging state. This still
+// does not PRESERVE a pre-existing deliberate staging state (a mixed reset
+// drops it to unstaged), so callers that depend on staging must re-stage
+// after restore.
 //
 // Records a "checkpoint.created" declaration in the scope's trace. The trace
 // record is advisory: a failure to append it does not fail the checkpoint,
@@ -201,6 +212,12 @@ func (s *Scope) CreateCheckpoint(repoPath string, snapshot []byte) (*GitCheckpoi
 	stashSHA, err := g.stashCreate()
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint: git stash create: %w", err)
+	}
+
+	// Un-stage before reading HEAD so a checkpoint never leaves the
+	// caller's index modified. The stash commit is already captured above.
+	if err := g.unstageAll(); err != nil {
+		return nil, fmt.Errorf("checkpoint: git reset: %w", err)
 	}
 
 	headSHA, err := g.headSHA()
