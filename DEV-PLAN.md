@@ -1,5 +1,20 @@
 # Development Plan: Checkpoint/Restore + Synchronous Interception
 
+> **Superseded (v0.4.0).** This plan was executed for `v0.3.x` and its goals were
+> met, but the interface it specifies — `GitCheckpoint` with `StashSHA`/`HeadSHA`/
+> `RepoPath`, and `CreateCheckpoint(repoPath, snapshot)` taking a repo path — has
+> since been replaced by the backend-neutral `Sandbox` abstraction. Record the
+> current design from:
+>
+> - `sandbox.go`, `sandbox_git.go` — the `Sandbox` interface and git backend
+> - `checkpoint.go`, `workspace.go` — `Checkpoint` and `WorkspaceState`
+> - `README.md` — the current API
+> - `SANDBOX` plan in the Kilo plans directory — the refactor's rationale
+>
+> The design principles below (pure library, git as the materializer, opaque
+> snapshots, build on what exists) still hold and carried into the refactor. The
+> code snippets throughout this document are historical and will not compile.
+
 **Project**: shepherd-kernel-go
 **Goal**: Enable "subagent makes a change, supervisor rolls it back and restarts from an earlier point" — entirely within shepherd-kernel-go, no yaah changes required.
 
