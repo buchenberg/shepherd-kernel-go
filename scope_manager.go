@@ -1,6 +1,7 @@
 package shepherd
 
 import (
+	"context"
 	"fmt"
 	"sync"
 )
@@ -13,7 +14,7 @@ import (
 type ScopeManager struct {
 	store       *SQLiteTraceStore
 	scopes      map[string]*Scope
-	checkpoints map[string]*GitCheckpoint
+	checkpoints map[string]*Checkpoint
 	mu          sync.RWMutex
 }
 
@@ -24,13 +25,16 @@ func NewScopeManager(store *SQLiteTraceStore) *ScopeManager {
 	return &ScopeManager{
 		store:       store,
 		scopes:      make(map[string]*Scope),
-		checkpoints: make(map[string]*GitCheckpoint),
+		checkpoints: make(map[string]*Checkpoint),
 	}
 }
 
-// Create registers a new root scope for the given trace owner.
+// Create registers a new root scope for the given trace owner and attaches sb
+// as its execution substrate. Pass a nil sandbox for a pure-causal scope, whose
+// workspace and checkpoint operations will return ErrNoSandbox.
+//
 // Returns an error if a scope with this ID already exists.
-func (m *ScopeManager) Create(ownerID string) (*Scope, error) {
+func (m *ScopeManager) Create(ownerID string, sb Sandbox) (*Scope, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -39,7 +43,7 @@ func (m *ScopeManager) Create(ownerID string) (*Scope, error) {
 		return nil, fmt.Errorf("scope %s already exists", id)
 	}
 
-	scope := NewScope(m.store, ownerID)
+	scope := NewScope(m.store, ownerID).WithSandbox(sb, false)
 	m.scopes[id] = scope
 	return scope, nil
 }
@@ -79,6 +83,21 @@ func (m *ScopeManager) Fork(parentID, childOwnerID string, snapshot any) (*Scope
 
 	m.scopes[child.id] = child
 	return child, nil
+}
+
+// ForkIsolated creates a child scope with its own execution substrate instead of
+// inheriting the parent's. The child owns sb, so Discard, Merge, and Halt
+// destroy it — this is what makes a discard a physical rollback for an
+// isolating backend such as a git worktree.
+//
+// Returns an error if the parent doesn't exist or a scope with the child owner
+// ID already exists.
+func (m *ScopeManager) ForkIsolated(parentID, childOwnerID string, snapshot any, sb Sandbox) (*Scope, error) {
+	child, err := m.Fork(parentID, childOwnerID, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return child.WithSandbox(sb, true), nil
 }
 
 // Merge propagates a child scope's effects into its parent.
@@ -145,14 +164,14 @@ func (m *ScopeManager) AllScopes() []*Scope {
 
 // --- Checkpoint registry ---
 
-// CreateCheckpoint creates a checkpoint for a scope and registers it.
-// The checkpoint captures the git workspace state at repoPath plus the
+// CreateCheckpoint creates a checkpoint for a scope and registers it. The
+// checkpoint captures the scope's workspace state via its sandbox, plus the
 // opaque caller-provided snapshot (typically serialized conversation history).
 //
-// The manager lock is NOT held during the git subprocess calls — resolving
-// the scope takes a read lock, the (potentially slow) git operations run
-// outside it, and only the final map registration takes the write lock.
-func (m *ScopeManager) CreateCheckpoint(scopeID, repoPath string, snapshot []byte) (*GitCheckpoint, error) {
+// The manager lock is NOT held during the workspace capture — resolving the
+// scope takes a read lock, the (potentially slow) capture runs outside it, and
+// only the final map registration takes the write lock.
+func (m *ScopeManager) CreateCheckpoint(ctx context.Context, scopeID string, snapshot []byte) (*Checkpoint, error) {
 	m.mu.RLock()
 	scope, ok := m.scopes[scopeID]
 	m.mu.RUnlock()
@@ -161,7 +180,7 @@ func (m *ScopeManager) CreateCheckpoint(scopeID, repoPath string, snapshot []byt
 		return nil, fmt.Errorf("scope %s not found", scopeID)
 	}
 
-	cp, err := scope.CreateCheckpoint(repoPath, snapshot)
+	cp, err := scope.CreateCheckpoint(ctx, snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +200,7 @@ func (m *ScopeManager) CreateCheckpoint(scopeID, repoPath string, snapshot []byt
 
 // RestoreCheckpoint restores a registered checkpoint and returns the
 // stored conversation snapshot.
-func (m *ScopeManager) RestoreCheckpoint(checkpointID string) ([]byte, error) {
+func (m *ScopeManager) RestoreCheckpoint(ctx context.Context, checkpointID string) ([]byte, error) {
 	m.mu.RLock()
 	cp, ok := m.checkpoints[checkpointID]
 	var scope *Scope
@@ -197,7 +216,37 @@ func (m *ScopeManager) RestoreCheckpoint(checkpointID string) ([]byte, error) {
 		return nil, fmt.Errorf("scope %s for checkpoint %s not found", cp.ScopeID, checkpointID)
 	}
 
-	return scope.RestoreCheckpoint(cp)
+	return scope.RestoreCheckpoint(ctx, cp)
+}
+
+// DestroyScopeSandbox tears down a scope's owned sandbox without changing the
+// scope's lifecycle state. Callers use this on the abort path to release
+// worktrees and other provisioned resources when a session ends without a
+// merge or discard.
+//
+// It is a no-op for scopes with no sandbox or one they do not own, so an
+// in-place materializer over the user's repository is never touched.
+func (m *ScopeManager) DestroyScopeSandbox(ctx context.Context, scopeID string) error {
+	m.mu.RLock()
+	scope, ok := m.scopes[scopeID]
+	m.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("scope %s not found", scopeID)
+	}
+
+	scope.mu.RLock()
+	sb := scope.sandbox
+	owns := scope.ownsSandbox
+	scope.mu.RUnlock()
+
+	if sb == nil || !owns {
+		return nil
+	}
+	if err := sb.Destroy(ctx); err != nil {
+		return fmt.Errorf("destroy sandbox for scope %s: %w", scopeID, err)
+	}
+	return nil
 }
 
 // LatestCheckpoint returns the most recent valid checkpoint for a scope,
@@ -206,11 +255,11 @@ func (m *ScopeManager) RestoreCheckpoint(checkpointID string) ([]byte, error) {
 //
 // Ordering is by the monotonic Seq (creation order), not CreatedAt, which
 // can tie for concurrent checkpoints and would leave selection ambiguous.
-func (m *ScopeManager) LatestCheckpoint(scopeID string) *GitCheckpoint {
+func (m *ScopeManager) LatestCheckpoint(scopeID string) *Checkpoint {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	var latest *GitCheckpoint
+	var latest *Checkpoint
 	for _, cp := range m.checkpoints {
 		if cp.ScopeID == scopeID && cp.State == CheckpointValid {
 			if latest == nil || cp.Seq > latest.Seq {

@@ -174,7 +174,7 @@ func TestSupervisor_Inject(t *testing.T) {
 	defer bus.Close()
 
 	mgr := NewScopeManager(store)
-	mgr.Create("sub:inject-target")
+	mgr.Create("sub:inject-target", nil)
 
 	supervisor := NewSupervisor(mgr, bus)
 	err := supervisor.Inject("scope:sub:inject-target", "try a different approach")
@@ -207,7 +207,7 @@ func TestSupervisor_Halt(t *testing.T) {
 	defer bus.Close()
 
 	mgr := NewScopeManager(store)
-	scope, _ := mgr.Create("sub:halt-target")
+	scope, _ := mgr.Create("sub:halt-target", nil)
 
 	supervisor := NewSupervisor(mgr, bus)
 	err := supervisor.Halt("scope:sub:halt-target")

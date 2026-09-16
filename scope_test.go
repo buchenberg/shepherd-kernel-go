@@ -1,6 +1,10 @@
 package shepherd
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -324,7 +328,7 @@ func TestScopeManager_Create(t *testing.T) {
 	store := newMemStore(t)
 	mgr := NewScopeManager(store)
 
-	scope, err := mgr.Create("sub:managed")
+	scope, err := mgr.Create("sub:managed", nil)
 	if err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
@@ -333,7 +337,7 @@ func TestScopeManager_Create(t *testing.T) {
 	}
 
 	// Duplicate should fail
-	_, err = mgr.Create("sub:managed")
+	_, err = mgr.Create("sub:managed", nil)
 	if err == nil {
 		t.Error("creating duplicate scope should fail")
 	}
@@ -343,7 +347,7 @@ func TestScopeManager_Get(t *testing.T) {
 	store := newMemStore(t)
 	mgr := NewScopeManager(store)
 
-	mgr.Create("sub:findme")
+	mgr.Create("sub:findme", nil)
 
 	found, ok := mgr.Get("scope:sub:findme")
 	if !ok {
@@ -362,7 +366,7 @@ func TestScopeManager_Get(t *testing.T) {
 func TestScopeManager_Fork(t *testing.T) {
 	store := newMemStore(t)
 	mgr := NewScopeManager(store)
-	parent, _ := mgr.Create("sub:parent")
+	parent, _ := mgr.Create("sub:parent", nil)
 
 	child, err := mgr.Fork(parent.ID(), "sub:child", nil)
 	if err != nil {
@@ -392,7 +396,7 @@ func TestScopeManager_ForkParentNotFound(t *testing.T) {
 func TestScopeManager_Merge(t *testing.T) {
 	store := newMemStore(t)
 	mgr := NewScopeManager(store)
-	parent, _ := mgr.Create("sub:parent")
+	parent, _ := mgr.Create("sub:parent", nil)
 	child, _ := mgr.Fork(parent.ID(), "sub:child", nil)
 
 	err := mgr.Merge(child.ID())
@@ -407,7 +411,7 @@ func TestScopeManager_Merge(t *testing.T) {
 func TestScopeManager_Discard(t *testing.T) {
 	store := newMemStore(t)
 	mgr := NewScopeManager(store)
-	parent, _ := mgr.Create("sub:parent")
+	parent, _ := mgr.Create("sub:parent", nil)
 	child, _ := mgr.Fork(parent.ID(), "sub:child", nil)
 
 	err := mgr.Discard(child.ID())
@@ -422,7 +426,7 @@ func TestScopeManager_Discard(t *testing.T) {
 func TestScopeManager_ActiveScopes(t *testing.T) {
 	store := newMemStore(t)
 	mgr := NewScopeManager(store)
-	p, _ := mgr.Create("sub:parent")
+	p, _ := mgr.Create("sub:parent", nil)
 	c1, _ := mgr.Fork(p.ID(), "sub:c1", nil)
 	c2, _ := mgr.Fork(p.ID(), "sub:c2", nil)
 	mgr.Fork(p.ID(), "sub:c3", nil)
@@ -440,7 +444,7 @@ func TestScopeManager_ActiveScopes(t *testing.T) {
 func TestScopeManager_MergeRootScopeFails(t *testing.T) {
 	store := newMemStore(t)
 	mgr := NewScopeManager(store)
-	root, _ := mgr.Create("sub:root")
+	root, _ := mgr.Create("sub:root", nil)
 
 	err := mgr.Merge(root.ID())
 	if err == nil {
@@ -451,7 +455,7 @@ func TestScopeManager_MergeRootScopeFails(t *testing.T) {
 func TestScopeManager_ConcurrentFork(t *testing.T) {
 	store := newMemStore(t)
 	mgr := NewScopeManager(store)
-	parent, _ := mgr.Create("sub:concurrent")
+	parent, _ := mgr.Create("sub:concurrent", nil)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
@@ -571,10 +575,10 @@ func TestScope_SnapshotNestedFork(t *testing.T) {
 func TestScopeManager_CreateCheckpoint(t *testing.T) {
 	store := newMemStore(t)
 	mgr := NewScopeManager(store)
-	scope, _ := mgr.Create("sub:cp-managed")
 	repo := newTestRepo(t)
+	scope, _ := mgr.Create("sub:cp-managed", NewLocalGitSandbox(repo))
 
-	cp, err := mgr.CreateCheckpoint(scope.ID(), repo, []byte("snapshot"))
+	cp, err := mgr.CreateCheckpoint(context.Background(), scope.ID(), []byte("snapshot"))
 	if err != nil {
 		t.Fatalf("CreateCheckpoint: %v", err)
 	}
@@ -586,14 +590,14 @@ func TestScopeManager_CreateCheckpoint(t *testing.T) {
 func TestScopeManager_RestoreCheckpoint(t *testing.T) {
 	store := newMemStore(t)
 	mgr := NewScopeManager(store)
-	scope, _ := mgr.Create("sub:cp-restore")
 	repo := newTestRepo(t)
+	scope, _ := mgr.Create("sub:cp-restore", NewLocalGitSandbox(repo))
 
 	writeFile(t, repo, "main.go", "original")
 	mustGit(t, repo, "add", "-A")
 	mustGit(t, repo, "commit", "-m", "add main")
 
-	cp, err := mgr.CreateCheckpoint(scope.ID(), repo, []byte("conversation"))
+	cp, err := mgr.CreateCheckpoint(context.Background(), scope.ID(), []byte("conversation"))
 	if err != nil {
 		t.Fatalf("CreateCheckpoint: %v", err)
 	}
@@ -602,7 +606,7 @@ func TestScopeManager_RestoreCheckpoint(t *testing.T) {
 	writeFile(t, repo, "main.go", "CHANGED")
 
 	// Restore
-	snapshot, err := mgr.RestoreCheckpoint(cp.ID)
+	snapshot, err := mgr.RestoreCheckpoint(context.Background(), cp.ID)
 	if err != nil {
 		t.Fatalf("RestoreCheckpoint: %v", err)
 	}
@@ -618,15 +622,15 @@ func TestScopeManager_RestoreCheckpoint(t *testing.T) {
 func TestScopeManager_LatestCheckpoint(t *testing.T) {
 	store := newMemStore(t)
 	mgr := NewScopeManager(store)
-	scope, _ := mgr.Create("sub:cp-latest")
 	repo := newTestRepo(t)
+	scope, _ := mgr.Create("sub:cp-latest", NewLocalGitSandbox(repo))
 
-	cp1, err := mgr.CreateCheckpoint(scope.ID(), repo, nil)
+	cp1, err := mgr.CreateCheckpoint(context.Background(), scope.ID(), nil)
 	if err != nil {
 		t.Fatalf("CreateCheckpoint cp1: %v", err)
 	}
 
-	cp2, err := mgr.CreateCheckpoint(scope.ID(), repo, nil)
+	cp2, err := mgr.CreateCheckpoint(context.Background(), scope.ID(), nil)
 	if err != nil {
 		t.Fatalf("CreateCheckpoint cp2: %v", err)
 	}
@@ -649,35 +653,39 @@ func TestScopeManager_LatestCheckpoint(t *testing.T) {
 func TestScopeManager_ConcurrentCheckpointsUniqueIDs(t *testing.T) {
 	store := newMemStore(t)
 	mgr := NewScopeManager(store)
-	scope, _ := mgr.Create("sub:cp-concurrent")
 
-	// Each goroutine checkpoints a distinct repo: git serializes on
-	// index.lock, so concurrent checkpoints against the SAME repo contend
-	// at the git layer. What we're verifying here is ID/sequence uniqueness
-	// under concurrency, independent of git's per-repo locking.
+	// Each goroutine owns a scope with its own repository: git serializes on
+	// index.lock, so concurrent checkpoints against the SAME repo contend at
+	// the git layer. What we verify here is ID/sequence uniqueness under
+	// concurrency, independent of git's per-repo locking.
 	//
 	// Repos are created sequentially before the goroutines because
 	// newTestRepo uses t.Setenv (global env mutation), which is not safe
 	// to call concurrently.
 	const n = 20
-	repos := make([]string, n)
-	for i := range repos {
-		repos[i] = newTestRepo(t)
+	scopes := make([]*Scope, n)
+	for i := range scopes {
+		repo := newTestRepo(t)
+		scope, err := mgr.Create(fmt.Sprintf("sub:cp-concurrent:%d", i), NewLocalGitSandbox(repo))
+		if err != nil {
+			t.Fatalf("create scope %d: %v", i, err)
+		}
+		scopes[i] = scope
 	}
 
 	ids := make(chan string, n)
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
 		wg.Add(1)
-		go func(repo string) {
+		go func(scope *Scope) {
 			defer wg.Done()
-			cp, err := mgr.CreateCheckpoint(scope.ID(), repo, nil)
+			cp, err := mgr.CreateCheckpoint(context.Background(), scope.ID(), nil)
 			if err != nil {
 				t.Errorf("CreateCheckpoint: %v", err)
 				return
 			}
 			ids <- cp.ID
-		}(repos[i])
+		}(scopes[i])
 	}
 	wg.Wait()
 	close(ids)
@@ -695,8 +703,121 @@ func TestScopeManager_CheckpointScopeNotFound(t *testing.T) {
 	store := newMemStore(t)
 	mgr := NewScopeManager(store)
 
-	_, err := mgr.CreateCheckpoint("scope:nonexistent", ".", nil)
+	_, err := mgr.CreateCheckpoint(context.Background(), "scope:nonexistent", nil)
 	if err == nil {
 		t.Error("CreateCheckpoint on nonexistent scope should fail")
+	}
+}
+
+// --- Sandbox attachment and isolation ---
+
+func TestScope_WithSandbox(t *testing.T) {
+	store := newMemStore(t)
+	repo := newTestRepo(t)
+
+	scope := NewScope(store, "sub:sb")
+	if scope.Sandbox() != nil {
+		t.Error("a fresh scope should have no sandbox")
+	}
+
+	sb := NewLocalGitSandbox(repo)
+	got := scope.WithSandbox(sb, true)
+	if got != scope {
+		t.Error("WithSandbox should return the scope for chaining")
+	}
+	if scope.Sandbox() != sb {
+		t.Error("Sandbox() should return the attached sandbox")
+	}
+}
+
+func TestScope_ForkInheritsSandboxWithoutOwnership(t *testing.T) {
+	store := newMemStore(t)
+	repo := newTestRepo(t)
+	parent := NewScope(store, "sub:inherit").WithSandbox(NewLocalGitSandbox(repo), false)
+
+	child, err := parent.Fork("sub:inherit-child", nil)
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	if child.Sandbox() == nil {
+		t.Fatal("child should inherit the parent's sandbox")
+	}
+	if child.ownsSandbox {
+		t.Error("an inherited sandbox must not be owned by the child")
+	}
+
+	// Discarding the child must not touch the parent's in-place sandbox.
+	if err := parent.Discard(child); err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	if !fileExists(t, repo, "README.md") {
+		t.Error("discarding a child with an inherited sandbox must not delete the repository")
+	}
+}
+
+func TestScopeManager_ForkIsolatedOwnsSandbox(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	repo := newTestRepo(t)
+	parent, _ := mgr.Create("sub:iso-parent", NewLocalGitSandbox(repo))
+
+	wtPath := filepath.Join(t.TempDir(), "wt")
+	sb := NewWorktreeSandbox(repo, wtPath)
+	if err := sb.Create(context.Background(), SandboxSpec{}); err != nil {
+		t.Fatalf("worktree create: %v", err)
+	}
+
+	child, err := mgr.ForkIsolated(parent.ID(), "sub:iso-child", nil, sb)
+	if err != nil {
+		t.Fatalf("ForkIsolated: %v", err)
+	}
+	if child.Sandbox() != sb {
+		t.Error("isolated child should use the provided sandbox")
+	}
+	if !child.ownsSandbox {
+		t.Error("isolated child should own its sandbox")
+	}
+
+	// Discarding the child destroys the worktree but leaves the repo intact.
+	if err := mgr.Discard(child.ID()); err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
+		t.Errorf("worktree should be removed by discard, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "README.md")); err != nil {
+		t.Errorf("repository must survive discard: %v", err)
+	}
+}
+
+func TestScopeManager_DestroyScopeSandbox(t *testing.T) {
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	repo := newTestRepo(t)
+	parent, _ := mgr.Create("sub:destroy-parent", NewLocalGitSandbox(repo))
+
+	wtPath := filepath.Join(t.TempDir(), "wt")
+	sb := NewWorktreeSandbox(repo, wtPath)
+	if err := sb.Create(context.Background(), SandboxSpec{}); err != nil {
+		t.Fatalf("worktree create: %v", err)
+	}
+	child, err := mgr.ForkIsolated(parent.ID(), "sub:destroy-child", nil, sb)
+	if err != nil {
+		t.Fatalf("ForkIsolated: %v", err)
+	}
+
+	if err := mgr.DestroyScopeSandbox(context.Background(), child.ID()); err != nil {
+		t.Fatalf("DestroyScopeSandbox: %v", err)
+	}
+	if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
+		t.Errorf("worktree should be removed, stat err=%v", err)
+	}
+
+	// A scope without an owned sandbox is a no-op, not an error.
+	if err := mgr.DestroyScopeSandbox(context.Background(), parent.ID()); err != nil {
+		t.Errorf("DestroyScopeSandbox on an unowned sandbox = %v, want nil", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "README.md")); err != nil {
+		t.Errorf("repository must survive DestroyScopeSandbox: %v", err)
 	}
 }

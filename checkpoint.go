@@ -1,76 +1,68 @@
 package shepherd
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"os/exec"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// Schema refs for checkpoint trace recording.
+// Schema refs for checkpoint trace recording. Version 2 carries
+// backend-neutral fields (the v1 payload embedded git-specific stash_sha and
+// head_sha keys).
 const (
-	SchemaCheckpointCreated  = "shepherd.checkpoint.created.v1"
-	SchemaCheckpointRestored = "shepherd.checkpoint.restored.v1"
+	SchemaCheckpointCreated  = "shepherd.checkpoint.created.v2"
+	SchemaCheckpointRestored = "shepherd.checkpoint.restored.v2"
 )
 
-// gitTimeout bounds each git subprocess. A hung git process (e.g. waiting
-// on a credential prompt or a dead NFS mount) must not block the caller
-// indefinitely.
-const gitTimeout = 30 * time.Second
-
-// nextCheckpointSeq is a process-wide monotonic sequence for checkpoint
-// identity and ordering. Wall-clock time is intentionally NOT used for either:
-// time.Now().UnixNano() can return the same value for concurrent callers, and
-// equal CreatedAt values would leave ordering ambiguous (map iteration order).
+// nextCheckpointSeq is a process-wide monotonic sequence used for checkpoint and
+// workspace-event identity and ordering. Wall-clock time is intentionally NOT
+// used for either: time.Now().UnixNano() can return the same value for
+// concurrent callers, and equal CreatedAt values would leave ordering ambiguous
+// (map iteration order).
 var nextCheckpointSeq atomic.Uint64
 
 // CheckpointState tracks whether a checkpoint is usable.
 type CheckpointState string
 
 const (
-	CheckpointValid   CheckpointState = "valid"
-	CheckpointUsed    CheckpointState = "used"    // restored already
-	CheckpointInvalid CheckpointState = "invalid" // git operations failed
+	// CheckpointValid means the checkpoint can be restored.
+	CheckpointValid CheckpointState = "valid"
+	// CheckpointUsed means the checkpoint has already been restored.
+	CheckpointUsed CheckpointState = "used"
+	// CheckpointInvalid means a restore failed and the checkpoint is unusable.
+	CheckpointInvalid CheckpointState = "invalid"
 )
 
-// GitCheckpoint captures workspace + conversation state at a point in time.
+// Checkpoint is a scope-owned, single-use capture of workspace state plus an
+// opaque caller-provided snapshot.
 //
-// The workspace state is a git stash SHA (or HEAD ref if the tree was clean).
-// The conversation state is an opaque []byte the caller provides — typically
-// JSON-marshaled conversation history from the agent loop.
+// The workspace state is backend-neutral: a git stash/HEAD pair, a container
+// snapshot key, or anything else the scope's Sandbox understands. The snapshot
+// is opaque to the kernel — typically JSON-marshaled conversation history from
+// the agent loop — and the caller knows its concrete type.
 //
-// Checkpoints are single-use: RestoreCheckpoint marks them as "used" and
-// releases the snapshot. Restore is guarded by mu so concurrent restores of
-// the same checkpoint cannot both claim the valid state.
-type GitCheckpoint struct {
+// Checkpoints are single-use: RestoreCheckpoint marks them as used and releases
+// the snapshot. Restore is guarded by mu so concurrent restores of the same
+// checkpoint cannot both claim the valid state.
+type Checkpoint struct {
 	// mu guards State and Snapshot across concurrent restore attempts.
 	mu sync.Mutex
 
-	// ID is a unique checkpoint identifier (auto-generated from a monotonic
-	// sequence — never from wall-clock time, which can collide under
-	// concurrency).
+	// ID is a unique checkpoint identifier, derived from a monotonic sequence
+	// rather than wall-clock time so concurrent checkpoints cannot collide.
 	ID string
-	// Seq is a process-wide monotonic creation order. It is the authoritative
+	// Seq is the process-wide monotonic creation order. It is the authoritative
 	// ordering key (CreatedAt is informational and can tie).
 	Seq uint64
 	// ScopeID is the scope this checkpoint belongs to.
 	ScopeID string
-	// RepoPath is the git repo path, stored at creation so RestoreCheckpoint
-	// doesn't need the caller to pass it again.
-	RepoPath string
-	// StashSHA is the git stash commit SHA. Empty if the tree was clean
-	// at checkpoint time (HeadSHA captures the state in that case).
-	StashSHA string
-	// HeadSHA is the git HEAD at checkpoint time. Restore resets to this
-	// commit so new commits made after the checkpoint are rolled back too.
-	HeadSHA string
-	// Snapshot is the opaque caller-provided conversation state.
+	// Workspace is the captured backend-neutral workspace state.
+	Workspace WorkspaceState
+	// Snapshot is the opaque caller-provided state (typically conversation
+	// history). Released after a successful restore.
 	Snapshot []byte
 	// CreatedAt is when the checkpoint was taken.
 	CreatedAt time.Time
@@ -78,177 +70,60 @@ type GitCheckpoint struct {
 	State CheckpointState
 }
 
-// gitRunner executes git commands in a repo directory.
-type gitRunner struct {
-	repoPath string
-}
-
-// run executes a git command with a bounded timeout and returns trimmed
-// stdout. Terminal prompts are disabled so a command that would normally
-// ask for credentials fails fast instead of hanging.
-func (g *gitRunner) run(args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = g.repoPath
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return "", fmt.Errorf("git %s: timed out after %s (stderr: %s)",
-				strings.Join(args, " "), gitTimeout, stderr.String())
-		}
-		return "", fmt.Errorf("git %s: %w (stderr: %s)",
-			strings.Join(args, " "), err, stderr.String())
-	}
-	return strings.TrimSpace(stdout.String()), nil
-}
-
-// stageAll runs `git add -A` to stage untracked files so the stash captures
-// them. `git stash create --include-untracked` is NOT used here because that
-// flag is silently ignored by the plumbing `git stash create` command (it is
-// only honoured by `git stash push`/`save`); `git add -A` is the reliable way
-// to include untracked files.
-func (g *gitRunner) stageAll() error {
-	_, err := g.run("add", "-A")
-	return err
-}
-
-// unstageAll runs `git reset` (a mixed reset to HEAD). It resets the index
-// to HEAD while leaving the working tree untouched, undoing the staging
-// performed by stageAll. Must run AFTER stashCreate so the stash still
-// captured the staged (and therefore untracked-file) state.
-func (g *gitRunner) unstageAll() error {
-	_, err := g.run("reset")
-	return err
-}
-
-// stashCreate runs `git stash create` and returns the stash commit SHA.
-// Returns empty string if the working tree is clean (no changes to stash).
-// Untracked files must be staged first (see stageAll).
-func (g *gitRunner) stashCreate() (string, error) {
-	out, err := g.run("stash", "create")
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(out), nil
-}
-
-// headSHA returns the current HEAD commit SHA.
-func (g *gitRunner) headSHA() (string, error) {
-	return g.run("rev-parse", "HEAD")
-}
-
-// resetHardTo runs `git reset --hard <sha>` — resets to a specific commit.
-// Used by RestoreCheckpoint to go back to the checkpoint's HEAD.
-func (g *gitRunner) resetHardTo(sha string) error {
-	_, err := g.run("reset", "--hard", sha)
-	return err
-}
-
-// cleanFiles runs `git clean -fd` — removes untracked files and directories.
-func (g *gitRunner) cleanFiles() error {
-	_, err := g.run("clean", "-fd")
-	return err
-}
-
-// stashApply runs `git stash apply <sha>` — restores stashed changes.
-func (g *gitRunner) stashApply(sha string) error {
-	_, err := g.run("stash", "apply", sha)
-	return err
-}
-
-// isRepo returns true if repoPath is inside a git working tree.
-func (g *gitRunner) isRepo() bool {
-	_, err := g.run("rev-parse", "--is-inside-work-tree")
-	return err == nil
-}
-
-// CreateCheckpoint captures the current workspace state and caller snapshot.
+// CreateCheckpoint captures the scope's workspace state plus the caller's
+// snapshot.
 //
-// Workspace state is captured via git:
-//  1. `git add -A` — stage untracked files so the stash includes them
-//  2. `git stash create` — create a stash commit (returns SHA, or empty if clean)
-//  3. `git reset` — un-stage, resetting the index to HEAD (working tree kept)
-//  4. `git rev-parse HEAD` — record HEAD for restore.
-//
-// The stash is NOT popped — the working tree is unchanged after checkpoint.
-// The stash SHA lets us restore to this exact state later.
-//
-// NOTE: `git add -A` is only a vehicle to get untracked files into the
-// stash; the following `git reset` restores the index to HEAD so a
-// checkpoint is non-mutating w.r.t. the caller's staging state. This still
-// does not PRESERVE a pre-existing deliberate staging state (a mixed reset
-// drops it to unstaged), so callers that depend on staging must re-stage
-// after restore.
+// The workspace capture is delegated to the scope's Sandbox, so this works
+// unchanged for an in-place git tree, a detached worktree, or a future
+// container backend. A scope created without a sandbox returns ErrNoSandbox.
 //
 // Records a "checkpoint.created" declaration in the scope's trace. The trace
 // record is advisory: a failure to append it does not fail the checkpoint,
-// because the git state is already captured and the rollback guarantee does
-// not depend on the audit record.
-func (s *Scope) CreateCheckpoint(repoPath string, snapshot []byte) (*GitCheckpoint, error) {
+// because the workspace state is already captured and the rollback guarantee
+// does not depend on the audit record.
+func (s *Scope) CreateCheckpoint(ctx context.Context, snapshot []byte) (*Checkpoint, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	state := s.state
+	sb := s.sandbox
+	ownerID := s.ownerID
+	scopeID := s.id
+	s.mu.RUnlock()
 
-	if s.state != ScopeActive {
-		return nil, fmt.Errorf("cannot checkpoint scope %s in state %s", s.id, s.state)
+	if state != ScopeActive {
+		return nil, fmt.Errorf("cannot checkpoint scope %s in state %s", scopeID, state)
+	}
+	if sb == nil {
+		return nil, ErrNoSandbox
 	}
 
-	g := &gitRunner{repoPath: repoPath}
-
-	if !g.isRepo() {
-		return nil, fmt.Errorf("checkpoint: %s is not a git repository", repoPath)
-	}
-
-	if err := g.stageAll(); err != nil {
-		return nil, fmt.Errorf("checkpoint: git add -A: %w", err)
-	}
-
-	stashSHA, err := g.stashCreate()
+	ws, err := sb.Capture(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("checkpoint: git stash create: %w", err)
-	}
-
-	// Un-stage before reading HEAD so a checkpoint never leaves the
-	// caller's index modified. The stash commit is already captured above.
-	if err := g.unstageAll(); err != nil {
-		return nil, fmt.Errorf("checkpoint: git reset: %w", err)
-	}
-
-	headSHA, err := g.headSHA()
-	if err != nil {
-		return nil, fmt.Errorf("checkpoint: git rev-parse HEAD: %w", err)
+		return nil, fmt.Errorf("checkpoint: capture workspace: %w", err)
 	}
 
 	seq := nextCheckpointSeq.Add(1)
-	cp := &GitCheckpoint{
-		ID:        fmt.Sprintf("cp:%s:%d", s.ownerID, seq),
+	cp := &Checkpoint{
+		ID:        fmt.Sprintf("cp:%s:%d", ownerID, seq),
 		Seq:       seq,
-		ScopeID:   s.id,
-		RepoPath:  repoPath,
-		StashSHA:  stashSHA,
-		HeadSHA:   headSHA,
+		ScopeID:   scopeID,
+		Workspace: ws,
 		Snapshot:  snapshot,
 		CreatedAt: time.Now(),
 		State:     CheckpointValid,
 	}
 
-	// Record in trace (advisory — log and continue on failure).
+	digest, _ := ws.Digest()
 	payload := map[string]any{
 		"checkpoint_id": cp.ID,
-		"stash_sha":     stashSHA,
-		"head_sha":      headSHA,
+		"backend":       ws.Backend,
+		"revision":      ws.Revision,
+		"state_digest":  digest,
 		"has_snapshot":  len(snapshot) > 0,
 	}
 	_, err = s.store.Append(TrustedAppendContext, AppendBatch{
-		AppendIntentID: fmt.Sprintf("%s:checkpoint:%d", s.ownerID, seq),
+		AppendIntentID: fmt.Sprintf("%s:checkpoint:%d", ownerID, seq),
 		Groups: []AppendGroup{{
-			TraceOwnerID: s.ownerID,
+			TraceOwnerID: ownerID,
 			FactDrafts: []RecordDraft{{
 				Mode:      Declaration,
 				SchemaRef: SchemaCheckpointCreated,
@@ -264,39 +139,40 @@ func (s *Scope) CreateCheckpoint(repoPath string, snapshot []byte) (*GitCheckpoi
 	return cp, nil
 }
 
-// RestoreCheckpoint reverts the workspace to the checkpointed state and
-// returns the stored conversation snapshot.
+// RestoreCheckpoint reverts the workspace to the checkpointed state and returns
+// the stored snapshot for the caller to deserialize and restore into its agent
+// loop's context manager.
 //
-// Workspace restore via git:
-//  1. `git reset --hard <headSHA>` — discard all tracked changes and any
-//     commits made after the checkpoint
-//  2. `git clean -fd` — remove untracked files/dirs created since checkpoint
-//  3. `git stash apply <sha>` — re-apply the checkpointed changes (if any)
-//
-// The snapshot (opaque []byte) is returned for the caller to deserialize
-// and restore to its agent loop's context manager. The checkpoint's snapshot
-// field is released after a successful restore.
-//
-// Records a "checkpoint.restored" capture in the scope's trace.
-// Marks the checkpoint as used — calling Restore twice returns an error.
+// The workspace restore is delegated to the scope's Sandbox. The checkpoint's
+// snapshot field is released after a successful restore, and the checkpoint is
+// marked used — calling Restore twice returns an error.
 //
 // The single-use transition is race-safe: cp.mu is held for the entire
-// validate → git → mark-used sequence, so concurrent restore attempts cannot
+// validate → apply → mark-used sequence, so concurrent restore attempts cannot
 // both claim the valid state.
-func (s *Scope) RestoreCheckpoint(cp *GitCheckpoint) ([]byte, error) {
-	// Validate scope under a brief read lock, then release before slow git ops.
+//
+// Records a "checkpoint.restored" capture in the scope's trace (advisory).
+func (s *Scope) RestoreCheckpoint(ctx context.Context, cp *Checkpoint) ([]byte, error) {
+	if cp == nil {
+		return nil, fmt.Errorf("restore: nil checkpoint")
+	}
+
 	s.mu.RLock()
-	scopeActive := s.state == ScopeActive
+	state := s.state
+	sb := s.sandbox
+	ownerID := s.ownerID
 	scopeID := s.id
 	s.mu.RUnlock()
 
-	if !scopeActive {
-		return nil, fmt.Errorf("cannot restore in scope %s state %s", s.id, s.state)
+	if state != ScopeActive {
+		return nil, fmt.Errorf("cannot restore in scope %s state %s", scopeID, state)
 	}
-
+	if sb == nil {
+		return nil, ErrNoSandbox
+	}
 	if cp.ScopeID != scopeID {
 		return nil, fmt.Errorf("checkpoint %s belongs to scope %s, not %s",
-			cp.ID, cp.ScopeID, s.id)
+			cp.ID, cp.ScopeID, scopeID)
 	}
 
 	// Claim the checkpoint exclusively for this restore.
@@ -307,51 +183,30 @@ func (s *Scope) RestoreCheckpoint(cp *GitCheckpoint) ([]byte, error) {
 		return nil, fmt.Errorf("checkpoint %s is %s, cannot restore", cp.ID, cp.State)
 	}
 
-	g := &gitRunner{repoPath: cp.RepoPath}
-
-	// Step 1: Wipe workspace back to checkpoint's HEAD. Reset to the
-	// checkpoint's HeadSHA, not current HEAD — this correctly rolls back
-	// commits made after the checkpoint too.
-	if err := g.resetHardTo(cp.HeadSHA); err != nil {
+	if err := sb.Apply(ctx, cp.Workspace); err != nil {
 		cp.State = CheckpointInvalid
-		return nil, fmt.Errorf("restore: git reset --hard %s: %w", cp.HeadSHA, err)
+		return nil, fmt.Errorf("restore: apply workspace: %w", err)
 	}
-
-	// Step 2: Remove untracked files
-	if err := g.cleanFiles(); err != nil {
-		cp.State = CheckpointInvalid
-		return nil, fmt.Errorf("restore: git clean -fd: %w", err)
-	}
-
-	// Step 3: Re-apply checkpointed changes (if any). The stash captures
-	// uncommitted changes at checkpoint time. After reset --hard to HeadSHA,
-	// the tree is clean, so stash apply restores the working-tree state.
-	if cp.StashSHA != "" {
-		if err := g.stashApply(cp.StashSHA); err != nil {
-			cp.State = CheckpointInvalid
-			return nil, fmt.Errorf("restore: git stash apply %s: %w", cp.StashSHA, err)
-		}
-	}
-
-	currentHead, _ := g.headSHA()
 
 	// Release the snapshot and mark used (under cp.mu).
 	snapshot := cp.Snapshot
 	cp.Snapshot = nil
 	cp.State = CheckpointUsed
 
-	// Record in trace (advisory — log and continue on failure).
+	digest, _ := cp.Workspace.Digest()
 	_, err := s.store.Append(TrustedAppendContext, AppendBatch{
-		AppendIntentID: fmt.Sprintf("%s:restore:%d", s.ownerID, cp.Seq),
+		AppendIntentID: fmt.Sprintf("%s:restore:%d", ownerID, cp.Seq),
 		Groups: []AppendGroup{{
-			TraceOwnerID: s.ownerID,
+			TraceOwnerID: ownerID,
 			FactDrafts: []RecordDraft{{
 				Mode:      Capture,
 				SchemaRef: SchemaCheckpointRestored,
 				KindLabel: "checkpoint:restored",
 				Payload: map[string]any{
 					"checkpoint_id": cp.ID,
-					"head_sha":      currentHead,
+					"backend":       cp.Workspace.Backend,
+					"revision":      cp.Workspace.Revision,
+					"state_digest":  digest,
 				},
 			}},
 		}},

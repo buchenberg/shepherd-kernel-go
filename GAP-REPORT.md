@@ -1,25 +1,54 @@
 # Shepherd → Go Port: Detailed Gap Report
 
+> **Status update (v0.4.0, 2026-09-15).** This report is the original
+> point-in-time gap analysis. Its subsystem reasoning still explains *why* the
+> port looks the way it does, so the analysis below is retained verbatim — but
+> the critical gaps it identified have since been closed. Read the Resolution
+> Status table first; treat the per-subsystem status markers as historical.
+
 ## Executive Summary
 
-The Go port (`shepherd-kernel-go`) has completed **Phase 1–3** of the
-development plan: the trace kernel, effect bus, scope lifecycle, and
-supervision rule engine are all implemented and tested (94 tests, all
-passing). The yaah integration on `feat/shepherd-supervision` wires the
-trace middleware, supervisor tool, and scope manager into the pipeline.
+The Go port (`shepherd-kernel-go`) implements the trace kernel, effect bus,
+scope lifecycle, supervision rule engine, and — since v0.4.0 — the checkpoint
+and materialization mechanisms that real rollback depends on.
 
-**However, the core capability the user wants — "a subagent makes a
-change, the supervisor rolls it back and restarts from an earlier
-point" — is not yet achievable.** The port has the *plumbing* (scopes,
-bus, supervisor) but is missing the *mechanisms* that make rollback
-actually work: checkpoint/restore, effect materialization, and
-pre-commit interception. The `SupervisorTool` in yaah explicitly
-comments: *"Fork/merge/discard are NOT exposed because yaah sub-agents
-execute on the real filesystem without sandbox isolation."*
+The capability this report was originally written about — *"a subagent makes a
+change, the supervisor rolls it back and restarts from an earlier point"* — is
+now achievable. Reversibility is backed by a pluggable `Sandbox`:
 
-This report maps every Shepherd subsystem, identifies what's ported,
-what's stubbed, and what's missing — grounded in line-by-line code
-comparison.
+- **Checkpoints** capture workspace state plus an opaque conversation snapshot.
+  They are single-use: a restore rewinds both and releases the snapshot.
+- **Workspace states** are reusable, so one fork point can seed many speculative
+  branches (fork-and-choose).
+- The **git backend** has an in-place mode (any platform, materializer only) and
+  a worktree mode (a detached `git worktree` per scope, so `Discard` is a
+  physical rollback).
+- A **containerd** backend (overlay snapshotter, namespace isolation) is
+  specified and skeletoned at `sandbox/containerd/`, gated on a Linux host.
+
+### Resolution Status
+
+| Original gap | Status | Where |
+|---|---|---|
+| §4 Checkpoint system — ❌ missing | ✅ Implemented | `checkpoint.go`, `Scope.CreateCheckpoint` / `RestoreCheckpoint`, `ScopeManager` |
+| §5 Materialization — ❌ missing | ⚠️ Partial (git in-place + worktree) | `sandbox.go`, `sandbox_git.go` |
+| §5 Option C — OverlayFS / container | 📋 Specified, gated on Linux | `sandbox/containerd/` |
+| §7 Rollback not functional in yaah | ✅ Functional | yaah review sessions, turn checkpoints, worktree isolation |
+| Pre-commit interception | ✅ Implemented | `Supervisor.CheckCall`, `DestructiveToolGuard` |
+| Typed effects + reversibility metadata | ❌ Still missing | — |
+| Scope state model (fold invariant) | ❌ Deliberately not ported | see below |
+| Sub-agent bus wiring (separate store) | ✅ Resolved | shared scope manager in yaah's sub-agent runner |
+
+Two approaches the original report proposed were deliberately **not** taken:
+
+- **File-delta materialization** (Python's `FileDelta` / `FileChangeset`) — git
+  is a better materializer for a real working tree, and reimplementing deltas
+  duplicates it while still missing bash side effects.
+- **Effect-stream replay** — bash side effects are not invertible and the trace
+  is not a replayable mutation log, so state cannot be rebuilt by replaying
+  recorded commands. Recovery comes from committed snapshots instead.
+
+The original report follows, unedited.
 
 ---
 
@@ -193,9 +222,18 @@ actually undo anything.
 
 ---
 
-### 4. Checkpoint System — ❌ MISSING ENTIRELY
+### 4. Checkpoint System — ~~❌ MISSING~~ → ✅ IMPLEMENTED
 
-This is the **most critical gap** for the rollback feature.
+> **Resolved (v0.4.0).** Checkpoints now exist as `Scope.CreateCheckpoint` /
+> `RestoreCheckpoint` over a backend-neutral `WorkspaceState`, with a `Sandbox`
+> supplying the workspace capture and restore. The Python model below — truncate
+> the effect stream, then replay to rebuild state — was deliberately **not**
+> ported. It works there because Python state is derivable from the effect
+> stream (the fold invariant); a real working tree is not. Rollback here is
+> workspace-level and snapshot-based instead. The text below is the original
+> rationale.
+
+This was the **most critical gap** for the rollback feature.
 
 **Python** (`_scope/_checkpoint.py`, CheckpointManager):
 ```python
@@ -238,9 +276,17 @@ opaque value at fork time, but there's no mechanism to restore to it.
 
 ---
 
-### 5. Materialization System — ❌ MISSING ENTIRELY
+### 5. Materialization System — ~~❌ MISSING~~ → ⚠️ PARTIAL
 
-This is the **second critical gap** — how filesystem changes get
+> **Resolved in part (v0.4.0).** Materialization is now the `Sandbox` interface.
+> Layer 4 (OverlayFS) is specified at `sandbox/containerd/`, gated on a Linux
+> host. Layers 1 and 2 (file deltas, backup/restore) were deliberately rejected:
+> git is a better materializer for a real working tree, and reimplementing
+> deltas duplicates it while still missing bash side effects. **Option A below is
+> what shipped**, with a worktree variant added for genuine isolation. The text
+> below is the original rationale.
+
+This was the **second critical gap** — how filesystem changes get
 applied and rolled back.
 
 **Python** has a multi-layer materialization system:
@@ -393,7 +439,16 @@ current bus-based approach.
 
 ---
 
-### 7. yaah Integration — ⚠️ PARTIAL (wired but not functional for rollback)
+### 7. yaah Integration — ~~⚠️ PARTIAL~~ → ✅ FUNCTIONAL
+
+> **Resolved (v0.4.0).** yaah's `supervised_task` review sessions now perform
+> real rollback: unit-start checkpoints, rollback-and-retry, fork/choose, and
+> optional per-variant git-worktree isolation (`supervised_worktree`), with the
+> sub-agent's tools confined to its worktree. The `SupervisorTool` quotation
+> below — *"fork/merge/discard are NOT exposed because yaah sub-agents execute on
+> the real filesystem without sandbox isolation"* — is no longer accurate; that
+> is precisely what the sandbox abstraction changed. The text below is the
+> original rationale.
 
 #### What's done
 
@@ -450,24 +505,32 @@ nothing in the real world.
 
 ## Gap Summary Matrix
 
-| Capability | Python Shepherd | Go Port | yaah Integration | Blocks Rollback? |
-|---|---|---|---|---|
-| Trace kernel | ✅ | ✅ | ✅ | — |
-| Effect bus (live events) | ✅ | ✅ | ⚠️ sub-agents not wired | No |
-| Typed effects + reversibility | ✅ | ❌ | ❌ | **Yes** |
-| Scope lifecycle (fork/merge/discard) | ✅ | ✅ | ⚠️ not exposed | No |
-| Scope state model (fold invariant) | ✅ | ❌ | ❌ | **Yes** |
-| Checkpoint create/restore | ✅ | ❌ | ❌ | **Yes (critical)** |
-| File delta tracking | ✅ | ❌ | ❌ | **Yes (critical)** |
-| Materialization (apply/rollback) | ✅ | ❌ | ❌ | **Yes (critical)** |
-| Pre-commit interception | ✅ | ❌ | ❌ | **Yes** |
-| Supervisor rules engine | ✅ | ✅ | ⚠️ post-facto only | No |
-| Snapshot capture at fork | — | ✅ | ❌ not used | No |
-| Sub-agent bus wiring | — | — | ❌ separate store | No |
+Status columns reflect the original analysis; **Resolved** records the v0.4.0 outcome.
+
+| Capability | Python Shepherd | Go Port | yaah Integration | Blocks Rollback? | Resolved |
+|---|---|---|---|---|---|
+| Trace kernel | ✅ | ✅ | ✅ | — | — |
+| Effect bus (live events) | ✅ | ✅ | ✅ shared manager | No | ✅ |
+| Typed effects + reversibility | ✅ | ❌ | ❌ | **Yes** | ❌ open |
+| Scope lifecycle (fork/merge/discard) | ✅ | ✅ | ✅ exposed | No | ✅ |
+| Scope state model (fold invariant) | ✅ | ❌ | ❌ | **Yes** | ❌ rejected by design |
+| Checkpoint create/restore | ✅ | ✅ | ✅ | **Yes (critical)** | ✅ |
+| File delta tracking | ✅ | ❌ | ❌ | **Yes (critical)** | ❌ rejected: git is the materializer |
+| Materialization (apply/rollback) | ✅ | ✅ git in-place + worktree | ✅ | **Yes (critical)** | ✅ |
+| Materialization: OverlayFS / container | ✅ | 📋 specified, not implemented | — | — | ⏳ gated on Linux |
+| Pre-commit interception | ✅ | ✅ | ✅ | **Yes** | ✅ |
+| Supervisor rules engine | ✅ | ✅ | ✅ pre- and post-execution | No | ✅ |
+| Snapshot capture at fork | — | ✅ | ✅ | No | ✅ |
+| Sub-agent bus wiring | — | — | ✅ shared scope manager | No | ✅ |
 
 ---
 
 ## Recommended Path Forward
+
+> **Largely executed.** The "Minimum Viable Rollback" below — workspace
+> checkpoint via git plus conversation snapshot — is what shipped in v0.4.0, as
+> `Checkpoint` + `WorkspaceState` + the `Sandbox` interface, with a worktree mode
+> added for isolation and containerd specified as the Linux path.
 
 ### Minimum Viable Rollback (3 components)
 
