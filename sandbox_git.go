@@ -34,6 +34,13 @@ type gitRunner struct {
 // does not. Terminal prompts are disabled so a command that would ask for
 // credentials fails fast instead of hanging.
 func (g *gitRunner) run(ctx context.Context, args ...string) (string, error) {
+	return g.runWithEnv(ctx, nil, args...)
+}
+
+// runWithEnv is run with extra environment variables appended. It is how the
+// scratch-index operations redirect git's index (GIT_INDEX_FILE) without ever
+// touching the caller's.
+func (g *gitRunner) runWithEnv(ctx context.Context, env []string, args ...string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -43,6 +50,7 @@ func (g *gitRunner) run(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = g.dir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(cmd.Env, env...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -55,30 +63,75 @@ func (g *gitRunner) run(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// stageAll runs `git add -A` to stage untracked files so a stash captures them.
-// `git stash create --include-untracked` is NOT used because that flag is
-// silently ignored by the plumbing `git stash create` command (it is only
-// honoured by `git stash push`/`save`); `git add -A` is the reliable way to
-// include untracked files.
-func (g *gitRunner) stageAll(ctx context.Context) error {
-	_, err := g.run(ctx, "add", "-A")
-	return err
+// indexEnv returns the environment that redirects git at a scratch index. It is
+// defined once so the variable name and format cannot drift between the
+// creation site and the commands that consume it.
+func indexEnv(path string) []string {
+	return []string{"GIT_INDEX_FILE=" + path}
 }
 
-// unstageAll runs `git reset` (a mixed reset to HEAD). It resets the index to
-// HEAD while leaving the working tree untouched, undoing the staging performed
-// by stageAll. Must run AFTER stashCreate so the stash still captured the staged
-// (and therefore untracked-file) state.
-func (g *gitRunner) unstageAll(ctx context.Context) error {
-	_, err := g.run(ctx, "reset")
-	return err
+// stagedIndex stages the full working tree — including untracked files — into a
+// scratch index inside a private temp directory. The caller's real index is
+// never touched, so Capture and Diff stay non-mutating even when the caller had
+// staged changes before the call. The 0700 directory also keeps the staged
+// snapshot unreadable to other local users; a bare file in a shared temp dir
+// would not, because git rewrites the index through a 0644 lock-and-rename.
+//
+// The scratch index is seeded from the repository's real index when one exists,
+// so git's stat cache survives and `git add -A` only hashes changed files.
+// Otherwise it falls back to `git read-tree HEAD`, which also stages deletions
+// correctly (an empty index would treat every tracked file as newly added).
+// `git stash create --include-untracked` is NOT an alternative: that flag is
+// silently ignored by the plumbing `git stash create` command (only
+// `git stash push`/`save` honour it).
+//
+// Returns the scratch index path and a cleanup func the caller must always call.
+func (g *gitRunner) stagedIndex(ctx context.Context) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "shepherd-index-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("create scratch index dir: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+	path := filepath.Join(dir, "index")
+
+	env := indexEnv(path)
+	if !g.seedScratchIndex(ctx, path) {
+		if _, err := g.runWithEnv(ctx, env, "read-tree", "HEAD"); err != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("seed scratch index: %w", err)
+		}
+	}
+	if _, err := g.runWithEnv(ctx, env, "add", "-A"); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("stage into scratch index: %w", err)
+	}
+	return path, cleanup, nil
 }
 
-// stashCreate runs `git stash create` and returns the stash commit SHA. Returns
-// empty string if the working tree is clean (no changes to stash). Untracked
-// files must be staged first (see stageAll).
-func (g *gitRunner) stashCreate(ctx context.Context) (string, error) {
-	out, err := g.run(ctx, "stash", "create")
+// seedScratchIndex copies the repository's real index to dst so the stat cache
+// (and therefore `git add -A`'s ability to skip unchanged files) is preserved.
+// It reports false when no readable index exists, leaving the caller to seed via
+// `git read-tree HEAD`.
+func (g *gitRunner) seedScratchIndex(ctx context.Context, dst string) bool {
+	out, err := g.run(ctx, "rev-parse", "--git-path", "index")
+	if err != nil || out == "" {
+		return false
+	}
+	src := out
+	if !filepath.IsAbs(src) {
+		src = filepath.Join(g.dir, src)
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return false
+	}
+	return os.WriteFile(dst, data, 0o600) == nil
+}
+
+// stashCreate runs `git stash create` against a scratch index and returns the
+// stash commit SHA. Returns an empty string if the working tree is clean.
+func (g *gitRunner) stashCreate(ctx context.Context, index string) (string, error) {
+	out, err := g.runWithEnv(ctx, indexEnv(index), "stash", "create")
 	if err != nil {
 		return "", err
 	}
@@ -274,29 +327,25 @@ func (g *GitSandbox) Destroy(ctx context.Context) error {
 
 // Capture records the current workspace state as a reusable WorkspaceState.
 //
-// Sequence: `git add -A` (so untracked files are included), `git stash create`
-// (an unreferenced commit SHA), `git reset` (restore the caller's index), and
-// `git rev-parse HEAD`. The stash is not popped, so the working tree is
-// unchanged.
+// The working tree — including untracked files — is staged into a scratch index
+// (never the caller's), `git stash create` turns it into an unreferenced commit
+// SHA, and HEAD is recorded. The stash is not popped, so the working tree is
+// unchanged and a caller that had staged changes keeps them staged.
 func (g *GitSandbox) Capture(ctx context.Context) (WorkspaceState, error) {
 	w := g.work()
 	if !w.isRepo(ctx) {
 		return WorkspaceState{}, fmt.Errorf("git sandbox: %s is not a git working tree", g.workDir())
 	}
 
-	if err := w.stageAll(ctx); err != nil {
-		return WorkspaceState{}, fmt.Errorf("capture: git add -A: %w", err)
+	index, cleanupIndex, err := w.stagedIndex(ctx)
+	if err != nil {
+		return WorkspaceState{}, fmt.Errorf("capture: %w", err)
 	}
+	defer cleanupIndex()
 
-	stashSHA, err := w.stashCreate(ctx)
+	stashSHA, err := w.stashCreate(ctx, index)
 	if err != nil {
 		return WorkspaceState{}, fmt.Errorf("capture: git stash create: %w", err)
-	}
-
-	// Un-stage before reading HEAD so a capture never leaves the caller's index
-	// modified. The stash commit is already captured above.
-	if err := w.unstageAll(context.WithoutCancel(ctx)); err != nil {
-		return WorkspaceState{}, fmt.Errorf("capture: git reset: %w", err)
 	}
 
 	headSHA, err := w.headSHA(ctx)
@@ -354,8 +403,8 @@ func (g *GitSandbox) applyState(ctx context.Context, headSHA, stashSHA string) e
 // Diff returns the unified diff and changed file paths between ws and the
 // current workspace.
 //
-// The index is staged to make untracked files visible, then restored before
-// returning: Diff is non-mutating, matching Capture.
+// Untracked files are made visible through a scratch index, so Diff is
+// non-mutating: it never touches the caller's index, matching Capture.
 func (g *GitSandbox) Diff(ctx context.Context, ws WorkspaceState, maxLines int) (string, []string, error) {
 	if ws.Backend != "git" {
 		return "", nil, fmt.Errorf("git sandbox: cannot diff state from backend %q", ws.Backend)
@@ -369,16 +418,14 @@ func (g *GitSandbox) Diff(ctx context.Context, ws WorkspaceState, maxLines int) 
 		return "", nil, fmt.Errorf("git sandbox: %s is not a git working tree", g.workDir())
 	}
 
-	if err := w.stageAll(ctx); err != nil {
-		return "", nil, fmt.Errorf("diff: git add -A: %w", err)
+	index, cleanupIndex, err := w.stagedIndex(ctx)
+	if err != nil {
+		return "", nil, fmt.Errorf("diff: %w", err)
 	}
-	defer func() {
-		// Best effort: use a fresh context so cleanup is not abandoned when the
-		// caller's context expired mid-diff.
-		_ = w.unstageAll(context.WithoutCancel(ctx))
-	}()
+	defer cleanupIndex()
 
-	names, err := w.run(ctx, "diff", "--cached", "--name-only", ws.Revision)
+	env := indexEnv(index)
+	names, err := w.runWithEnv(ctx, env, "diff", "--cached", "--name-only", ws.Revision)
 	if err != nil {
 		return "", nil, fmt.Errorf("diff: git diff --name-only: %w", err)
 	}
@@ -387,7 +434,7 @@ func (g *GitSandbox) Diff(ctx context.Context, ws WorkspaceState, maxLines int) 
 		files = strings.Split(names, "\n")
 	}
 
-	full, err := w.run(ctx, "diff", "--cached", ws.Revision)
+	full, err := w.runWithEnv(ctx, env, "diff", "--cached", ws.Revision)
 	if err != nil {
 		return "", nil, fmt.Errorf("diff: git diff: %w", err)
 	}

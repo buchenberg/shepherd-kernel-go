@@ -565,3 +565,60 @@ func TestGoldenVectorsFromDisk(t *testing.T) {
 	_ = data // Just verify it's readable
 	t.Logf("Golden vectors file is %d bytes", len(data))
 }
+
+// TestExternalAnchorKindIsFact pins the Python ABI default
+// (ExternalAnchor.anchor_kind = "fact") on a slice that has a causal parent
+// outside the selected owner path.
+func TestExternalAnchorKindIsFact(t *testing.T) {
+	store := newMemStore(t)
+
+	parent, err := store.Append(TrustedAppendContext, AppendBatch{
+		AppendIntentID: "intent:anchor-parent",
+		Groups: []AppendGroup{{
+			TraceOwnerID: "owner:anchor-parent",
+			FactDrafts: []RecordDraft{{
+				Mode:      Declaration,
+				SchemaRef: "test.anchor.parent.v1",
+				KindLabel: "parent",
+				Payload:   map[string]any{},
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("append parent: %v", err)
+	}
+
+	if _, err := store.Append(TrustedAppendContext, AppendBatch{
+		AppendIntentID: "intent:anchor-child",
+		Groups: []AppendGroup{{
+			TraceOwnerID:  "owner:anchor-child",
+			CausalParents: []string{parent.FactIDs[0]},
+			FactDrafts: []RecordDraft{{
+				Mode:      Declaration,
+				SchemaRef: "test.anchor.child.v1",
+				KindLabel: "child",
+				Payload:   map[string]any{},
+			}},
+		}},
+	}); err != nil {
+		t.Fatalf("append child: %v", err)
+	}
+
+	slice, err := store.ReadOwnerPrefix(TrustedReadContext, "owner:anchor-child", 99, ModeBoth)
+	if err != nil {
+		t.Fatalf("ReadOwnerPrefix: %v", err)
+	}
+	if len(slice.ExternalAnchors) != 1 {
+		t.Fatalf("external anchors = %d, want 1", len(slice.ExternalAnchors))
+	}
+	anchor := slice.ExternalAnchors[0]
+	if anchor.Ref != parent.FactIDs[0] {
+		t.Errorf("anchor ref = %q, want %q", anchor.Ref, parent.FactIDs[0])
+	}
+	if anchor.AnchorKind != externalAnchorKindFact {
+		t.Errorf("anchor kind = %q, want %q", anchor.AnchorKind, externalAnchorKindFact)
+	}
+	if anchor.HiddenReason != "outside_frontier" {
+		t.Errorf("hidden reason = %q, want outside_frontier", anchor.HiddenReason)
+	}
+}

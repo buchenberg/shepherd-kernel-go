@@ -1098,7 +1098,7 @@ func (s *SQLiteTraceStore) buildSlice(
 func (s *SQLiteTraceStore) anchorForFact(factID, hiddenReason string) ExternalAnchor {
 	fact, err := s.readFact(factID)
 	if err != nil {
-		return ExternalAnchor{Ref: factID, HiddenReason: "unknown"}
+		return ExternalAnchor{Ref: factID, AnchorKind: externalAnchorKindFact, HiddenReason: "unknown"}
 	}
 	kindLabel := ""
 	if fact.View != nil {
@@ -1111,7 +1111,8 @@ func (s *SQLiteTraceStore) anchorForFact(factID, hiddenReason string) ExternalAn
 		ownerOrdinal = fact.View.OwnerOrdinal
 	}
 	return ExternalAnchor{
-		Ref: factID,
+		Ref:        factID,
+		AnchorKind: externalAnchorKindFact,
 		VisibleShape: map[string]any{
 			"kind_label":    kindLabel,
 			"schema_ref":    fact.Envelope.SchemaRef,

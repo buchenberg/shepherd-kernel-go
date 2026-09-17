@@ -1,6 +1,7 @@
 package shepherd
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -616,5 +617,32 @@ func TestDestructiveToolGuard_Write(t *testing.T) {
 	}
 	if iv.Type != InterventionDeny {
 		t.Errorf("expected deny, got %s", iv.Type)
+	}
+}
+
+// TestHighErrorRateRule_MessageReportsSampledWindow pins the denominator: it
+// must report the window that was evaluated, not len(results) after the buffer
+// is reset to nil.
+func TestHighErrorRateRule_MessageReportsSampledWindow(t *testing.T) {
+	rule := HighErrorRateRule(0.5, 6)
+
+	var iv *Intervention
+	for i := 0; i < 3; i++ {
+		event := EffectEvent{
+			TraceOwnerID: "sub:error-rate-message",
+			Mode:         Capture,
+			KindLabel:    "bash:result",
+			Payload:      map[string]any{"success": false},
+		}
+		rule.Match(event)
+		iv = rule.Action(event)
+	}
+	if iv == nil {
+		t.Fatal("expected an intervention after a 100% error window")
+	}
+
+	msg, _ := iv.Payload.(string)
+	if !strings.Contains(msg, "(3/3 recent calls)") {
+		t.Errorf("payload must report the sampled window, got %q", msg)
 	}
 }

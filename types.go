@@ -237,6 +237,11 @@ type FrontierSpec struct {
 	CausedBy           []string
 }
 
+// externalAnchorKindFact is the anchor kind for fact anchors. It mirrors the
+// Python ABI default (shepherd2.kernel.facts.ExternalAnchor.anchor_kind = "fact")
+// so a Go read is shape-identical to the reference instead of emitting "".
+const externalAnchorKindFact = "fact"
+
 // ExternalAnchor is a visible reference to a fact outside a slice or hidden by visibility.
 type ExternalAnchor struct {
 	Ref          string
