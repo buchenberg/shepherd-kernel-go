@@ -12,9 +12,9 @@ const (
 type Containment string
 
 const (
-	ContainFull      Containment = "full"
-	ContainContained Containment = "contained"
-	ContainBuffered  Containment = "buffered"
+	ContainFull        Containment = "full"
+	ContainContained   Containment = "contained"
+	ContainBuffered    Containment = "buffered"
 	ContainUncontained Containment = "uncontained"
 )
 
@@ -22,8 +22,8 @@ const (
 type VisibilityProfile string
 
 const (
-	VisibilityShapeOnly   VisibilityProfile = "shape_only"
-	VisibilityPayload     VisibilityProfile = "payload"
+	VisibilityShapeOnly    VisibilityProfile = "shape_only"
+	VisibilityPayload      VisibilityProfile = "payload"
 	VisibilityFullInternal VisibilityProfile = "full_internal"
 )
 
@@ -31,20 +31,20 @@ const (
 type ModeFilter string
 
 const (
-	ModeBoth              ModeFilter = "both"
-	ModeDeclarationsOnly  ModeFilter = "declarations_only"
-	ModeCapturesOnly      ModeFilter = "captures_only"
+	ModeBoth             ModeFilter = "both"
+	ModeDeclarationsOnly ModeFilter = "declarations_only"
+	ModeCapturesOnly     ModeFilter = "captures_only"
 )
 
 // OperationKind identifies the type of kernel operation for authorization.
 type OperationKind string
 
 const (
-	OpAppend       OperationKind = "append"
-	OpRead         OperationKind = "read"
-	OpPublishCut   OperationKind = "publish_cut"
-	OpMaterialize  OperationKind = "materialize"
-	OpObserve      OperationKind = "observe"
+	OpAppend      OperationKind = "append"
+	OpRead        OperationKind = "read"
+	OpPublishCut  OperationKind = "publish_cut"
+	OpMaterialize OperationKind = "materialize"
+	OpObserve     OperationKind = "observe"
 )
 
 // RecordDraft is an append input. Drafts are not retained records.
@@ -60,11 +60,11 @@ type RecordDraft struct {
 
 // RecordEnvelope holds stable semantic identity and causality for one record.
 type RecordEnvelope struct {
-	RecordID   string
-	Digest     string
-	SchemaRef  string
-	Mode       RecordMode
-	WitnessRef string
+	RecordID    string
+	Digest      string
+	SchemaRef   string
+	Mode        RecordMode
+	WitnessRef  string
 	CausedByIDs []string
 }
 
@@ -102,35 +102,35 @@ type VisibleRecord interface {
 	GetView() *RecordView
 }
 
-func (r Record) isVisibleRecord()      {}
+func (r Record) isVisibleRecord()            {}
 func (r Record) GetEnvelope() RecordEnvelope { return r.Envelope }
 func (r Record) GetView() *RecordView        { return r.View }
 
-func (r RecordShape) isVisibleRecord()      {}
+func (r RecordShape) isVisibleRecord()            {}
 func (r RecordShape) GetEnvelope() RecordEnvelope { return r.Envelope }
 func (r RecordShape) GetView() *RecordView        { return r.View }
 
 // WitnessBody describes the authority and environment under which records were accepted.
 type WitnessBody struct {
-	ActorRef                  string
-	AuthorityRefs             []string
-	ActiveBindingRefs         []string
-	SemanticEnvironmentRefs   []string
-	VisibilityPolicyRefs      []string
-	ProvenancePolicyRefs      []string
-	SubstrateRef              string
-	Containment               Containment
+	ActorRef                string
+	AuthorityRefs           []string
+	ActiveBindingRefs       []string
+	SemanticEnvironmentRefs []string
+	VisibilityPolicyRefs    []string
+	ProvenancePolicyRefs    []string
+	SubstrateRef            string
+	Containment             Containment
 }
 
 // RetainedContext is a durable semantic context stamped into retained fact envelopes.
 type RetainedContext struct {
-	ContextID                 string
-	ActiveBindingRefs         []string
-	CapabilityWitnessRefs     []string
-	SemanticEnvironmentRefs   []string
-	VisibilityPolicyRefs      []string
-	SubstrateRef              string
-	Containment               Containment
+	ContextID               string
+	ActiveBindingRefs       []string
+	CapabilityWitnessRefs   []string
+	SemanticEnvironmentRefs []string
+	VisibilityPolicyRefs    []string
+	SubstrateRef            string
+	Containment             Containment
 }
 
 // AppendGroup is an owner-local group inside one semantic append transition.
@@ -149,30 +149,30 @@ type AppendBatch struct {
 
 // AppendReceipt is the storage and trace identity allocated by a successful append.
 type AppendReceipt struct {
-	AppendIntentID string
-	FactIDs        []string
-	CommitReceipts []string
-	OwnerRanges    map[string][2]int
-	CausalEdges    [][2]string
+	AppendIntentID  string
+	FactIDs         []string
+	CommitReceipts  []string
+	OwnerRanges     map[string][2]int
+	CausalEdges     [][2]string
 	ContextReceipts []string
 }
 
 // OperationContext is the trace-facing operation context for kernel operations.
 type OperationContext struct {
-	ActorRef                string
-	Operation               OperationKind
-	PresentedAuthorityRefs  []string
-	SchemaEnvironmentRef    string
-	VisibilityProfile       VisibilityProfile
-	TrustMode               string
+	ActorRef               string
+	Operation              OperationKind
+	PresentedAuthorityRefs []string
+	SchemaEnvironmentRef   string
+	VisibilityProfile      VisibilityProfile
+	TrustMode              string
 }
 
 // AppendContext is a compatibility write context for append operations.
 type AppendContext struct {
-	ActorRef              string
-	PresentedWitnessRefs  []string
-	SchemaVersionSet      string
-	TrustMode             string
+	ActorRef             string
+	PresentedWitnessRefs []string
+	SchemaVersionSet     string
+	TrustMode            string
 }
 
 func (c AppendContext) ToOperationContext(op OperationKind) OperationContext {
@@ -188,9 +188,9 @@ func (c AppendContext) ToOperationContext(op OperationKind) OperationContext {
 
 // ReadContext is a compatibility read context for read operations.
 type ReadContext struct {
-	ActorRef              string
-	PresentedWitnessRefs  []string
-	VisibilityProfile     VisibilityProfile
+	ActorRef             string
+	PresentedWitnessRefs []string
+	VisibilityProfile    VisibilityProfile
 }
 
 func (c ReadContext) ToOperationContext() OperationContext {
@@ -254,17 +254,17 @@ type WitnessAnchor struct {
 
 // Slice is a graph-shaped read result over retained trace facts.
 type Slice struct {
-	Frontier           *Frontier
-	VisibilityProfile  VisibilityProfile
-	ModeFilter         ModeFilter
-	FactsByID          map[string]VisibleRecord
-	ContextsByID       map[string]RetainedContext
-	OwnerPaths         map[string][]string
-	CausalEdges        [][2]string
-	ExternalAnchors    []ExternalAnchor
-	ContextAnchors     []ContextAnchor
-	WitnessesByID      map[string]VisibleRecord
-	WitnessAnchors     []WitnessAnchor
+	Frontier          *Frontier
+	VisibilityProfile VisibilityProfile
+	ModeFilter        ModeFilter
+	FactsByID         map[string]VisibleRecord
+	ContextsByID      map[string]RetainedContext
+	OwnerPaths        map[string][]string
+	CausalEdges       [][2]string
+	ExternalAnchors   []ExternalAnchor
+	ContextAnchors    []ContextAnchor
+	WitnessesByID     map[string]VisibleRecord
+	WitnessAnchors    []WitnessAnchor
 }
 
 // ContextAnchor is a visible reference to a retained context hidden by visibility.

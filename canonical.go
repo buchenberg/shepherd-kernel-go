@@ -176,7 +176,7 @@ func RecordDigest(schemaRef string, mode RecordMode, body map[string]any, caused
 }
 
 // CanonicalWitnessInput builds the canonical payload for one witness.
-func CanonicalWitnessInput(schemaRef string, body map[string]any) (map[string] any, error) {
+func CanonicalWitnessInput(schemaRef string, body map[string]any) (map[string]any, error) {
 	if err := ValidateWitnessBody(schemaRef, body); err != nil {
 		return nil, err
 	}
@@ -206,14 +206,14 @@ func WitnessBodyDigest(schemaRef string, body map[string]any) (string, error) {
 // RootWitnessBody returns the fixed root witness body.
 func RootWitnessBody() map[string]any {
 	return map[string]any{
-		"active_binding_refs":         []any{},
-		"actor_ref":                   "kernel:root",
-		"authority_refs":              []any{},
-		"containment":                 "full",
-		"provenance_policy_refs":      []any{},
-		"semantic_environment_refs":   []any{},
-		"substrate_ref":               "kernel",
-		"visibility_policy_refs":      []any{},
+		"active_binding_refs":       []any{},
+		"actor_ref":                 "kernel:root",
+		"authority_refs":            []any{},
+		"containment":               "full",
+		"provenance_policy_refs":    []any{},
+		"semantic_environment_refs": []any{},
+		"substrate_ref":             "kernel",
+		"visibility_policy_refs":    []any{},
 	}
 }
 
