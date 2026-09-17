@@ -1,0 +1,4 @@
+# Keep Go sources LF in the repository and in every checkout. Without this,
+# actions/checkout on Windows produces CRLF (core.autocrlf=true) and the CI
+# gofmt gate rejects every file.
+*.go text eol=lf

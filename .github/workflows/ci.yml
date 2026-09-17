@@ -21,10 +21,13 @@ jobs:
       - name: checkout
         uses: actions/checkout@v4
 
+      # A modern toolchain is required for the race detector on current macOS
+      # runners: race binaries built by Go 1.21 abort with "missing LC_UUID".
+      # The module's declared go 1.21 remains the compatibility floor.
       - name: setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: stable
           cache: true
 
       - name: gofmt (must be empty)
