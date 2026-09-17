@@ -388,10 +388,10 @@ type pathEntry struct {
 }
 
 type witnessPlan struct {
-	recordID  string
-	schemaRef string
-	kindLabel string
-	body      map[string]any
+	recordID   string
+	schemaRef  string
+	kindLabel  string
+	body       map[string]any
 	witnessRef string
 }
 
@@ -705,12 +705,12 @@ func (s *SQLiteTraceStore) prepareAppend(tx *sql.Tx, batch AppendBatch, ctx Oper
 	}
 
 	receipt = AppendReceipt{
-		AppendIntentID:   batch.AppendIntentID,
-		FactIDs:          factIDs(facts),
-		CommitReceipts:   commitReceipts,
-		OwnerRanges:      ownerRanges,
-		CausalEdges:      causalEdges,
-		ContextReceipts:  contextReceipts,
+		AppendIntentID:  batch.AppendIntentID,
+		FactIDs:         factIDs(facts),
+		CommitReceipts:  commitReceipts,
+		OwnerRanges:     ownerRanges,
+		CausalEdges:     causalEdges,
+		ContextReceipts: contextReceipts,
 	}
 	return contexts, witnessPlans, facts, receipt, nil
 }
@@ -814,10 +814,10 @@ func (s *SQLiteTraceStore) publishFrontierInTx(tx *sql.Tx, ctx OperationContext,
 	}
 
 	payload := map[string]any{
-		"frontier_id":             spec.FrontierID,
-		"target_trace_owner_id":   spec.TargetTraceOwnerID,
-		"through_fact_id":         spec.ThroughFactID,
-		"through_owner_ordinal":   throughOrdinal,
+		"frontier_id":              spec.FrontierID,
+		"target_trace_owner_id":    spec.TargetTraceOwnerID,
+		"through_fact_id":          spec.ThroughFactID,
+		"through_owner_ordinal":    throughOrdinal,
 		"publisher_trace_owner_id": publisher,
 	}
 
@@ -1114,11 +1114,11 @@ func (s *SQLiteTraceStore) anchorForFact(factID, hiddenReason string) ExternalAn
 		Ref:        factID,
 		AnchorKind: externalAnchorKindFact,
 		VisibleShape: map[string]any{
-			"kind_label":    kindLabel,
-			"schema_ref":    fact.Envelope.SchemaRef,
+			"kind_label":     kindLabel,
+			"schema_ref":     fact.Envelope.SchemaRef,
 			"trace_owner_id": traceOwnerID,
-			"owner_ordinal": ownerOrdinal,
-			"witness_ref":   fact.Envelope.WitnessRef,
+			"owner_ordinal":  ownerOrdinal,
+			"witness_ref":    fact.Envelope.WitnessRef,
 		},
 		HiddenReason: hiddenReason,
 	}
@@ -1624,8 +1624,8 @@ func contextIDFor(appendIntentID string, groupIndex int, payload RetainedContext
 			"capability_witness_refs":   payload.CapabilityWitnessRefs,
 			"semantic_environment_refs": payload.SemanticEnvironmentRefs,
 			"visibility_policy_refs":    payload.VisibilityPolicyRefs,
-			"substrate_ref":            payload.SubstrateRef,
-			"containment":              string(payload.Containment),
+			"substrate_ref":             payload.SubstrateRef,
+			"containment":               string(payload.Containment),
 		},
 	}
 	b, _ := json.Marshal(data)
@@ -1646,8 +1646,8 @@ func ordinaryWitnessPlan(ctx RetainedContext, opCtx OperationContext) witnessPla
 		"semantic_environment_refs": ctx.SemanticEnvironmentRefs,
 		"visibility_policy_refs":    ctx.VisibilityPolicyRefs,
 		"provenance_policy_refs":    []string{},
-		"substrate_ref":            ctx.SubstrateRef,
-		"containment":              string(ctx.Containment),
+		"substrate_ref":             ctx.SubstrateRef,
+		"containment":               string(ctx.Containment),
 	}
 	rootID := RootWitnessRecordIDMust()
 	recordID, _ := RecordDigest(WitnessSchemaRef, Capture, body, nil, rootID)
@@ -1680,18 +1680,18 @@ func witnessFactMatchesPlan(fact Record, plan witnessPlan) bool {
 
 func recordContentMatches(a, b Record) bool {
 	aJSON, _ := json.Marshal(map[string]any{
-		"schema_ref": a.Envelope.SchemaRef,
-		"mode":       string(a.Envelope.Mode),
+		"schema_ref":  a.Envelope.SchemaRef,
+		"mode":        string(a.Envelope.Mode),
 		"witness_ref": a.Envelope.WitnessRef,
-		"caused_by":  a.Envelope.CausedByIDs,
-		"body":       a.Body.Payload,
+		"caused_by":   a.Envelope.CausedByIDs,
+		"body":        a.Body.Payload,
 	})
 	bJSON, _ := json.Marshal(map[string]any{
-		"schema_ref": b.Envelope.SchemaRef,
-		"mode":       string(b.Envelope.Mode),
+		"schema_ref":  b.Envelope.SchemaRef,
+		"mode":        string(b.Envelope.Mode),
 		"witness_ref": b.Envelope.WitnessRef,
-		"caused_by":  b.Envelope.CausedByIDs,
-		"body":       b.Body.Payload,
+		"caused_by":   b.Envelope.CausedByIDs,
+		"body":        b.Body.Payload,
 	})
 	return string(aJSON) == string(bJSON)
 }
