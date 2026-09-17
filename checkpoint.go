@@ -2,6 +2,8 @@ package shepherd
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -17,12 +19,29 @@ const (
 	SchemaCheckpointRestored = "shepherd.checkpoint.restored.v2"
 )
 
-// nextCheckpointSeq is a process-wide monotonic sequence used for checkpoint and
-// workspace-event identity and ordering. Wall-clock time is intentionally NOT
-// used for either: time.Now().UnixNano() can return the same value for
-// concurrent callers, and equal CreatedAt values would leave ordering ambiguous
-// (map iteration order).
+// nextCheckpointSeq is a process-wide monotonic sequence used for checkpoint,
+// workspace-event, and scope-lifecycle identity and ordering. Wall-clock time is
+// intentionally NOT used per call: time.Now().UnixNano() can return the same
+// value for concurrent callers, and equal CreatedAt values would leave ordering
+// ambiguous (map iteration order).
+//
+// The counter starts from a per-process random base rather than 0. Its values
+// feed durable AppendIntentIDs (checkpoint, restore, workspace, and scope
+// lifecycle), and Append treats a repeated intent ID as an idempotent retry or a
+// conflict. Starting from 0 would let a restarted process regenerate IDs the
+// previous process already committed, silently skipping records or failing hard.
 var nextCheckpointSeq atomic.Uint64
+
+func init() {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Randomness is unavailable only in pathological environments; wall
+		// clock still keeps the base unique across restarts in practice.
+		nextCheckpointSeq.Store(uint64(time.Now().UnixNano()))
+		return
+	}
+	nextCheckpointSeq.Store(binary.BigEndian.Uint64(b[:]))
+}
 
 // CheckpointState tracks whether a checkpoint is usable.
 type CheckpointState string

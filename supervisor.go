@@ -382,19 +382,20 @@ func HighErrorRateRule(threshold float64, window int) SupervisionRule {
 			}
 
 			errors := 0
-			for _, s := range st.results {
-				if !s {
+			for _, ok := range st.results {
+				if !ok {
 					errors++
 				}
 			}
-			rate := float64(errors) / float64(len(st.results))
+			total := len(st.results)
+			rate := float64(errors) / float64(total)
 
 			if rate >= threshold {
 				st.results = nil // reset to avoid repeated warnings
 				return &Intervention{
 					Type:    InterventionInject,
 					ScopeID: fmt.Sprintf("scope:%s", e.TraceOwnerID),
-					Payload: fmt.Sprintf("WARNING: error rate %.0f%% (%d/%d recent calls). Consider a different approach.", rate*100, errors, len(st.results)),
+					Payload: fmt.Sprintf("WARNING: error rate %.0f%% (%d/%d recent calls). Consider a different approach.", rate*100, errors, total),
 					Time:    time.Now(),
 				}
 			}

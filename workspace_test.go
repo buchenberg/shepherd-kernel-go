@@ -279,7 +279,7 @@ func TestWorkspace_DiffIsNonMutating(t *testing.T) {
 	if _, _, err := scope.DiffWorkspace(context.Background(), WorkspaceState{Backend: "git", Revision: base}, 0); err != nil {
 		t.Fatalf("DiffWorkspace: %v", err)
 	}
-	// Diff must restore the caller's index, unlike the old DiffSince.
+	// Diff must leave the caller's index untouched.
 	if staged := stagedFiles(t, repo); staged != "" {
 		t.Errorf("index left staged after diff: %q", staged)
 	}

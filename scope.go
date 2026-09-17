@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 )
 
 // Scope schema refs for trace recording.
@@ -177,7 +176,7 @@ func (s *Scope) Fork(childOwnerID string, snapshot any) (*Scope, error) {
 
 	// Record the fork event in the parent's trace to get a fork-point record.
 	forkReceipt, err := s.store.Append(TrustedAppendContext, AppendBatch{
-		AppendIntentID: fmt.Sprintf("%s:fork:%s:%d", s.ownerID, childOwnerID, time.Now().UnixNano()),
+		AppendIntentID: fmt.Sprintf("%s:fork:%s:%d", s.ownerID, childOwnerID, nextCheckpointSeq.Add(1)),
 		Groups: []AppendGroup{{
 			TraceOwnerID: s.ownerID,
 			FactDrafts: []RecordDraft{{
@@ -263,7 +262,7 @@ func (s *Scope) merge(child *Scope) error {
 	}
 
 	_, err := s.store.Append(TrustedAppendContext, AppendBatch{
-		AppendIntentID: fmt.Sprintf("%s:merge:%s:%d", s.ownerID, child.ownerID, time.Now().UnixNano()),
+		AppendIntentID: fmt.Sprintf("%s:merge:%s:%d", s.ownerID, child.ownerID, nextCheckpointSeq.Add(1)),
 		Groups: []AppendGroup{{
 			TraceOwnerID:  s.ownerID,
 			CausalParents: causedBy,
@@ -322,7 +321,7 @@ func (s *Scope) discard(child *Scope) error {
 	}
 
 	_, err := s.store.Append(TrustedAppendContext, AppendBatch{
-		AppendIntentID: fmt.Sprintf("%s:discard:%s:%d", s.ownerID, child.ownerID, time.Now().UnixNano()),
+		AppendIntentID: fmt.Sprintf("%s:discard:%s:%d", s.ownerID, child.ownerID, nextCheckpointSeq.Add(1)),
 		Groups: []AppendGroup{{
 			TraceOwnerID:  s.ownerID,
 			CausalParents: causedBy,
@@ -357,7 +356,7 @@ func (s *Scope) Inject(guidance string) error {
 	}
 
 	_, err := s.store.Append(TrustedAppendContext, AppendBatch{
-		AppendIntentID: fmt.Sprintf("%s:inject:%d", s.ownerID, time.Now().UnixNano()),
+		AppendIntentID: fmt.Sprintf("%s:inject:%d", s.ownerID, nextCheckpointSeq.Add(1)),
 		Groups: []AppendGroup{{
 			TraceOwnerID: s.ownerID,
 			FactDrafts: []RecordDraft{{
@@ -399,7 +398,7 @@ func (s *Scope) halt() error {
 	}
 
 	_, err := s.store.Append(TrustedAppendContext, AppendBatch{
-		AppendIntentID: fmt.Sprintf("%s:halt:%d", s.ownerID, time.Now().UnixNano()),
+		AppendIntentID: fmt.Sprintf("%s:halt:%d", s.ownerID, nextCheckpointSeq.Add(1)),
 		Groups: []AppendGroup{{
 			TraceOwnerID: s.ownerID,
 			FactDrafts: []RecordDraft{{

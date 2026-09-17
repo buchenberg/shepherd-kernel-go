@@ -41,8 +41,8 @@ type SandboxCapabilities struct {
 }
 
 // WorkspaceState is a backend-neutral snapshot of a workspace. It replaces the
-// git-specific pair (GitCheckpoint.StashSHA/HeadSHA and TreeState) so any
-// backend can be captured and restored through one type.
+// earlier git-specific checkpoint fields so any backend can be captured and
+// restored through one type.
 //
 // Data is backend-specific and opaque to the kernel. It uses map[string]any to
 // match RecordDraft.Payload and to be directly digestible by CanonicalDigest

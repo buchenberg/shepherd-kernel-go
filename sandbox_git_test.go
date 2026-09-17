@@ -396,3 +396,78 @@ func TestWorktreeSandbox_DestroyRetriesOnBusyDirectory(t *testing.T) {
 		}
 	}
 }
+
+// TestGitSandbox_CapturePreservesCallerIndex pins the non-mutating contract when
+// the caller had staged changes before Capture: the real index must be left
+// exactly as it was, and the capture must still include untracked files.
+func TestGitSandbox_CapturePreservesCallerIndex(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+
+	// Caller stages a tracked-file edit and leaves an untracked file.
+	writeFile(t, repo, "README.md", "# Staged edit")
+	mustGit(t, repo, "add", "README.md")
+	writeFile(t, repo, "untracked.txt", "untracked")
+	stagedBefore := stagedFiles(t, repo)
+	if stagedBefore != "README.md" {
+		t.Fatalf("precondition: staged = %q, want %q", stagedBefore, "README.md")
+	}
+
+	sb := NewLocalGitSandbox(repo)
+	ws, err := sb.Capture(ctx)
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+
+	if stagedAfter := stagedFiles(t, repo); stagedAfter != stagedBefore {
+		t.Errorf("Capture mutated the caller's index: staged %q, want %q", stagedAfter, stagedBefore)
+	}
+	if stash, _ := ws.Data["stash_sha"].(string); stash == "" {
+		t.Error("Capture did not record a stash for a dirty tree")
+	}
+
+	// The capture must include the untracked file: wipe the tree, apply, verify.
+	mustGit(t, repo, "reset", "--hard")
+	mustGit(t, repo, "clean", "-fd")
+	if err := sb.Apply(ctx, ws); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "untracked.txt")); err != nil {
+		t.Errorf("capture lost the untracked file: %v", err)
+	}
+}
+
+// TestGitSandbox_DiffPreservesCallerIndex is the Diff counterpart: staging
+// untracked files to render the diff must not disturb the caller's index either.
+func TestGitSandbox_DiffPreservesCallerIndex(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+	base := mustHead(t, repo)
+
+	writeFile(t, repo, "README.md", "# Staged edit")
+	mustGit(t, repo, "add", "README.md")
+	writeFile(t, repo, "brand-new.txt", "untracked")
+	stagedBefore := stagedFiles(t, repo)
+
+	sb := NewLocalGitSandbox(repo)
+	diff, files, err := sb.Diff(ctx, WorkspaceState{Backend: "git", Revision: base}, 0)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !strings.Contains(diff, "brand-new.txt") {
+		t.Errorf("diff should include the untracked file:\n%s", diff)
+	}
+	seen := false
+	for _, f := range files {
+		if f == "brand-new.txt" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Errorf("changed files = %v, want brand-new.txt", files)
+	}
+
+	if stagedAfter := stagedFiles(t, repo); stagedAfter != stagedBefore {
+		t.Errorf("Diff mutated the caller's index: staged %q, want %q", stagedAfter, stagedBefore)
+	}
+}
