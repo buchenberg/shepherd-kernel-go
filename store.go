@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -960,9 +961,9 @@ func frontierFromPayload(payload map[string]any, createdByFactID string) (Fronti
 	if !ok || throughFact == "" {
 		return Frontier{}, &TraceStoreError{"frontier fact missing or invalid through_fact_id"}
 	}
-	throughOrdinalRaw, ok := payload["through_owner_ordinal"].(float64)
-	if !ok {
-		return Frontier{}, &TraceStoreError{"frontier fact missing or invalid through_owner_ordinal"}
+	throughOrdinal, err := intFromPayload(payload, "through_owner_ordinal")
+	if err != nil {
+		return Frontier{}, err
 	}
 	publisher, _ := payload["publisher_trace_owner_id"].(string) // optional
 
@@ -970,10 +971,31 @@ func frontierFromPayload(payload map[string]any, createdByFactID string) (Fronti
 		FrontierID:          frontierID,
 		TargetTraceOwnerID:  targetOwner,
 		ThroughFactID:       throughFact,
-		ThroughOwnerOrdinal: int(throughOrdinalRaw),
+		ThroughOwnerOrdinal: throughOrdinal,
 		PublisherOwnerID:    publisher,
 		CreatedByFactID:     createdByFactID,
 	}, nil
+}
+
+// intFromPayload reads an integer field from a decoded payload.
+//
+// The value may be a json.Number, because bodies are decoded with UseNumber to
+// preserve the int/float distinction the canonical writer needs, or a float64
+// from a decoder that was not. Rejecting either would silently read an ordinal as
+// zero.
+func intFromPayload(payload map[string]any, key string) (int, error) {
+	switch v := payload[key].(type) {
+	case json.Number:
+		n, err := strconv.ParseInt(v.String(), 10, 64)
+		if err != nil {
+			return 0, &TraceStoreError{"frontier fact missing or invalid " + key}
+		}
+		return int(n), nil
+	case float64:
+		return int(v), nil
+	default:
+		return 0, &TraceStoreError{"frontier fact missing or invalid " + key}
+	}
 }
 
 func (s *SQLiteTraceStore) readFrontierRow(frontierID string) (*sql.Row, error) {
@@ -1158,8 +1180,48 @@ func (s *SQLiteTraceStore) anchorForFact(factID, hiddenReason string) ExternalAn
 	}
 }
 
+// witnessSupport accumulates the witness records a slice depends on, remembering
+// the order each was first encountered.
+//
+// The order matters and is not incidental: it becomes Slice.WitnessAnchors, and
+// Python builds the equivalent structure as a dict — insertion-ordered — then
+// converts it to a tuple. Returning these records from a bare map range, as this
+// did, made the anchor order differ on every read.
+type witnessSupport struct {
+	byID  map[string]Record
+	order []string
+}
+
+func newWitnessSupport() *witnessSupport {
+	return &witnessSupport{byID: make(map[string]Record)}
+}
+
+func (w *witnessSupport) add(rec Record) {
+	id := rec.Envelope.RecordID
+	if _, exists := w.byID[id]; !exists {
+		w.order = append(w.order, id)
+	}
+	w.byID[id] = rec
+}
+
+func (w *witnessSupport) get(id string) (Record, bool) {
+	rec, ok := w.byID[id]
+	return rec, ok
+}
+
+// records returns the witnesses in first-seen order.
+func (w *witnessSupport) records() []Record {
+	out := make([]Record, 0, len(w.byID))
+	for _, id := range w.order {
+		if rec, ok := w.byID[id]; ok {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
 func (s *SQLiteTraceStore) witnessSupportClosure(records []Record) ([]Record, error) {
-	supportByID := make(map[string]Record)
+	support := newWitnessSupport()
 	validatedToRoot := make(map[string]bool)
 
 	for _, record := range records {
@@ -1170,20 +1232,16 @@ func (s *SQLiteTraceStore) witnessSupportClosure(records []Record) ([]Record, er
 
 	for _, record := range records {
 		if record.Envelope.WitnessRef != "" {
-			if err := s.validateWitnessChain(record.Envelope.WitnessRef, supportByID, validatedToRoot); err != nil {
+			if err := s.validateWitnessChain(record.Envelope.WitnessRef, support, validatedToRoot); err != nil {
 				return nil, err
 			}
 		}
 	}
 
-	result := make([]Record, 0, len(supportByID))
-	for _, w := range supportByID {
-		result = append(result, w)
-	}
-	return result, nil
+	return support.records(), nil
 }
 
-func (s *SQLiteTraceStore) validateWitnessChain(startRef string, supportByID map[string]Record, validatedToRoot map[string]bool) error {
+func (s *SQLiteTraceStore) validateWitnessChain(startRef string, support *witnessSupport, validatedToRoot map[string]bool) error {
 	seenInChain := make(map[string]bool)
 	witnessRef := startRef
 
@@ -1196,7 +1254,7 @@ func (s *SQLiteTraceStore) validateWitnessChain(startRef string, supportByID map
 		}
 		seenInChain[witnessRef] = true
 
-		witness, ok := supportByID[witnessRef]
+		witness, ok := support.get(witnessRef)
 		if !ok {
 			var err error
 			witness, err = s.readFact(witnessRef)
@@ -1206,7 +1264,7 @@ func (s *SQLiteTraceStore) validateWitnessChain(startRef string, supportByID map
 			if witness.Envelope.SchemaRef != RootWitnessSchemaRef && witness.Envelope.SchemaRef != WitnessSchemaRef {
 				return &TraceStoreError{fmt.Sprintf("witness_ref does not resolve to a witness record: %s", witnessRef)}
 			}
-			supportByID[witnessRef] = witness
+			support.add(witness)
 		}
 
 		if witness.Envelope.SchemaRef != RootWitnessSchemaRef && witness.Envelope.SchemaRef != WitnessSchemaRef {
@@ -1804,9 +1862,21 @@ func bodyToJSON(body RecordBody) string {
 	return string(b)
 }
 
+// bodyFromJSON decodes a retained body.
+//
+// It uses UseNumber because the canonical writer depends on the int/float
+// distinction that JSON carries in the token text: `1` and `1.0` are different
+// values to Python and canonicalise to "1" and "1.0". With the default decoder
+// every number becomes float64, so a retained body that said `1` would
+// re-canonicalise as `1.0` and the record could no longer reproduce its own id —
+// which is exactly what happened before this was fixed.
 func bodyFromJSON(s string) RecordBody {
 	var payload map[string]any
-	json.Unmarshal([]byte(s), &payload)
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
+	if err := dec.Decode(&payload); err != nil {
+		return RecordBody{}
+	}
 	return RecordBody{Payload: payload}
 }
 

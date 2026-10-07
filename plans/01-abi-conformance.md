@@ -79,7 +79,7 @@ Three of the four items above were wrong when written. Verified by reading
 | Item | Verdict |
 |---|---|
 | `ReadPathPrefix` | **Real gap**, but the description was wrong. It *is* in the protocol (`facts.py:443`), however its body is a pure delegation — `return self.read_owner_prefix(read_context, trace_owner_id, through, mode_filter)` — and it takes a **trace owner id, not a free-form path**. There is no "owner-agnostic path addressing" distinct from `ReadOwnerPrefix`. Implemented as a documented alias. |
-| `ExternalAnchor.AnchorKind` | **Already fixed.** Populated at `store.go:1101` and `:1115` by the Phase 0 bug batch (`4203993`, shipped in `v0.4.1`) — the original note described the pre-fix state. |
+| `ExternalAnchor.AnchorKind` | **Already fixed.** Set in `anchorForFact` (both its early-return and success paths) by the Phase 0 bug batch (`4203993`, shipped in `v0.4.1`) — the original note described the pre-fix state. Referenced by symbol, not line: the line numbers this note first cited had already drifted by the time it was reviewed. |
 | `ReadOwnerCutoff` signature | **The premise is false.** Python's protocol member is `def read_owner_cutoff(self, frontier_id: FrontierId) -> OwnerCutoff`, taking **no context**. Go already matches Python. No change needed. |
 | `OpMaterialize` / `OpObserve` | Still open. |
 

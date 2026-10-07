@@ -1,6 +1,7 @@
 package shepherd
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -161,61 +162,153 @@ func TestReadPathPrefixEmptyRefSpansOwners(t *testing.T) {
 }
 
 // TestSliceOutputOrderIsDeterministic pins that every map-backed field of a read
-// result comes out in a stable order.
+// result comes out in a stable order, across every visibility profile that
+// populates one.
 //
 // Python's TraceSlice holds owner_paths, external_anchors, context_anchors and
 // witness_anchors as dicts, so all four are insertion-ordered and deterministic.
-// Go's equivalents were plain map iterations, so two identical reads in the same
-// process could disagree with each other, and would necessarily disagree with
-// Python on cross-language comparison.
+// Go's equivalents were plain map iterations, so two identical reads could
+// disagree with each other and would necessarily disagree with Python.
 //
-// This was found by the ReadPathPrefix alias test below, which failed on the
-// empty-ref case with the same fact IDs appearing in a different order on each
-// call. Reading repeatedly is the assertion that matters — any single read looks
+// This was found by the ReadPathPrefix alias test, which failed on the empty-ref
+// case with the same fact IDs in a different order on each call. That first
+// version of this test covered only OwnerPaths; the anchor sequences were fixed
+// later and needed their own coverage, including the witness closure, which was
+// itself returning records from a map range.
+//
+// Reading repeatedly is the assertion that matters — any single read looks
 // correct, and only repetition exposes map iteration.
 func TestSliceOutputOrderIsDeterministic(t *testing.T) {
 	store := newMemStore(t)
-	appendDrafts(t, store, "intent:a", "owner:a",
-		draft("step", Capture, map[string]any{"value": 1}))
-	appendDrafts(t, store, "intent:b", "owner:b",
-		draft("step", Capture, map[string]any{"value": 2}))
 
-	first, err := store.ReadOwnerPrefix(reader, "", 99, ModeBoth)
-	if err != nil {
-		t.Fatalf("ReadOwnerPrefix: %v", err)
+	// A parent on its own owner, so reading the child's owner sees a causal parent
+	// it did not select. That is what produces an external anchor.
+	parent := appendDrafts(t, store, "intent:parent", "owner:parent",
+		draft("step", Capture, map[string]any{"value": 0}))
+
+	if _, err := store.Append(trustedAppend, AppendBatch{
+		AppendIntentID: "intent:child",
+		Groups: []AppendGroup{{
+			TraceOwnerID:  "owner:child",
+			CausalParents: []string{parent.FactIDs[0]},
+			// A retained context, so the record carries a context_ref and a
+			// shape-only read exposes it as a context anchor.
+			RetainedContext: &RetainedContext{
+				ActiveBindingRefs:       []string{"binding:one"},
+				CapabilityWitnessRefs:   []string{"trusted:internal"},
+				SemanticEnvironmentRefs: []string{"schema-set:test"},
+				VisibilityPolicyRefs:    []string{"visibility:payload"},
+				SubstrateRef:            "sqlite.local.v1",
+				Containment:             "contained",
+			},
+			FactDrafts: []RecordDraft{
+				draft("step", Capture, map[string]any{"value": 1}),
+				draft("other", Declaration, map[string]any{"value": 2}),
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("append child: %v", err)
 	}
-	wantIDs := first.FactIDs()
-	wantOrder := append([]string(nil), first.OwnerPathOrder...)
 
-	if len(wantIDs) == 0 {
-		t.Fatal("expected facts across two owners")
+	shapeOnly := ReadContext{ActorRef: "reader", VisibilityProfile: VisibilityShapeOnly}
+
+	reads := []struct {
+		name  string
+		ctx   ReadContext
+		owner string
+	}{
+		{"payload", reader, "owner:child"},
+		{"shape_only", shapeOnly, "owner:child"},
+		{"cross_owner", reader, ""},
 	}
-	if len(wantOrder) != len(first.OwnerPaths) {
-		t.Fatalf("OwnerPathOrder has %d entries for %d owner paths",
-			len(wantOrder), len(first.OwnerPaths))
-	}
 
-	for i := 0; i < 20; i++ {
-		got, err := store.ReadOwnerPrefix(reader, "", 99, ModeBoth)
-		if err != nil {
-			t.Fatalf("read %d: %v", i, err)
-		}
-
-		gotIDs := got.FactIDs()
-		if len(gotIDs) != len(wantIDs) {
-			t.Fatalf("read %d returned %d facts, first read %d", i, len(gotIDs), len(wantIDs))
-		}
-		for j := range wantIDs {
-			if gotIDs[j] != wantIDs[j] {
-				t.Fatalf("read %d FactIDs()[%d] = %q, first read %q: fact_ids order "+
-					"must not depend on Go map iteration", i, j, gotIDs[j], wantIDs[j])
+	for _, r := range reads {
+		t.Run(r.name, func(t *testing.T) {
+			first, err := store.ReadOwnerPrefix(r.ctx, r.owner, 99, ModeBoth)
+			if err != nil {
+				t.Fatalf("first read: %v", err)
 			}
-		}
-		for j := range wantOrder {
-			if got.OwnerPathOrder[j] != wantOrder[j] {
-				t.Fatalf("read %d OwnerPathOrder[%d] = %q, first read %q", i, j,
-					got.OwnerPathOrder[j], wantOrder[j])
+
+			wantIDs := first.FactIDs()
+			wantPaths := append([]string(nil), first.OwnerPathOrder...)
+			wantExt := externalAnchorRefs(first.ExternalAnchors)
+			wantCtxAnchors := contextAnchorIDs(first.ContextAnchors)
+			wantWit := witnessAnchorRefs(first.WitnessAnchors)
+
+			if len(wantIDs) == 0 {
+				t.Fatal("expected facts")
 			}
+
+			for i := 0; i < 20; i++ {
+				got, err := store.ReadOwnerPrefix(r.ctx, r.owner, 99, ModeBoth)
+				if err != nil {
+					t.Fatalf("read %d: %v", i, err)
+				}
+				assertSameSequence(t, i, "FactIDs", got.FactIDs(), wantIDs)
+				assertSameSequence(t, i, "OwnerPathOrder", got.OwnerPathOrder, wantPaths)
+				assertSameSequence(t, i, "ExternalAnchors", externalAnchorRefs(got.ExternalAnchors), wantExt)
+				assertSameSequence(t, i, "ContextAnchors", contextAnchorIDs(got.ContextAnchors), wantCtxAnchors)
+				assertSameSequence(t, i, "WitnessAnchors", witnessAnchorRefs(got.WitnessAnchors), wantWit)
+			}
+
+			// Guard against passing vacuously on empty sequences. Witness anchors
+			// are shape-only by construction — under payload visibility the
+			// witnesses are returned in WitnessesByID instead — so each sequence is
+			// required to be covered by the profile that actually populates it.
+			switch r.name {
+			case "payload":
+				if len(wantExt) == 0 {
+					t.Error("no external anchors: the external-anchor ordering is not covered")
+				}
+			case "shape_only":
+				if len(wantCtxAnchors) == 0 {
+					t.Error("no context anchors: the context-anchor ordering is not covered")
+				}
+				if len(wantWit) == 0 {
+					t.Error("no witness anchors: the witness-support ordering is not covered")
+				}
+				if len(first.WitnessesByID) != 0 {
+					t.Errorf("shape-only read returned %d visible witnesses, want none",
+						len(first.WitnessesByID))
+				}
+			}
+		})
+	}
+}
+
+func externalAnchorRefs(anchors []ExternalAnchor) []string {
+	out := make([]string, 0, len(anchors))
+	for _, a := range anchors {
+		out = append(out, a.Ref)
+	}
+	return out
+}
+
+func contextAnchorIDs(anchors []ContextAnchor) []string {
+	out := make([]string, 0, len(anchors))
+	for _, a := range anchors {
+		out = append(out, a.ContextID)
+	}
+	return out
+}
+
+func witnessAnchorRefs(anchors []WitnessAnchor) []string {
+	out := make([]string, 0, len(anchors))
+	for _, a := range anchors {
+		out = append(out, a.WitnessRef)
+	}
+	return out
+}
+
+func assertSameSequence(t *testing.T, read int, field string, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("read %d %s has %d entries, first read %d", read, field, len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("read %d %s[%d] = %q, first read %q: %s order must not depend on "+
+				"Go map iteration", read, field, i, got[i], want[i], field)
 		}
 	}
 }
@@ -321,8 +414,30 @@ func TestSameIntentDifferentBatchIsRejected(t *testing.T) {
 	if !ok {
 		t.Fatal("expected Record, got RecordShape")
 	}
-	if fact.Body.Payload["value"].(float64) != 1 {
-		t.Errorf("expected value=1, got %v", fact.Body.Payload["value"])
+	// The retained body must keep the integer an integer. Before bodyFromJSON used
+	// UseNumber this asserted float64, which encoded the bug: every number came
+	// back as float64, so a record could not reproduce its own id after a read.
+	got, ok := fact.Body.Payload["value"].(json.Number)
+	if !ok {
+		t.Fatalf("payload value is %T, want json.Number: retained bodies must be decoded "+
+			"with UseNumber so a JSON integer stays an integer", fact.Body.Payload["value"])
+	}
+	if got.String() != "1" {
+		t.Errorf("value = %q, want \"1\"", got.String())
+	}
+
+	// And it must still digest to the id it was stored under, which is the
+	// property the float64 decoding silently broke.
+	rebuilt, err := RecordDigest(
+		fact.Envelope.SchemaRef, fact.Envelope.Mode, fact.Body.Payload,
+		fact.Envelope.CausedByIDs, fact.Envelope.WitnessRef,
+	)
+	if err != nil {
+		t.Fatalf("RecordDigest: %v", err)
+	}
+	if rebuilt != fact.Envelope.RecordID {
+		t.Errorf("re-digested body = %s, want the stored record id %s: a retained record "+
+			"must reproduce its own identity after a read", rebuilt, fact.Envelope.RecordID)
 	}
 }
 

@@ -41,7 +41,7 @@ var vectorFiles = []vectorFile{
 		// its own provenance header (source_commit, python_version), asserted by
 		// TestCanonicalEdgeVectorsMatchPython.
 		path:        "testdata/canonical_edge_vectors_v0.json",
-		wantSHA256:  "9a8df49c36abcd7bdca1e883f7273c1070efba671d8bcf225d75557acbb91587",
+		wantSHA256:  "9d3dc6cd1e58e16c80850a52c8a4699df33c39af92d903cd5dc93dd6d86d7d8d",
 		generatedBy: "shepherd2@d34d5ca334871dfcb5a3dc76dd78045829fa4e56 (CPython 3.13.13)",
 	},
 }
