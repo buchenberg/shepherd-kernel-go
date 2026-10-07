@@ -134,6 +134,27 @@
       "relation_id": "rel:2a0a29e6a12a51a2dc44b08588f6b1ce"
     }
   ],
+  "relation_sequence": {
+    "child_complete_intent": "vector:parent:child:1:complete",
+    "child_create_intent": "vector:parent:child:1:create",
+    "child_execution_id": "exec:8449153a39f381a38fa4aa867a878ab2",
+    "child_frontier_id": "frontier:vector:parent:child:1:terminal",
+    "child_inputs": {
+      "which": "first"
+    },
+    "child_outputs": {
+      "order": "child"
+    },
+    "child_run_id": "vector:parent:child:1",
+    "child_task_ref": "ChildTask",
+    "parent_create_intent": "vector:parent:create",
+    "parent_execution_id": "exec:4dc65439880055ef485cd468c796acb0",
+    "parent_run_id": "vector:parent",
+    "parent_task_ref": "ParentTask",
+    "relation_fact_id": "sha256:4324f646efc2194883b88d8a684f0325a43aa3570effb3afb8d6751155cc44a2",
+    "relation_id": "rel:dc97b57bb55805328d0f2b5e9f00228b",
+    "relation_intent": "vector:parent:child:1:relation:spawned"
+  },
   "run_sequence": {
     "cutoff": {
       "created_by_fact_id": "sha256:e1ea15e626affca36913b3119ef9cebd8c0d7ec4e2bdf2efc2127ce60053c300",

@@ -75,16 +75,35 @@ type executionVectorRun struct {
 	Cutoff      executionVectorCutoff `json:"cutoff"`
 }
 
+type executionVectorRelation struct {
+	ParentRunID         string         `json:"parent_run_id"`
+	ChildRunID          string         `json:"child_run_id"`
+	ParentExecutionID   string         `json:"parent_execution_id"`
+	ChildExecutionID    string         `json:"child_execution_id"`
+	ChildFrontierID     string         `json:"child_frontier_id"`
+	RelationIntent      string         `json:"relation_intent"`
+	RelationID          string         `json:"relation_id"`
+	ParentCreateIntent  string         `json:"parent_create_intent"`
+	ParentTaskRef       string         `json:"parent_task_ref"`
+	ChildCreateIntent   string         `json:"child_create_intent"`
+	ChildTaskRef        string         `json:"child_task_ref"`
+	ChildInputs         map[string]any `json:"child_inputs"`
+	ChildCompleteIntent string         `json:"child_complete_intent"`
+	ChildOutputs        map[string]any `json:"child_outputs"`
+	RelationFactID      string         `json:"relation_fact_id"`
+}
+
 type executionVectorDoc struct {
-	Generator     string              `json:"generator"`
-	SourceRepo    string              `json:"source_repo"`
-	SourceCommit  string              `json:"source_commit"`
-	PythonVersion string              `json:"python_version"`
-	ExecutionIDs  []executionIDVector `json:"execution_ids"`
-	RelationIDs   []relationIDVector  `json:"relation_ids"`
-	PublishedFact publishedFactVector `json:"published_fact"`
-	RunSequence   executionVectorRun  `json:"run_sequence"`
-	FailSequence  executionVectorRun  `json:"fail_sequence"`
+	Generator        string                  `json:"generator"`
+	SourceRepo       string                  `json:"source_repo"`
+	SourceCommit     string                  `json:"source_commit"`
+	PythonVersion    string                  `json:"python_version"`
+	ExecutionIDs     []executionIDVector     `json:"execution_ids"`
+	RelationIDs      []relationIDVector      `json:"relation_ids"`
+	PublishedFact    publishedFactVector     `json:"published_fact"`
+	RunSequence      executionVectorRun      `json:"run_sequence"`
+	FailSequence     executionVectorRun      `json:"fail_sequence"`
+	RelationSequence executionVectorRelation `json:"relation_sequence"`
 }
 
 func loadExecutionVectors(t *testing.T) executionVectorDoc {

@@ -65,7 +65,10 @@ from shepherd2.schemas.execution import (  # noqa: E402
     fail_execution_batch,
     publish_execution_frontier,
 )
-from shepherd2.schemas.relations import relation_id_for  # noqa: E402
+from shepherd2.schemas.relations import (  # noqa: E402
+    create_execution_relation_batch,
+    relation_id_for,
+)
 from shepherd2.trace_store import SQLiteTraceStore  # noqa: E402
 
 import subprocess  # noqa: E402
@@ -115,6 +118,8 @@ RELATION_ID_CASES = [
 
 RUN_ID = "vector:run:one"
 FAIL_RUN_ID = "vector:run:fail"
+PARENT_RUN_ID = "vector:parent"
+CHILD_RUN_ID = "vector:parent:child:1"
 
 PUBLISH_SCHEMA = "shepherd2.runtime.published_fact.v1"
 
@@ -266,6 +271,82 @@ def build_fail_sequence(store) -> dict:
     }
 
 
+def build_relation_sequence(store) -> dict:
+    """Parent execution, child execution, and a spawned relation between
+    them, recorded so the Go replay must allocate identical ids."""
+    parent_execution_id = execution_id_for(f"{PARENT_RUN_ID}:create")
+    child_execution_id = execution_id_for(f"{CHILD_RUN_ID}:create")
+    child_frontier_id = f"frontier:{CHILD_RUN_ID}:terminal"
+
+    parent_create = store.append(
+        TRUSTED_APPEND_CONTEXT,
+        create_execution_batch(
+            append_intent_id=f"{PARENT_RUN_ID}:create",
+            execution_id=parent_execution_id,
+            task_ref="ParentTask",
+            inputs={},
+        ),
+    )
+    child_create = store.append(
+        TRUSTED_APPEND_CONTEXT,
+        create_execution_batch(
+            append_intent_id=f"{CHILD_RUN_ID}:create",
+            execution_id=child_execution_id,
+            task_ref="ChildTask",
+            inputs={"which": "first"},
+            parent_execution_id=parent_execution_id,
+            caused_by=(parent_create.fact_ids[-1],),
+        ),
+    )
+    child_complete = store.append(
+        TRUSTED_APPEND_CONTEXT,
+        complete_execution_batch(
+            append_intent_id=f"{CHILD_RUN_ID}:complete",
+            execution_id=child_execution_id,
+            outputs={"order": "child"},
+            caused_by=(child_create.fact_ids[-1],),
+        ),
+    )
+    publish_execution_frontier(
+        store,
+        TRUSTED_APPEND_CONTEXT,
+        frontier_id=child_frontier_id,
+        target_execution_id=child_execution_id,
+        through_fact_id=child_complete.fact_ids[-1],
+    )
+    relation_intent = f"{CHILD_RUN_ID}:relation:spawned"
+    relation_id = relation_id_for(relation_intent)
+    relation = store.append(
+        TRUSTED_APPEND_CONTEXT,
+        create_execution_relation_batch(
+            append_intent_id=relation_intent,
+            relation_id=relation_id,
+            relation_kind="spawned",
+            parent_execution_id=parent_execution_id,
+            child_execution_id=child_execution_id,
+            child_frontier_id=child_frontier_id,
+            caused_by=(parent_create.fact_ids[-1],),
+        ),
+    )
+    return {
+        "parent_run_id": PARENT_RUN_ID,
+        "child_run_id": CHILD_RUN_ID,
+        "parent_execution_id": parent_execution_id,
+        "child_execution_id": child_execution_id,
+        "child_frontier_id": child_frontier_id,
+        "relation_intent": relation_intent,
+        "relation_id": relation_id,
+        "parent_create_intent": f"{PARENT_RUN_ID}:create",
+        "parent_task_ref": "ParentTask",
+        "child_create_intent": f"{CHILD_RUN_ID}:create",
+        "child_task_ref": "ChildTask",
+        "child_inputs": {"which": "first"},
+        "child_complete_intent": f"{CHILD_RUN_ID}:complete",
+        "child_outputs": {"order": "child"},
+        "relation_fact_id": relation.fact_ids[0],
+    }
+
+
 def main():
     if len(sys.argv) != 2:
         print(__doc__)
@@ -300,6 +381,7 @@ def main():
         },
         "run_sequence": build_run_sequence(SQLiteTraceStore()),
         "fail_sequence": build_fail_sequence(SQLiteTraceStore()),
+        "relation_sequence": build_relation_sequence(SQLiteTraceStore()),
     }
 
     dest = sys.argv[1]
