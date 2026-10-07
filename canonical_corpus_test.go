@@ -22,7 +22,9 @@ package shepherd
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -86,6 +88,23 @@ func TestCanonicalCorpusMatchesPython(t *testing.T) {
 	if doc.Seed == 0 {
 		t.Error("corpus does not record its seed; it cannot be reproduced")
 	}
+	// The provenance must be usable, not merely present: the generator's
+	// git_commit swallows every failure and returns "unknown (...)", so a
+	// corpus regenerated without a usable Python checkout would carry
+	// provenance that names nothing — and pass every digest assertion, since
+	// those check the bytes, not where they came from.
+	if doc.Generator != "testdata/generate_canonical_corpus.py" {
+		t.Errorf("corpus generator = %q, want testdata/generate_canonical_corpus.py", doc.Generator)
+	}
+	if doc.SourceRepo == "" {
+		t.Error("corpus has no source_repo, so its provenance names no checkout")
+	}
+	if doc.SourceCommit == "" || strings.HasPrefix(doc.SourceCommit, "unknown") {
+		t.Errorf("corpus source_commit %q does not identify a revision", doc.SourceCommit)
+	}
+	if doc.PythonVersion == "" {
+		t.Error("corpus does not record the Python version that produced it")
+	}
 
 	groups := doc.groups()
 	total := 0
@@ -125,6 +144,66 @@ func TestCanonicalCorpusMatchesPython(t *testing.T) {
 			if digest != v.Digest {
 				t.Errorf("%s/%s: digest = %s, want %s", name, v.Label, digest, v.Digest)
 			}
+		}
+	}
+}
+
+// TestCanonicalCorpusCoversItsAdvertisedShapes guards against a regeneration
+// quietly weakening the corpus. The first frozen version advertised
+// subnormals and both notation boundaries but contained none of the former
+// and nothing around the upper one: the arbitrary-bit branch draws a
+// subnormal with probability ~1/2048, so 106 floats came up empty — and
+// every digest still matched, because the corpus tests bytes, not coverage.
+// These assertions run against the pinned file, so a regeneration that drops
+// a band fails here instead of shipping a weaker corpus.
+func TestCanonicalCorpusCoversItsAdvertisedShapes(t *testing.T) {
+	doc := loadCorpus(t)
+
+	const smallestNormal = 2.2250738585072014e-308
+	subnormals, upperBoundary, lowerBoundary := 0, 0, 0
+	for _, group := range [][]canonicalVector{doc.Floats, doc.Nested} {
+		for _, v := range group {
+			scanNumbers(t, v.Payload, func(f float64) {
+				switch abs := math.Abs(f); {
+				case f != 0 && abs < smallestNormal:
+					subnormals++
+				case abs > 1e15 && abs < 1e17:
+					upperBoundary++
+				case abs > 1e-5 && abs < 1e-3:
+					lowerBoundary++
+				}
+			})
+		}
+	}
+	if subnormals == 0 {
+		t.Error("corpus contains no subnormals; the sampler's subnormal band is gone")
+	}
+	if upperBoundary == 0 {
+		t.Error("corpus contains nothing around the 1e16 notation boundary; the upper band is gone")
+	}
+	if lowerBoundary == 0 {
+		t.Error("corpus contains nothing around the 1e-4 notation boundary; the lower band is gone")
+	}
+	t.Logf("coverage: %d subnormals, %d around 1e16, %d around 1e-4",
+		subnormals, upperBoundary, lowerBoundary)
+}
+
+// scanNumbers visits every JSON number in a corpus payload, parsing the
+// json.Number token text the corpus decodes with.
+func scanNumbers(t *testing.T, v any, visit func(f float64)) {
+	t.Helper()
+	switch val := v.(type) {
+	case json.Number:
+		if f, err := val.Float64(); err == nil {
+			visit(f)
+		}
+	case map[string]any:
+		for _, x := range val {
+			scanNumbers(t, x, visit)
+		}
+	case []any:
+		for _, x := range val {
+			scanNumbers(t, x, visit)
 		}
 	}
 }

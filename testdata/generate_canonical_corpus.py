@@ -5,21 +5,24 @@ Run from the repository root:
 
     python testdata/generate_canonical_corpus.py testdata/canonical_corpus_v0.json
 
-This is the T1.3 property corpus: ~200 randomized payloads whose expected
+This is the T1.3 property corpus: 200 randomized payloads whose expected
 bytes and digests come from shepherd2's own `canonical_json_bytes` /
 `canonical_digest`, not from a reimplementation. The edge-vector file covers
 the *deliberate* divergences (HTML escaping, float repr thresholds); this file
-covers the rest of the space statistically — arbitrary 64-bit float patterns,
-integers beyond float64's range, strings across every Unicode range the
-encoder can legally emit, and nested structures mixing all of them.
+covers the rest of the space statistically -- arbitrary 64-bit float patterns,
+explicit subnormal and notation-boundary bands, integers beyond float64's
+range, strings across every Unicode range the encoder can legally emit, and
+nested structures mixing all of them.
 
 The payloads are randomized once and then frozen. The seed is fixed below and
 recorded in the file, so "regenerate" is reproducible: the same seed, the same
 Python reference commit, the same bytes. A changed hash in
 golden_provenance_test.go therefore means one of those moved, never chance.
 
-The Python checkout defaults to the sibling `../shepherd` directory and can be
-overridden with SHEPHERD_REPO (or SHEPHERD2_SRC for the import path alone).
+The Python checkout defaults to the sibling `../shepherd` directory. The
+SHEPHERD_REPO and SHEPHERD2_SRC overrides select a different one; the import
+path is the single source of truth for provenance, so the recorded commit
+always identifies the tree the oracle actually came from.
 
 Do not edit the generated JSON by hand. If the vectors change, update the
 pinned SHA-256 in golden_provenance_test.go in the same commit and say why.
@@ -37,14 +40,22 @@ import sys
 from pathlib import Path
 
 DEFAULT_SHEPHERD_REPO = str(Path(__file__).resolve().parent.parent.parent / "shepherd")
-DEFAULT_SHEPHERD2_SRC = str(Path(DEFAULT_SHEPHERD_REPO) / "shepherd2" / "src")
 
-repo_override = os.environ.get("SHEPHERD_REPO")
-src_override = os.environ.get("SHEPHERD2_SRC")
-REPO = repo_override or (
-    str(Path(src_override).resolve().parents[1]) if src_override else DEFAULT_SHEPHERD_REPO
-)
-SRC = src_override or str(Path(REPO) / "shepherd2" / "src")
+# The provenance must identify the tree the oracle bytes actually came from.
+# Both environment overrides existed before but were independent: setting
+# SHEPHERD_REPO alone still imported from the default src, and setting
+# SHEPHERD2_SRC alone still recorded the default repo's commit -- either way
+# the file could name a checkout that did not produce it. Now the import path
+# is the single source of truth: unset, it defaults from SHEPHERD_REPO (or the
+# sibling); the commit is always taken from the git tree containing it, and
+# source_repo records that tree, so the two fields cannot disagree.
+REPO_ENV = os.environ.get("SHEPHERD_REPO")
+SRC_ENV = os.environ.get("SHEPHERD2_SRC")
+SRC_IS_DEFAULT = SRC_ENV is None
+
+if SRC_ENV is None:
+    SRC_ENV = str(Path(REPO_ENV or DEFAULT_SHEPHERD_REPO) / "shepherd2" / "src")
+SRC = SRC_ENV
 sys.path.insert(0, SRC)
 
 from shepherd2.kernel.canonical import (  # noqa: E402
@@ -52,6 +63,22 @@ from shepherd2.kernel.canonical import (  # noqa: E402
     canonical_digest,
     canonical_json_bytes,
 )
+
+
+def repo_root(src: str) -> str:
+    """The git tree containing the import path -- never a second variable."""
+    try:
+        return (
+            subprocess.check_output(
+                ["git", "-C", src, "rev-parse", "--show-toplevel"],
+                stderr=subprocess.DEVNULL,
+            )
+            .decode()
+            .strip()
+        )
+    except Exception:  # pragma: no cover - provenance only
+        return str(Path(src).parent.parent)
+
 
 # Fixed seed. Changing it regenerates every payload and changes the pinned
 # hash; do that only for a reason, and record it here.
@@ -70,21 +97,35 @@ GROUP_SIZES = {
 ESCAPABLE_ASCII = "<>&\"\\/';`$%^*()[]{}#~!|"
 WORDS = ["step", "run", "value", "path", "tmp", "note"]
 
+SMALLEST_NORMAL = 2.2250738585072014e-308
+
 
 def random_float(rng: random.Random) -> float:
-    shape = rng.randrange(3)
+    shape = rng.randrange(5)
     if shape == 0:
-        # Arbitrary 64-bit patterns: every exponent and mantissa combination,
-        # including subnormals and the repr boundaries — the strongest case,
-        # because no hand-picked list thinks of these.
+        # Arbitrary 64-bit patterns: every exponent and mantissa combination
+        # -- the strongest case, because no hand-picked list thinks of these.
+        # They do NOT reliably cover subnormals or the notation boundaries
+        # (each with probability ~1/2048 per draw), which is why shapes 1-3
+        # exist: the first frozen corpus contained zero subnormals among its
+        # 106 floats, and review caught it.
         while True:
             bits = rng.getrandbits(64)
             value = struct.unpack("<d", struct.pack("<Q", bits))[0]
             if math.isfinite(value):
                 return value
     if shape == 1:
-        # Magnitude-stratified, crossing the fixed/scientific notation boundary.
-        return rng.uniform(-1.0, 1.0) * 10 ** rng.uniform(-10.0, 10.0)
+        # Subnormals: exponent bits all zero, random mantissa, spanning
+        # 5e-324 up to just under the smallest normal.
+        return struct.unpack("<d", struct.pack("<Q", rng.getrandbits(52)))[0]
+    if shape == 2:
+        # Around the upper notation boundary: CPython switches to scientific
+        # at |x| >= 1e16, so [1e13, 1e18) straddles the switch.
+        return rng.choice([1.0, -1.0]) * rng.uniform(1.0, 10.0) * 10 ** rng.uniform(13.0, 18.0)
+    if shape == 3:
+        # Around the lower boundary: fixed notation holds down to |x| >= 1e-4,
+        # so [1e-6, 1e-3) straddles the switch.
+        return rng.choice([1.0, -1.0]) * rng.uniform(1.0, 10.0) * 10 ** rng.uniform(-6.0, -3.0)
     # Simple decimal fractions of the kind real payloads carry.
     return round(rng.uniform(-1e6, 1e6), rng.randrange(0, 6))
 
@@ -148,7 +189,13 @@ def random_value(rng: random.Random, depth: int):
         return [random_value(rng, depth - 1) for _ in range(rng.randrange(0, 5))]
     out = {}
     for _ in range(rng.randrange(0, 5)):
-        out[random_string(rng)] = random_value(rng, depth - 1)
+        key = random_string(rng)
+        # A redraw, not a silent collapse: duplicate keys would assign twice to
+        # one dict entry and the nested vector would quietly carry fewer
+        # members than intended.
+        while key in out:
+            key = random_string(rng)
+        out[key] = random_value(rng, depth - 1)
     return out
 
 
@@ -187,12 +234,17 @@ def main():
         return 2
 
     rng = random.Random(SEED)
+    repo = repo_root(SRC)
 
     doc = {
         "canonical_version": CANONICAL_VERSION,
         "generator": "testdata/generate_canonical_corpus.py",
-        "source_repo": "../shepherd",
-        "source_commit": git_commit(REPO),
+        # In the default configuration the sibling is a stable, machine-
+        # independent designation, which keeps regeneration byte-identical
+        # across machines. An overridden run records the resolved tree so the
+        # commit and the repo path always name the same checkout.
+        "source_repo": "../shepherd" if (REPO_ENV is None and SRC_IS_DEFAULT) else repo,
+        "source_commit": git_commit(SRC),
         "python_version": sys.version.split()[0],
         "seed": SEED,
         "floats": group_vectors(rng, GROUP_SIZES["floats"], lambda: random_float(rng)),
@@ -210,7 +262,7 @@ def main():
 
     total = sum(len(doc[g]) for g in GROUP_SIZES)
     print(f"wrote {dest}")
-    print(f"  source_commit: {doc['source_commit'][:12]}  seed: {SEED}")
+    print(f"  source_repo: {doc['source_repo']}  commit: {doc['source_commit'][:12]}  seed: {SEED}")
     print(f"  floats={len(doc['floats'])} ints={len(doc['ints'])} "
           f"strings={len(doc['strings'])} nested={len(doc['nested'])} total={total}")
     return 0

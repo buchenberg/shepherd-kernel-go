@@ -56,9 +56,13 @@ var vectorFiles = []vectorFile{
 		// bytes and digests come from the reference implementation. The seed is
 		// fixed in the generator and recorded in the file, so regeneration is
 		// byte-reproducible; a changed hash means the seed, the reference commit
-		// or the generator changed — never chance.
+		// or the generator changed — never chance. Regenerated once after
+		// review: the first corpus contained no subnormals and nothing around
+		// the 1e16 notation boundary, so the sampler gained explicit bands for
+		// both (see the generator's random_float and
+		// TestCanonicalCorpusCoversItsAdvertisedShapes).
 		path:        "testdata/canonical_corpus_v0.json",
-		wantSHA256:  "1b015db4a21741e878e5e50bf0d4df613766cb348cb1f7626a04a1e83e5b0f20",
+		wantSHA256:  "74a24de3b15318725f469099dccfa4d8e7b7a72e084c98424787b4a0bbc9a69f",
 		generatedBy: "shepherd2@d34d5ca334871dfcb5a3dc76dd78045829fa4e56 (CPython 3.13.13, seed 20261007)",
 	},
 }
