@@ -39,8 +39,12 @@ from pathlib import Path
 DEFAULT_SHEPHERD_REPO = str(Path(__file__).resolve().parent.parent.parent / "shepherd")
 DEFAULT_SHEPHERD2_SRC = str(Path(DEFAULT_SHEPHERD_REPO) / "shepherd2" / "src")
 
-SRC = os.environ.get("SHEPHERD2_SRC", DEFAULT_SHEPHERD2_SRC)
-REPO = os.environ.get("SHEPHERD_REPO", DEFAULT_SHEPHERD_REPO)
+repo_override = os.environ.get("SHEPHERD_REPO")
+src_override = os.environ.get("SHEPHERD2_SRC")
+REPO = repo_override or (
+    str(Path(src_override).resolve().parents[1]) if src_override else DEFAULT_SHEPHERD_REPO
+)
+SRC = src_override or str(Path(REPO) / "shepherd2" / "src")
 sys.path.insert(0, SRC)
 
 from shepherd2.kernel.canonical import (  # noqa: E402
