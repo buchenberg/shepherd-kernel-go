@@ -213,6 +213,41 @@ factory) into `conformance_test.go`:
   produce a checkbox mapping table in the PR description, Python test name →
   Go test name or "N/A + reason").
 
+### ✅ §5 CLOSED: `conformance_test.go` ports the suite
+
+`runConformance(t, open)` runs every case as a subtest named after the Python
+test (minus the `test_` prefix), against a `ConformanceStore` interface trimmed
+to the members the suite exercises — a future backend is gated by implementing
+that interface, not by being a `*SQLiteTraceStore`. The factory derives its
+backing location from the subtest's own `t.TempDir()`, which is stable for one
+test's lifetime, so the restart case reopens the same durable store exactly as
+the Python fixture does. `TestSQLiteTraceStoreConformance` is the SQLite
+fixture; `store_test.go` keeps its per-backend tests, which mirrors Python,
+where this suite was lifted *from* `test_trace_store.py`.
+
+Full mapping, Python case → Go subtest under `TestSQLiteTraceStoreConformance`:
+
+| Python test | Go subtest | Notes |
+|---|---|---|
+| test_append_then_read_owner_prefix | append_then_read_owner_prefix | |
+| test_append_intent_idempotent_across_restart | append_intent_idempotent_across_restart | Python compares whole receipts (`second == first`); Go's `AppendReceipt` carries seq-derived commit receipts and an owner-range map, so the case pins the identity-bearing fields (intent + fact ids) and confirms them through a read |
+| test_same_intent_different_batch_is_rejected | same_intent_different_batch_is_rejected | payload `{"value": 1}` asserted as `json.Number("1")` — retained bodies keep JSON integers as numbers |
+| test_preview_record_ids_match_append | preview_record_ids_match_append | `preview_fact_ids` folded in: the Go store exposes one preview method |
+| test_fact_id_is_content_addressed_across_intents | fact_id_is_content_addressed_across_intents | |
+| test_content_addressed_fact_spans_multiple_owner_paths | content_addressed_fact_spans_multiple_owner_paths | owner asserted via `Record.View.TraceOwnerID` |
+| test_cut_publish_resolve_roundtrip | cut_publish_resolve_roundtrip | |
+| test_read_owner_cutoff_roundtrips_a_published_cut | read_owner_cutoff_roundtrips_a_published_cut | |
+| test_causal_closure_includes_parents | causal_closure_includes_parents | Go's `ReadCausalClosure` takes an explicit closure policy; the case passes `include_external_anchors` |
+| test_causal_parent_must_exist | causal_parent_must_exist | Python pins the `TraceStoreError` base class; the Go error vocabulary has no shared base, so the case pins the concrete `UnknownFactError` |
+| test_descriptor_projection_resolution_roundtrip | N/A | run-output descriptor group: exercises `shepherd2.schemas.run_outputs`, deliberately unported (PARITY-PLAN resolution table); lands as a minimal subset with plan 04 (settlement) |
+| test_descriptor_resolution_rejects_fact_outside_frontier_or_owner_path | N/A | same — re-evaluate at plan 04; visibility-stability itself is separately pinned by the frontier/cut immutability laws |
+| test_descriptor_resolution_rejects_output_name_mismatch | N/A | same |
+| test_descriptor_resolution_rejects_malformed_citation | N/A | same |
+| test_descriptor_projection_rejects_duplicate_output_names | N/A | same |
+| test_descriptor_resolution_rejects_frontier_and_owner_mismatch | N/A | same |
+| test_descriptor_resolution_rejects_duplicate_output_names | N/A | same |
+| test_descriptor_resolution_through_store_wrapper | N/A | same |
+
 ## 6. ABI law coverage map
 
 `test_kernel_abi_v0_laws.py` pins 25 executable laws. Produce
@@ -227,6 +262,52 @@ dedupe/mode-filter-independence, closure policy `include_external_anchors` vs
 `visible_only` anchor behavior, mode filter not pruning traversal,
 operation-context non-cross-authorization for cut publication, projection
 incompatibility (lands with plan 02's schema library — note dependency).
+
+### ✅ §6 CLOSED: `docs/law-coverage.md` + `laws_test.go`
+
+The coverage map lives at `docs/law-coverage.md` (the plan's alternative
+`testdata/law-coverage.md` location was not taken: the map is documentation,
+not test data, and the master plan's T1.8 gates on `docs/`). Twenty laws gained
+dedicated tests in `laws_test.go`; laws already pinned by earlier tests keep
+their homes, mapped in the doc.
+
+Porting the laws — not inspecting the code — surfaced three genuine divergences,
+all fixed in `store.go` in the same change:
+
+1. **Duplicate causal parents were deduplicated, not rejected.** `resolvedCauses`
+   silently deduplicated a parent cited at both the group and the draft level;
+   Python rejects the append (`ValueError("duplicate causal parent")`). The
+   dedupe changed the parent tuple a record digests over, so the same caller
+   input could produce a different record id depending on which level the
+   caller used — an identity divergence the digest vectors could not see,
+   because no vector cites a parent twice.
+2. **Witness bodies were not validated.** `ordinaryWitnessPlan` digested the
+   witness body without validating it, so a group context with an empty
+   `substrate_ref` or an unknown containment was retained — on append and on
+   preview — as a witness whose body the kernel's own schema rejects.
+   `ValidateWitnessBody` now runs before the digest, in the same place Python
+   validates (`_ordinary_witness_plan`).
+3. **Closure read order was randomized.** `canonicalFactOrder` sorted its rows
+   in SQL (`ORDER BY path_ref, path_ordinal, record_id`) and then discarded
+   the sort by ranging over a Go map, so every `ReadCausalClosure` result was
+   in a different order on each process run — a single run always looked
+   correct. Law 19's two-fact order assertion failed on roughly every fourth
+   `go test` invocation before the fix. Same defect class as §2b: a Go
+   structure backed by a map and compared against Python is suspect.
+
+Of the anticipated gaps, all but one was real: duplicate-parent rejection,
+local-ref pre-retention, witness-cycle rejection, support-closure
+dedupe/mode-independence, closure-policy anchor behavior, mode-filter
+non-pruning and full_internal authority all needed tests (and two needed the
+fixes above). The exception is *operation-context non-cross-authorization for
+cut publication* — covered by construction, because Go's `AppendContext`
+carries no operation; each store method fixes its own `OperationKind`, so the
+caller cannot present an append context to `PublishCut`. The Python law guards
+an API shape the Go port does not expose.
+
+The two accepted gaps, recorded in the map: law 21's projection half and law
+23, both plan-02 dependencies (`ProjectionSpec`/`ensure_projection_compatible`
+do not exist yet). Each flips to ✅ in the change that lands the schema library.
 
 ## 7. Execution order
 
@@ -251,7 +332,14 @@ IDs are digests — a canonical drift there is expensive to unwind).
 - [ ] Shared golden file hash matches the Python repo's copy; CI fails on drift.
 - [ ] `store_vectors_v0.json` replay passes: all record/context/frontier IDs
       byte-identical to Python store output.
-- [ ] Every Python conformance case either ported or documented N/A.
-- [ ] 25-law coverage table complete; all laws pass or have documented
-      deliberate-divergence rationale.
+- [x] Every Python conformance case either ported or documented N/A.
+      *(Done — §5 mapping table: 10 ported into `conformance_test.go`'s
+      `runConformance`, 8 run-output descriptor cases documented N/A pending
+      plan 04.)*
+- [x] 25-law coverage table complete; all laws pass or have documented
+      deliberate-divergence rationale. *(Done — `docs/law-coverage.md`: 22 laws
+      pass, law 21 is half-covered with its projection half documented as a
+      plan-02 dependency, law 23 likewise, and law 24 is covered by construction
+      with rationale. Three porting-found store fixes — `resolvedCauses`,
+      `ordinaryWitnessPlan`, `canonicalFactOrder` — landed with the tests.)*
 - [ ] `ReadPathPrefix` implemented + tested; `AnchorKind` populated.

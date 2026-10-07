@@ -147,19 +147,21 @@ the first consumer.
 
 ### Phase 1 — ABI trust (v0.5.0)
 
-**Nothing has started.** All nine tasks are ⬜. Verified directly, not assumed:
+**In flight — re-verified against the tree, 2026-10-07.** The canonical and
+store-identity work merged as PRs #12–#14; rows re-checked against git history
+and file presence:
 
 | ID | Task | Status | Evidence |
 |---|---|---|---|
-| T1.1 | Canonical string escaper | ⬜ | `canonical.go:34` `CanonicalJSONBytes` is still `json.Marshal`; the HTML-escaping divergence is live. `canonicalJSONOrdered` (`:41`) exists but is unexported |
-| T1.2 | `formatCanonicalFloat` | ⬜ | `canonical.go:62` still carries the integral-float rewrite (`val == float64(int64(val))` → `%d`), which emits `1` where CPython emits `1.0` |
-| T1.3 | Property test corpus | ⬜ | `testdata/canonical_corpus_v0.json` absent |
-| T1.4 | Extended golden vectors | ⬜ | Shared goldens unchanged; still ints/strings only (no `<>&`, no decimals) |
-| T1.5 | Store-level vectors | ⬜ | `testdata/store_vectors_v0.json` absent |
-| T1.6 | `ReadPathPrefix` | ⬜ | **0 implementations** in any `.go` file; `path_entries` table already exists |
-| T1.7 | Conformance suite port | ⬜ | `conformance_test.go` absent |
-| T1.8 | Law coverage map | ⬜ | `docs/law-coverage.md` absent |
-| T1.9 | `OpMaterialize`/`OpObserve` doc | ⬜ | — |
+| T1.1 | Canonical string escaper | ✅ | `72e3669`: hand-written writer replaces `json.Marshal` — raw UTF-8, no HTML escaping, lowercase `\u00xx` controls, lone surrogates rejected |
+| T1.2 | `formatCanonicalFloat` | ✅ | `72e3669`: CPython repr semantics (shortest round-trip, fixed notation inside `1e-4…1e16`, scientific outside, `-0.0`, NaN/±Inf → error); confirmed by `testdata/canonical_edge_vectors_v0.json` |
+| T1.3 | Property test corpus | ⬜ | `testdata/canonical_corpus_v0.json` still absent; the 42 edge vectors cover the deliberate cases, not the ~200 randomized mixed payloads |
+| T1.4 | Extended golden vectors | 🔄 | Edge vectors co-generated and hash-pinned (`golden_provenance_test.go`, LF-normalized); the Python-reference compare is a deliberate *local* check that skips in CI — no CI drift job yet |
+| T1.5 | Store-level vectors | ✅ | `store_vectors_v0.json` + `store_vectors_test.go`; plan 01 §4 closed by `8c452b7` — the store allocates Python's record/context/frontier identities |
+| T1.6 | `ReadPathPrefix` | ✅ | `d039f0c`: implemented as a documented alias of `ReadOwnerPrefix` (plan 01 §2a — Python's protocol member is a pure delegation too); the same change made `Slice` output ordering deterministic |
+| T1.7 | Conformance suite port | ✅ | `conformance_test.go`: `runConformance` over a `ConformanceStore` interface; 10 Python cases ported 1:1, 8 run-output descriptor cases N/A pending plan 04 — mapping table in plan 01 §5 |
+| T1.8 | Law coverage map | ✅ | `docs/law-coverage.md` maps all 25 laws; 20 gained dedicated tests in `laws_test.go`. Porting found and fixed three real divergences: duplicate causal parents were deduplicated instead of rejected (`resolvedCauses`), witness bodies were digested unvalidated (`ordinaryWitnessPlan`), and causal-closure read order was randomized by a map range discarding the SQL sort (`canonicalFactOrder` — a flake only a repeated run could catch); the only accepted gaps are law 21's projection half and law 23, both plan-02 dependencies |
+| T1.9 | `OpMaterialize`/`OpObserve` doc | ✅ | `3202bbe`: documented reserved-until-plan-03; `TestReservedOperationKindsAreUnreachable` pins the behavior |
 
 **Also absent:** `testdata/UPSTREAM.md`, needed by the §13 v1.0 checklist.
 
