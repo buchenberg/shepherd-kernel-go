@@ -218,19 +218,25 @@ factory) into `conformance_test.go`:
 `runConformance(t, open)` runs every case as a subtest named after the Python
 test (minus the `test_` prefix), against a `ConformanceStore` interface trimmed
 to the members the suite exercises — a future backend is gated by implementing
-that interface, not by being a `*SQLiteTraceStore`. The factory derives its
-backing location from the subtest's own `t.TempDir()`, which is stable for one
-test's lifetime, so the restart case reopens the same durable store exactly as
-the Python fixture does. `TestSQLiteTraceStoreConformance` is the SQLite
-fixture; `store_test.go` keeps its per-backend tests, which mirrors Python,
-where this suite was lifted *from* `test_trace_store.py`.
+that interface, not by being a `*SQLiteTraceStore`. The harness binds each
+case to one directory, created once, and hands it to the factory on every
+open, so the restart case reopens the same durable store exactly as the
+Python fixture does. (The first version derived the location inside the
+factory from `t.TempDir()`, which returns a NEW directory on every call — so
+the restart case was passing against a fresh, empty store, because content
+addressing makes the same append allocate the same ids anywhere. PR review
+caught it; the case now also reads before the retry, so a fresh-store
+regression fails instead of passing.)
+`TestSQLiteTraceStoreConformance` is the SQLite fixture; `store_test.go`
+keeps its per-backend tests, which mirrors Python, where this suite was
+lifted *from* `test_trace_store.py`.
 
 Full mapping, Python case → Go subtest under `TestSQLiteTraceStoreConformance`:
 
 | Python test | Go subtest | Notes |
 |---|---|---|
 | test_append_then_read_owner_prefix | append_then_read_owner_prefix | |
-| test_append_intent_idempotent_across_restart | append_intent_idempotent_across_restart | Python compares whole receipts (`second == first`); Go's `AppendReceipt` carries seq-derived commit receipts and an owner-range map, so the case pins the identity-bearing fields (intent + fact ids) and confirms them through a read |
+| test_append_intent_idempotent_across_restart | append_intent_idempotent_across_restart | whole-receipt equality, as in Python (`second == first`): an idempotent retry returns the persisted receipt verbatim (`receiptFromJSON` of the stored `receipt_json`), so commit receipts, owner ranges, causal edges and context receipts all compare; the case also reads after reopen and *before* the retry, which pins that the factory reopened the same durable store |
 | test_same_intent_different_batch_is_rejected | same_intent_different_batch_is_rejected | payload `{"value": 1}` asserted as `json.Number("1")` — retained bodies keep JSON integers as numbers |
 | test_preview_record_ids_match_append | preview_record_ids_match_append | `preview_fact_ids` folded in: the Go store exposes one preview method |
 | test_fact_id_is_content_addressed_across_intents | fact_id_is_content_addressed_across_intents | |

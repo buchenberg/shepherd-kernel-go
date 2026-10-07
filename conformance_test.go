@@ -11,6 +11,15 @@ package shepherd
 // 03 substrates, an in-memory test store) is gated by the same behavior, which
 // is the durable "done" gate for a backend the way it is in Python.
 //
+// The harness binds each case to one directory for the case's lifetime and
+// hands it to the factory on every open, so a case that closes and reopens
+// reaches the same durable store — the property the restart case exists to
+// check. The directory is created once per case by the harness rather than
+// derived per call inside the factory: t.TempDir() returns a NEW directory on
+// every call, and the first version of this harness did exactly that, letting
+// the restart case pass against a fresh, empty store because content
+// addressing makes the same append allocate the same ids anywhere.
+//
 // Deliberately out of scope, per PARITY-PLAN's resolution table: the eight
 // run-output descriptor cases (descriptor projection/resolution roundtrip,
 // visibility stability, output-name/frontier/owner mismatch, malformed
@@ -42,13 +51,18 @@ type ConformanceStore interface {
 	Close() error
 }
 
-// conformanceFactory opens (or reopens) the store at a fixed backing location.
+// conformanceFactory opens (or reopens) the store at a fixed backing location
+// under dir.
 //
-// The location is derived from the test's own TempDir, which is stable for the
-// lifetime of one test, so a case that closes and reopens reaches the same
-// durable store — the property the restart case exists to check. A backend
-// that cannot be reopened at a stable location fails here, as in Python.
-type conformanceFactory func(t *testing.T) ConformanceStore
+// dir is created once per case by the harness; every call with the same dir
+// must reach the same durable store, which is the property the restart case
+// exists to check. A backend that cannot be reopened at a stable location
+// fails here, as in Python.
+type conformanceFactory func(t *testing.T, dir string) ConformanceStore
+
+// conformanceOpener is a conformanceFactory pre-bound to one case's directory.
+// Cases see only this: every call reopens the same durable store.
+type conformanceOpener func(t *testing.T) ConformanceStore
 
 // conformanceAppend appends one group of drafts under one intent, mirroring
 // the suite's _append helper in Python.
@@ -81,7 +95,7 @@ func assertFactIDsEqual(t *testing.T, label string, got, want []string) {
 func runConformance(t *testing.T, open conformanceFactory) {
 	cases := []struct {
 		name string
-		run  func(t *testing.T, open conformanceFactory)
+		run  func(t *testing.T, open conformanceOpener)
 	}{
 		{"append_then_read_owner_prefix", conformanceAppendThenReadOwnerPrefix},
 		{"append_intent_idempotent_across_restart", conformanceAppendIntentIdempotentAcrossRestart},
@@ -96,25 +110,33 @@ func runConformance(t *testing.T, open conformanceFactory) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			tc.run(t, open)
+			// One directory per case, created once. t.TempDir() returns a NEW
+			// directory on every call, so the location cannot be derived inside
+			// the factory: the restart case would reopen a fresh, empty store and
+			// still pass, because content addressing makes the same append
+			// allocate the same ids in any store. That is precisely the defect
+			// review caught in the first version of this harness.
+			dir := t.TempDir()
+			tc.run(t, func(t *testing.T) ConformanceStore {
+				return open(t, dir)
+			})
 		})
 	}
 }
 
 // TestSQLiteTraceStoreConformance gates the SQLite reference backend.
 func TestSQLiteTraceStoreConformance(t *testing.T) {
-	runConformance(t, func(t *testing.T) ConformanceStore {
-		path := filepath.Join(t.TempDir(), "conformance.sqlite")
-		store, err := NewSQLiteTraceStore(path)
+	runConformance(t, func(t *testing.T, dir string) ConformanceStore {
+		store, err := NewSQLiteTraceStore(filepath.Join(dir, "conformance.sqlite"))
 		if err != nil {
-			t.Fatalf("NewSQLiteTraceStore(%s): %v", path, err)
+			t.Fatalf("NewSQLiteTraceStore: %v", err)
 		}
 		return store
 	})
 }
 
 // conformanceAppendThenReadOwnerPrefix ports test_append_then_read_owner_prefix.
-func conformanceAppendThenReadOwnerPrefix(t *testing.T, open conformanceFactory) {
+func conformanceAppendThenReadOwnerPrefix(t *testing.T, open conformanceOpener) {
 	store := open(t)
 	defer store.Close()
 
@@ -131,11 +153,20 @@ func conformanceAppendThenReadOwnerPrefix(t *testing.T, open conformanceFactory)
 // conformanceAppendIntentIdempotentAcrossRestart ports
 // test_append_intent_idempotent_across_restart.
 //
-// Python compares the whole receipt (second == first); Go's AppendReceipt
-// carries seq-derived commit receipts and an owner-range map, so the suite
-// pins the identity-bearing fields — intent and fact ids — which is what
-// makes the retry idempotent, and confirms them through a read.
-func conformanceAppendIntentIdempotentAcrossRestart(t *testing.T, open conformanceFactory) {
+// The reopened store is read *before* the retry append: the first session's
+// facts must already be there, which proves the factory reopened the same
+// durable store rather than a fresh one. This is the assertion that fails if
+// that contract regresses — without it, a fresh-database bug would pass
+// silently, because content addressing makes the same append allocate the
+// same ids in any store.
+//
+// Python compares the whole receipt (second == first), and that is portable
+// after all: an idempotent retry does not recompute anything, it returns the
+// persisted receipt verbatim (receiptFromJSON of the stored receipt_json),
+// so commit receipts, owner ranges, causal edges and context receipts must
+// all match the first session's values — not merely the identity-bearing
+// fields. A partial or recomputed retry receipt fails here.
+func conformanceAppendIntentIdempotentAcrossRestart(t *testing.T, open conformanceOpener) {
 	store := open(t)
 	first := conformanceAppend(t, store, "intent:start", "exec:parent",
 		draft("execution_started", Capture, map[string]any{"execution_id": "exec:parent"}),
@@ -146,25 +177,81 @@ func conformanceAppendIntentIdempotentAcrossRestart(t *testing.T, open conforman
 
 	restarted := open(t)
 	defer restarted.Close()
+
+	reopened, err := restarted.ReadOwnerPrefix(reader, "exec:parent", 99, ModeBoth)
+	if err != nil {
+		t.Fatalf("ReadOwnerPrefix after reopen, before retry: %v", err)
+	}
+	assertFactIDsEqual(t, "read after reopen", reopened.FactIDs(), first.FactIDs)
+
 	second := conformanceAppend(t, restarted, "intent:start", "exec:parent",
 		draft("execution_started", Capture, map[string]any{"execution_id": "exec:parent"}),
 	)
-
-	if second.AppendIntentID != first.AppendIntentID {
-		t.Errorf("append intent = %q, want %q", second.AppendIntentID, first.AppendIntentID)
-	}
-	assertFactIDsEqual(t, "retried receipt", second.FactIDs, first.FactIDs)
+	assertAppendReceiptsEqual(t, "retried receipt", second, first)
 
 	slice, err := restarted.ReadOwnerPrefix(reader, "exec:parent", 99, ModeBoth)
 	if err != nil {
-		t.Fatalf("ReadOwnerPrefix after restart: %v", err)
+		t.Fatalf("ReadOwnerPrefix after retry: %v", err)
 	}
-	assertFactIDsEqual(t, "read after restart", slice.FactIDs(), first.FactIDs)
+	assertFactIDsEqual(t, "read after retry", slice.FactIDs(), first.FactIDs)
+}
+
+// assertAppendReceiptsEqual compares two receipts field by field, including
+// the seq-derived and map-shaped fields a whole-receipt equality needs. Nil
+// and empty slices compare equal: the retry's receipt is the first's round
+// trip through JSON, where both spellings persist as written.
+func assertAppendReceiptsEqual(t *testing.T, label string, got, want AppendReceipt) {
+	t.Helper()
+	if got.AppendIntentID != want.AppendIntentID {
+		t.Errorf("%s: append intent = %q, want %q", label, got.AppendIntentID, want.AppendIntentID)
+	}
+	assertStringSlicesEqual(t, label+" fact_ids", got.FactIDs, want.FactIDs)
+	assertStringSlicesEqual(t, label+" commit_receipts", got.CommitReceipts, want.CommitReceipts)
+	assertStringSlicesEqual(t, label+" context_receipts", got.ContextReceipts, want.ContextReceipts)
+
+	if len(got.OwnerRanges) != len(want.OwnerRanges) {
+		t.Errorf("%s: owner ranges = %v, want %v", label, got.OwnerRanges, want.OwnerRanges)
+	} else {
+		for owner, wantRange := range want.OwnerRanges {
+			gotRange, ok := got.OwnerRanges[owner]
+			if !ok {
+				t.Errorf("%s: owner %s missing from %v", label, owner, got.OwnerRanges)
+				continue
+			}
+			if gotRange != wantRange {
+				t.Errorf("%s: owner %s range = %v, want %v", label, owner, gotRange, wantRange)
+			}
+		}
+	}
+
+	if len(got.CausalEdges) != len(want.CausalEdges) {
+		t.Errorf("%s: causal edges = %v, want %v", label, got.CausalEdges, want.CausalEdges)
+	} else {
+		for i, edge := range want.CausalEdges {
+			if got.CausalEdges[i] != edge {
+				t.Errorf("%s: causal edge[%d] = %v, want %v", label, i, got.CausalEdges[i], edge)
+			}
+		}
+	}
+}
+
+// assertStringSlicesEqual compares two string slices positionally, treating
+// nil and empty as equal (see assertAppendReceiptsEqual for why).
+func assertStringSlicesEqual(t *testing.T, label string, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("%s: got %d entries, want %d", label, len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("%s: entry[%d] = %q, want %q", label, i, got[i], want[i])
+		}
+	}
 }
 
 // conformanceSameIntentDifferentBatchIsRejected ports
 // test_same_intent_different_batch_is_rejected.
-func conformanceSameIntentDifferentBatchIsRejected(t *testing.T, open conformanceFactory) {
+func conformanceSameIntentDifferentBatchIsRejected(t *testing.T, open conformanceOpener) {
 	store := open(t)
 	defer store.Close()
 
@@ -211,7 +298,7 @@ func conformanceSameIntentDifferentBatchIsRejected(t *testing.T, open conformanc
 //
 // Python additionally asserts preview_fact_ids; the Go store exposes a single
 // preview method, so that alias case is folded into this one.
-func conformancePreviewRecordIDsMatchAppend(t *testing.T, open conformanceFactory) {
+func conformancePreviewRecordIDsMatchAppend(t *testing.T, open conformanceOpener) {
 	store := open(t)
 	defer store.Close()
 
@@ -235,7 +322,7 @@ func conformancePreviewRecordIDsMatchAppend(t *testing.T, open conformanceFactor
 
 // conformanceFactIDIsContentAddressedAcrossIntents ports
 // test_fact_id_is_content_addressed_across_intents.
-func conformanceFactIDIsContentAddressedAcrossIntents(t *testing.T, open conformanceFactory) {
+func conformanceFactIDIsContentAddressedAcrossIntents(t *testing.T, open conformanceOpener) {
 	store := open(t)
 	defer store.Close()
 
@@ -254,7 +341,7 @@ func conformanceFactIDIsContentAddressedAcrossIntents(t *testing.T, open conform
 
 // conformanceContentAddressedFactSpansMultipleOwnerPaths ports
 // test_content_addressed_fact_spans_multiple_owner_paths.
-func conformanceContentAddressedFactSpansMultipleOwnerPaths(t *testing.T, open conformanceFactory) {
+func conformanceContentAddressedFactSpansMultipleOwnerPaths(t *testing.T, open conformanceOpener) {
 	store := open(t)
 	defer store.Close()
 
@@ -290,7 +377,7 @@ func conformanceContentAddressedFactSpansMultipleOwnerPaths(t *testing.T, open c
 
 // conformanceCutPublishResolveRoundtrip ports
 // test_cut_publish_resolve_roundtrip.
-func conformanceCutPublishResolveRoundtrip(t *testing.T, open conformanceFactory) {
+func conformanceCutPublishResolveRoundtrip(t *testing.T, open conformanceOpener) {
 	store := open(t)
 	defer store.Close()
 
@@ -316,7 +403,7 @@ func conformanceCutPublishResolveRoundtrip(t *testing.T, open conformanceFactory
 
 // conformanceReadOwnerCutoffRoundtripsAPublishedCut ports
 // test_read_owner_cutoff_roundtrips_a_published_cut.
-func conformanceReadOwnerCutoffRoundtripsAPublishedCut(t *testing.T, open conformanceFactory) {
+func conformanceReadOwnerCutoffRoundtripsAPublishedCut(t *testing.T, open conformanceOpener) {
 	store := open(t)
 	defer store.Close()
 
@@ -352,7 +439,7 @@ func conformanceReadOwnerCutoffRoundtripsAPublishedCut(t *testing.T, open confor
 
 // conformanceCausalClosureIncludesParents ports
 // test_causal_closure_includes_parents.
-func conformanceCausalClosureIncludesParents(t *testing.T, open conformanceFactory) {
+func conformanceCausalClosureIncludesParents(t *testing.T, open conformanceOpener) {
 	store := open(t)
 	defer store.Close()
 
@@ -392,7 +479,7 @@ func conformanceCausalClosureIncludesParents(t *testing.T, open conformanceFacto
 // Python expects the TraceStoreError base class; the Go error vocabulary has no
 // shared base, and the concrete store error for a missing causal parent is
 // UnknownFactError, so that is what the suite pins.
-func conformanceCausalParentMustExist(t *testing.T, open conformanceFactory) {
+func conformanceCausalParentMustExist(t *testing.T, open conformanceOpener) {
 	store := open(t)
 	defer store.Close()
 
