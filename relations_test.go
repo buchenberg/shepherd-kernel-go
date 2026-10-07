@@ -51,7 +51,7 @@ func TestRelationVectorSequenceReplay(t *testing.T) {
 	vec := doc.RelationSequence
 	store := newMemStore(t)
 
-	parentCreate, err := store.Append(TrustedAppendContext, createExecutionBatch(
+	parentCreate, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
 		vec.ParentCreateIntent, vec.ParentExecutionID, vec.ParentTaskRef, map[string]any{}, "", nil,
 	))
 	if err != nil {
@@ -60,26 +60,26 @@ func TestRelationVectorSequenceReplay(t *testing.T) {
 	if parentCreate.FactIDs[0] == "" {
 		t.Fatal("no parent facts")
 	}
-	childCreate, err := store.Append(TrustedAppendContext, createExecutionBatch(
+	childCreate, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
 		vec.ChildCreateIntent, vec.ChildExecutionID, vec.ChildTaskRef, vec.ChildInputs,
 		vec.ParentExecutionID, parentCreate.FactIDs[len(parentCreate.FactIDs)-1:],
 	))
 	if err != nil {
 		t.Fatalf("child create: %v", err)
 	}
-	childComplete, err := store.Append(TrustedAppendContext, completeExecutionBatch(
+	childComplete, err := store.Append(TrustedAppendContext, CompleteExecutionBatch(
 		vec.ChildCompleteIntent, vec.ChildExecutionID, vec.ChildOutputs,
 		childCreate.FactIDs[len(childCreate.FactIDs)-1:],
 	))
 	if err != nil {
 		t.Fatalf("child complete: %v", err)
 	}
-	if _, err := publishExecutionFrontier(store, TrustedAppendContext,
+	if _, err := PublishExecutionFrontier(store, TrustedAppendContext,
 		vec.ChildFrontierID, vec.ChildExecutionID, childComplete.FactIDs[len(childComplete.FactIDs)-1], "", "", nil); err != nil {
 		t.Fatalf("child frontier: %v", err)
 	}
 
-	relation, err := store.Append(TrustedAppendContext, createExecutionRelationBatch(
+	relation, err := store.Append(TrustedAppendContext, CreateExecutionRelationBatch(
 		vec.RelationIntent, vec.RelationID, RelationSpawned,
 		vec.ParentExecutionID, vec.ChildExecutionID, vec.ChildFrontierID,
 		parentCreate.FactIDs[len(parentCreate.FactIDs)-1:],
@@ -92,7 +92,7 @@ func TestRelationVectorSequenceReplay(t *testing.T) {
 	}
 
 	// Relations are parent-owned: the fact must sit on the parent's owner
-	// path, which is what projectEffectiveHistory relies on.
+	// path, which is what ProjectEffectiveHistory relies on.
 	slice, err := store.ReadOwnerPrefix(reader, vec.ParentExecutionID, 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix(parent): %v", err)
@@ -107,9 +107,9 @@ func TestRelationVectorSequenceReplay(t *testing.T) {
 		t.Errorf("relation fact %s is not on the parent owner path %v", vec.RelationFactID, slice.FactIDs())
 	}
 
-	relations, err := projectExecutionRelations(slice, vec.ParentExecutionID)
+	relations, err := ProjectExecutionRelations(slice, vec.ParentExecutionID)
 	if err != nil {
-		t.Fatalf("projectExecutionRelations: %v", err)
+		t.Fatalf("ProjectExecutionRelations: %v", err)
 	}
 	if len(relations) != 1 {
 		t.Fatalf("projected %d relations, want 1", len(relations))
@@ -128,7 +128,7 @@ func TestRelationVectorSequenceReplay(t *testing.T) {
 // TestRelationFromFactRejectsForeignSchema pins the type check.
 func TestRelationFromFactRejectsForeignSchema(t *testing.T) {
 	fact := Record{Envelope: RecordEnvelope{SchemaRef: SchemaExecutionCreated}}
-	if _, err := executionRelationFromFact(fact); err == nil {
+	if _, err := ExecutionRelationFromFact(fact); err == nil {
 		t.Fatal("relation projection accepted a created fact")
 	}
 }

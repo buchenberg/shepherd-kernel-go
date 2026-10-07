@@ -58,10 +58,28 @@ func (l *StaticSchemaLibrary) ProjectionSpecs() []ProjectionSpec { return l.Spec
 // matched with errors.Is.
 var ErrProjectionMode = errors.New("shepherd: projection mode incompatible")
 
-// ensureProjectionCompatible validates that a slice satisfies a projection's
+// ShepherdSchemas is the default schema library: the execution, relation and
+// runtime-published-fact rings with their projection specs. It is the
+// single registry a caller needs to hand to anything asking "is this schema
+// known, and what does its projection require" — plan 04's settlement
+// projections will extend it rather than replace it.
+func ShepherdSchemas() *StaticSchemaLibrary {
+	return &StaticSchemaLibrary{
+		LibraryName: "shepherd2",
+		Refs: append(append(append([]string{},
+			ExecutionSchemaLibrary.SchemaRefs()...),
+			ExecutionRelationSchemaLibrary.SchemaRefs()...),
+			SchemaRuntimePublishedFact),
+		Specs: append(append([]ProjectionSpec{},
+			ExecutionSchemaLibrary.ProjectionSpecs()...),
+			ExecutionRelationSchemaLibrary.ProjectionSpecs()...),
+	}
+}
+
+// EnsureProjectionCompatible validates that a slice satisfies a projection's
 // declared kernel requirements. It returns an error wrapping
 // ErrProjectionMode when the mode filter disagrees.
-func ensureProjectionCompatible(slice Slice, spec ProjectionSpec) error {
+func EnsureProjectionCompatible(slice Slice, spec ProjectionSpec) error {
 	if spec.ModeRequirement == ProjectionAcceptsAny {
 		return nil
 	}

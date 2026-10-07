@@ -191,9 +191,33 @@ Design notes:
 
 ## 7. Acceptance criteria
 
-- [ ] Execution/relation/history projections pass Python-generated vectors.
-- [ ] `StartTaskSync` record trace is ID-identical to Python `@task` run for
+- [x] Execution/relation/history projections pass Python-generated vectors.
+- [x] `StartTaskSync` record trace is ID-identical to Python `@task` run for
       the same fixture task (vector-pinned).
-- [ ] Terminal-frontier law + projection purity enforced with negative tests.
-- [ ] `go test ./... -count=1` green; no new dependencies in go.mod.
-- [ ] README gains a "Executions & handles" section (short, links to godoc).
+- [x] Terminal-frontier law + projection purity enforced with negative tests.
+- [x] `go test ./... -count=1` green; no new dependencies in go.mod.
+- [x] README gains a "Executions & handles" section (short, links to godoc).
+
+> ### ✅ §7 CLOSED — 2026-10-07, all five criteria
+>
+> - Vectors: `testdata/execution_vectors_v0.json` (generation, ID derivations,
+>   run/fail sequences recorded from a real `@task` run, relation sequence) —
+>   every replayed id identical; hash-pinned in `golden_provenance_test.go`.
+> - `StartTaskSync` ID-identity:
+>   `TestStartTaskSyncMatchesPythonVector` reproduces the vector run's owner
+>   path fact-for-fact through the facade, not by replaying batches by hand.
+> - Negative tests: `TestTerminalFrontierLawRejectsNonTerminal`,
+>   `TestProjectExecutionRequiresBothModes` (closes the plan-01 law 21/23
+>   gaps), `TestRelationUnknownKindRejected`,
+>   `TestRelationFromFactRejectsForeignSchema`.
+> - `go.mod` untouched — the phase added zero dependencies.
+> - README section added before "Golden Vectors".
+>
+> Deliberate API deviations from the sketches, recorded here: the batch
+> builders and projections carry the sketch's exported names, but
+> `ExecutionIDFor`/`RelationIDFor` drop the sketch's error return (the
+> derivation cannot fail), and the task facade's `Spawn` takes the
+> `*Registry` explicitly since Go has no class objects to carry the body.
+> Python's error format "{type}: {msg}" becomes `err.Error()` (panics record
+> "panic: <value>") — record shapes identical, error-text provenance
+> differs, documented in handles.go.

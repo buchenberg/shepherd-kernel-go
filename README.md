@@ -451,6 +451,41 @@ affect the golden vectors. Trace writes are advisory: a failed append never fail
 the workspace operation, because the rollback guarantee does not depend on the
 audit record.
 
+## Executions & Handles
+
+Executions give runs identities: a create/complete/fail lifecycle folded from
+retained facts, parent/child relations, and a synchronous task facade over the
+store. Every id is derived exactly as the Python reference derives it —
+`ExecutionIDFor` and the full run sequence are pinned by Python-generated
+vectors — so a Go-written trace is readable by `shepherd2` and vice versa.
+
+```go
+reg := shepherd.NewRegistry()
+reg.Register("MyTask", func(c *shepherd.TaskControl) (map[string]any, error) {
+    c.Publish("note", map[string]any{"msg": "working"})
+    child, err := c.Spawn("LeafTask", inputs, reg)
+    if err != nil { return nil, err }
+    exec, err := c.AwaitTerminal(ctx, child)
+    return map[string]any{"child": exec.ExecutionID}, nil
+})
+
+run, err := shepherd.StartTaskSync(store, reg, "MyTask", "run:fixed-id", inputs)
+exec, err := run.Wait(ctx)      // terminal projection: succeeded / failed
+
+// or async: StartTask returns a live handle; Wait blocks until terminal
+run, err = shepherd.StartTask(ctx, store, reg, "MyTask", "", inputs)
+
+history, err := shepherd.ProjectEffectiveHistoryFromStore(store, reader, cutoff)
+// root execution + active children (spawned/adopted; abandoned drops) + published facts
+```
+
+Spawns and adopts are recorded as parent-owned relation facts; abandoning a
+child writes an abandoned relation under the same relation id, so the
+effective-history fold drops it. The whole tree projects from one terminal
+frontier, and re-opening the store file re-projects it identically.
+
+Godoc: https://pkg.go.dev/github.com/buchenberg/shepherd-kernel-go
+
 ## Golden Vectors
 
 The `testdata/kernel_abi_v0.json` file contains deterministic test vectors shared across implementations. If your digest of the root witness body matches `sha256:28aa527e...`, your implementation is compatible.

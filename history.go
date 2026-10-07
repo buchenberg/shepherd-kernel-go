@@ -33,16 +33,16 @@ type EffectiveHistory struct {
 	PublishedFacts []PublishedFact
 }
 
-// projectEffectiveHistory projects the root execution, its active children
+// ProjectEffectiveHistory projects the root execution, its active children
 // and its parent-published facts from trace slices. Child slices are
 // matched to relations by frontier id: a relation without a child frontier,
 // or one whose frontier has no slice, is skipped.
-func projectEffectiveHistory(rootSlice Slice, rootTraceOwnerID string, childSlices []Slice) (*EffectiveHistory, error) {
-	root, err := projectExecution(rootSlice, rootTraceOwnerID, nil)
+func ProjectEffectiveHistory(rootSlice Slice, rootTraceOwnerID string, childSlices []Slice) (*EffectiveHistory, error) {
+	root, err := ProjectExecution(rootSlice, rootTraceOwnerID, nil)
 	if err != nil {
 		return nil, err
 	}
-	relations, err := projectExecutionRelations(rootSlice, rootTraceOwnerID)
+	relations, err := ProjectExecutionRelations(rootSlice, rootTraceOwnerID)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +63,7 @@ func projectEffectiveHistory(rootSlice Slice, rootTraceOwnerID string, childSlic
 		if !ok {
 			continue
 		}
-		child, err := projectExecution(childSlice, relation.ChildExecutionID, nil)
+		child, err := ProjectExecution(childSlice, relation.ChildExecutionID, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -82,14 +82,14 @@ func projectEffectiveHistory(rootSlice Slice, rootTraceOwnerID string, childSlic
 	}, nil
 }
 
-// projectEffectiveHistoryFromStore resolves the root frontier and each
+// ProjectEffectiveHistoryFromStore resolves the root frontier and each
 // active child's frontier, then projects.
-func projectEffectiveHistoryFromStore(store *SQLiteTraceStore, readContext ReadContext, cutoff Frontier) (*EffectiveHistory, error) {
+func ProjectEffectiveHistoryFromStore(store *SQLiteTraceStore, readContext ReadContext, cutoff Frontier) (*EffectiveHistory, error) {
 	rootSlice, err := store.ResolveFrontier(readContext, cutoff.FrontierID, ModeBoth)
 	if err != nil {
 		return nil, err
 	}
-	relations, err := projectExecutionRelations(rootSlice, cutoff.TargetTraceOwnerID)
+	relations, err := ProjectExecutionRelations(rootSlice, cutoff.TargetTraceOwnerID)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +104,7 @@ func projectEffectiveHistoryFromStore(store *SQLiteTraceStore, readContext ReadC
 		}
 		childSlices = append(childSlices, slice)
 	}
-	return projectEffectiveHistory(rootSlice, cutoff.TargetTraceOwnerID, childSlices)
+	return ProjectEffectiveHistory(rootSlice, cutoff.TargetTraceOwnerID, childSlices)
 }
 
 // activeRelations folds the relation history: the LATEST fact per relation
@@ -142,7 +142,7 @@ func projectPublishedFacts(traceSlice Slice, traceOwnerID string) ([]PublishedFa
 		}
 		fact, isRecord := visible.(Record)
 		if !isRecord {
-			return nil, fmt.Errorf("projectEffectiveHistory requires payload-visible facts")
+			return nil, fmt.Errorf("ProjectEffectiveHistory requires payload-visible facts")
 		}
 		if fact.Envelope.SchemaRef != SchemaRuntimePublishedFact {
 			continue

@@ -4,7 +4,7 @@ package shepherd
 // shepherd2/schemas/relations.py.
 //
 // Relations live on the PARENT's owner path — that placement is what lets
-// projectEffectiveHistory resolve a run tree from one frontier — and the
+// ProjectEffectiveHistory resolve a run tree from one frontier — and the
 // draft is a capture, not a declaration: a relation records something that
 // happened, not an intent.
 
@@ -16,7 +16,7 @@ import (
 
 const SchemaExecutionRelation = "shepherd2.execution_relation.created.v1"
 
-// ExecutionRelationProjection is the spec projectExecutionRelations enforces.
+// ExecutionRelationProjection is the spec ProjectExecutionRelations enforces.
 var ExecutionRelationProjection = ProjectionSpec{
 	Name:            "shepherd2.execution_relation.project",
 	ModeRequirement: ProjectionRequiresBoth,
@@ -77,9 +77,9 @@ func executionRelationCreatedDraft(relationID string, kind RelationKind, parentE
 	}
 }
 
-// createExecutionRelationBatch builds the canonical parent-owned relation
+// CreateExecutionRelationBatch builds the canonical parent-owned relation
 // append: the group's owner path is the PARENT's execution id.
-func createExecutionRelationBatch(appendIntentID, relationID string, kind RelationKind, parentExecutionID, childExecutionID, childFrontierID string, causedBy []string) AppendBatch {
+func CreateExecutionRelationBatch(appendIntentID, relationID string, kind RelationKind, parentExecutionID, childExecutionID, childFrontierID string, causedBy []string) AppendBatch {
 	return AppendBatch{
 		AppendIntentID: appendIntentID,
 		Groups: []AppendGroup{{
@@ -92,23 +92,23 @@ func createExecutionRelationBatch(appendIntentID, relationID string, kind Relati
 	}
 }
 
-// projectExecutionRelations projects parent-owned relations from a
+// ProjectExecutionRelations projects parent-owned relations from a
 // payload-visible slice, in owner-path order. Facts carrying another
 // parent's relation are skipped — relations are addressed by the owner path
 // they live on.
-func projectExecutionRelations(traceSlice Slice, parentTraceOwnerID string) ([]ExecutionRelation, error) {
-	if err := ensureProjectionCompatible(traceSlice, ExecutionRelationProjection); err != nil {
+func ProjectExecutionRelations(traceSlice Slice, parentTraceOwnerID string) ([]ExecutionRelation, error) {
+	if err := EnsureProjectionCompatible(traceSlice, ExecutionRelationProjection); err != nil {
 		return nil, err
 	}
 	var relations []ExecutionRelation
 	for _, factID := range traceSlice.OwnerPaths[parentTraceOwnerID] {
 		visible, ok := traceSlice.FactsByID[factID]
 		if !ok {
-			return nil, fmt.Errorf("projectExecutionRelations: fact %s on the owner path is not in the slice", factID)
+			return nil, fmt.Errorf("ProjectExecutionRelations: fact %s on the owner path is not in the slice", factID)
 		}
 		fact, isRecord := visible.(Record)
 		if !isRecord {
-			return nil, fmt.Errorf("projectExecutionRelations requires payload-visible facts")
+			return nil, fmt.Errorf("ProjectExecutionRelations requires payload-visible facts")
 		}
 		if fact.Envelope.SchemaRef != SchemaExecutionRelation {
 			continue
@@ -125,18 +125,18 @@ func projectExecutionRelations(traceSlice Slice, parentTraceOwnerID string) ([]E
 	return relations, nil
 }
 
-// projectExecutionRelationsFromStore resolves a frontier and projects the
+// ProjectExecutionRelationsFromStore resolves a frontier and projects the
 // parent-owned relations it covers.
-func projectExecutionRelationsFromStore(store *SQLiteTraceStore, readContext ReadContext, cutoff Frontier) ([]ExecutionRelation, error) {
+func ProjectExecutionRelationsFromStore(store *SQLiteTraceStore, readContext ReadContext, cutoff Frontier) ([]ExecutionRelation, error) {
 	slice, err := store.ResolveFrontier(readContext, cutoff.FrontierID, ModeBoth)
 	if err != nil {
 		return nil, err
 	}
-	return projectExecutionRelations(slice, cutoff.TargetTraceOwnerID)
+	return ProjectExecutionRelations(slice, cutoff.TargetTraceOwnerID)
 }
 
-// executionRelationFromFact projects one relation-created fact.
-func executionRelationFromFact(fact Record) (ExecutionRelation, error) {
+// ExecutionRelationFromFact projects one relation-created fact.
+func ExecutionRelationFromFact(fact Record) (ExecutionRelation, error) {
 	if fact.Envelope.SchemaRef != SchemaExecutionRelation {
 		return ExecutionRelation{}, fmt.Errorf("expected relation_created fact, got %q", fact.Envelope.SchemaRef)
 	}

@@ -167,8 +167,11 @@ and file presence:
 
 ### Phases 2–4
 
-All ⬜ for Phases 2a, 3 and 4. No evidence of work on executions/relations/history
-(2a), the merge gate or settlement (3), or recovery/durability (4).
+**Phase 2a is implemented and under review** (branch `parity/p2a-execution-schema`, PR pending):
+execution/relations/history schemas and folds, the runtime handles, and the T2a.6 vectors all landed —
+measured by `testdata/execution_vectors_v0.json`, whose run and fail sequences were
+recorded from a real Python `@task` run and reproduce ID-for-ID through the Go facade.
+Plan 02 §7 is closed. Phases 3 and 4 remain ⬜.
 
 **Phase 2b's harness exists, has been exercised, and its blocker is cleared**
 (`sandbox/containerd/live_test.go`, committed in `603fdcf`, env-gated exactly as

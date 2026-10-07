@@ -23,7 +23,7 @@ const (
 	SchemaExecutionFailed    = "shepherd2.execution.failed.v1"    // capture
 )
 
-// ExecutionProjection is the projection spec every projectExecution entry
+// ExecutionProjection is the projection spec every ProjectExecution entry
 // point enforces. Python's is mode_requirement="both".
 var ExecutionProjection = ProjectionSpec{
 	Name:            "shepherd2.execution.project",
@@ -72,7 +72,7 @@ type Execution struct {
 	Cutoff            Frontier
 }
 
-// executionReadContext is the read context publishExecutionFrontier uses to
+// executionReadContext is the read context PublishExecutionFrontier uses to
 // inspect the through-fact, mirroring Python's ReadContext(actor_ref=
 // "execution:schema").
 var executionReadContext = ReadContext{ActorRef: "execution:schema", VisibilityProfile: VisibilityPayload}
@@ -87,10 +87,10 @@ func ExecutionIDFor(appendIntentID, localRef string) string {
 	return "exec:" + hex.EncodeToString(sum[:])[:32]
 }
 
-// executionCreatedDraft builds the execution entity fact (declaration). The
+// ExecutionCreatedDraft builds the execution entity fact (declaration). The
 // created fact is the ID anchor: created carries task_ref, inputs and the
 // parent link. An absent parent is JSON null, never "".
-func executionCreatedDraft(executionID, taskRef string, inputs map[string]any, parentExecutionID string) RecordDraft {
+func ExecutionCreatedDraft(executionID, taskRef string, inputs map[string]any, parentExecutionID string) RecordDraft {
 	return RecordDraft{
 		Mode:      Declaration,
 		SchemaRef: SchemaExecutionCreated,
@@ -104,8 +104,8 @@ func executionCreatedDraft(executionID, taskRef string, inputs map[string]any, p
 	}
 }
 
-// executionStartedDraft builds the execution-started lifecycle fact (capture).
-func executionStartedDraft(executionID string) RecordDraft {
+// ExecutionStartedDraft builds the execution-started lifecycle fact (capture).
+func ExecutionStartedDraft(executionID string) RecordDraft {
 	return RecordDraft{
 		Mode:      Capture,
 		SchemaRef: SchemaExecutionStarted,
@@ -114,8 +114,8 @@ func executionStartedDraft(executionID string) RecordDraft {
 	}
 }
 
-// executionCompletedDraft builds the terminal-success lifecycle fact.
-func executionCompletedDraft(executionID string, outputs map[string]any) RecordDraft {
+// ExecutionCompletedDraft builds the terminal-success lifecycle fact.
+func ExecutionCompletedDraft(executionID string, outputs map[string]any) RecordDraft {
 	return RecordDraft{
 		Mode:      Capture,
 		SchemaRef: SchemaExecutionCompleted,
@@ -127,8 +127,8 @@ func executionCompletedDraft(executionID string, outputs map[string]any) RecordD
 	}
 }
 
-// executionFailedDraft builds the terminal-failure lifecycle fact.
-func executionFailedDraft(executionID, errMsg string) RecordDraft {
+// ExecutionFailedDraft builds the terminal-failure lifecycle fact.
+func ExecutionFailedDraft(executionID, errMsg string) RecordDraft {
 	return RecordDraft{
 		Mode:      Capture,
 		SchemaRef: SchemaExecutionFailed,
@@ -140,59 +140,59 @@ func executionFailedDraft(executionID, errMsg string) RecordDraft {
 	}
 }
 
-// createExecutionBatch builds the canonical creation/start append for one
+// CreateExecutionBatch builds the canonical creation/start append for one
 // execution: a single group on the execution's own owner path, drafts in
 // created-then-started order.
-func createExecutionBatch(appendIntentID, executionID, taskRef string, inputs map[string]any, parentExecutionID string, causedBy []string) AppendBatch {
+func CreateExecutionBatch(appendIntentID, executionID, taskRef string, inputs map[string]any, parentExecutionID string, causedBy []string) AppendBatch {
 	return AppendBatch{
 		AppendIntentID: appendIntentID,
 		Groups: []AppendGroup{{
 			TraceOwnerID:  executionID,
 			CausalParents: causedBy,
 			FactDrafts: []RecordDraft{
-				executionCreatedDraft(executionID, taskRef, inputs, parentExecutionID),
-				executionStartedDraft(executionID),
+				ExecutionCreatedDraft(executionID, taskRef, inputs, parentExecutionID),
+				ExecutionStartedDraft(executionID),
 			},
 		}},
 	}
 }
 
-// completeExecutionBatch builds the canonical terminal-success append.
-func completeExecutionBatch(appendIntentID, executionID string, outputs map[string]any, causedBy []string) AppendBatch {
+// CompleteExecutionBatch builds the canonical terminal-success append.
+func CompleteExecutionBatch(appendIntentID, executionID string, outputs map[string]any, causedBy []string) AppendBatch {
 	return AppendBatch{
 		AppendIntentID: appendIntentID,
 		Groups: []AppendGroup{{
 			TraceOwnerID:  executionID,
 			CausalParents: causedBy,
-			FactDrafts:    []RecordDraft{executionCompletedDraft(executionID, outputs)},
+			FactDrafts:    []RecordDraft{ExecutionCompletedDraft(executionID, outputs)},
 		}},
 	}
 }
 
-// failExecutionBatch builds the canonical terminal-failure append.
-func failExecutionBatch(appendIntentID, executionID, errMsg string, causedBy []string) AppendBatch {
+// FailExecutionBatch builds the canonical terminal-failure append.
+func FailExecutionBatch(appendIntentID, executionID, errMsg string, causedBy []string) AppendBatch {
 	return AppendBatch{
 		AppendIntentID: appendIntentID,
 		Groups: []AppendGroup{{
 			TraceOwnerID:  executionID,
 			CausalParents: causedBy,
-			FactDrafts:    []RecordDraft{executionFailedDraft(executionID, errMsg)},
+			FactDrafts:    []RecordDraft{ExecutionFailedDraft(executionID, errMsg)},
 		}},
 	}
 }
 
-// publishExecutionFrontier publishes an execution-schema terminal frontier
+// PublishExecutionFrontier publishes an execution-schema terminal frontier
 // over the Ring 0 frontier ABI. The terminal-frontier law is enforced here:
 // the through-fact must be payload-visible and must carry a completed or
 // failed schema; anything else fails before the frontier exists.
-func publishExecutionFrontier(store *SQLiteTraceStore, ctx AppendContext, frontierID, targetExecutionID, throughFactID, publisherExecutionID, appendIntentID string, causedBy []string) (Frontier, error) {
+func PublishExecutionFrontier(store *SQLiteTraceStore, ctx AppendContext, frontierID, targetExecutionID, throughFactID, publisherExecutionID, appendIntentID string, causedBy []string) (Frontier, error) {
 	visible, err := store.ReadFact(executionReadContext, throughFactID)
 	if err != nil {
 		return Frontier{}, fmt.Errorf("read through fact: %w", err)
 	}
 	through, ok := visible.(Record)
 	if !ok {
-		return Frontier{}, fmt.Errorf("publishExecutionFrontier requires payload-visible facts")
+		return Frontier{}, fmt.Errorf("PublishExecutionFrontier requires payload-visible facts")
 	}
 	if through.Envelope.SchemaRef != SchemaExecutionCompleted && through.Envelope.SchemaRef != SchemaExecutionFailed {
 		return Frontier{}, fmt.Errorf("terminal execution frontier must target a terminal lifecycle fact, got %s", through.Envelope.SchemaRef)
@@ -207,12 +207,12 @@ func publishExecutionFrontier(store *SQLiteTraceStore, ctx AppendContext, fronti
 	})
 }
 
-// projectExecution projects an execution from a payload-visible trace slice,
+// ProjectExecution projects an execution from a payload-visible trace slice,
 // folding the owner path in order: created → started → terminal. Facts whose
 // payload execution_id is absent or the target are folded; anything else on
 // the path is skipped. The last terminal fact wins, matching Python.
-func projectExecution(traceSlice Slice, targetTraceOwnerID string, cutoff *Frontier) (*Execution, error) {
-	if err := ensureProjectionCompatible(traceSlice, ExecutionProjection); err != nil {
+func ProjectExecution(traceSlice Slice, targetTraceOwnerID string, cutoff *Frontier) (*Execution, error) {
+	if err := EnsureProjectionCompatible(traceSlice, ExecutionProjection); err != nil {
 		return nil, err
 	}
 
@@ -226,11 +226,11 @@ func projectExecution(traceSlice Slice, targetTraceOwnerID string, cutoff *Front
 	for _, factID := range traceSlice.OwnerPaths[targetTraceOwnerID] {
 		visible, ok := traceSlice.FactsByID[factID]
 		if !ok {
-			return nil, fmt.Errorf("projectExecution: fact %s on the owner path is not in the slice", factID)
+			return nil, fmt.Errorf("ProjectExecution: fact %s on the owner path is not in the slice", factID)
 		}
 		fact, isRecord := visible.(Record)
 		if !isRecord {
-			return nil, fmt.Errorf("projectExecution requires payload-visible facts")
+			return nil, fmt.Errorf("ProjectExecution requires payload-visible facts")
 		}
 		if id, present := fact.Body.Payload["execution_id"]; present && id != nil {
 			if s, isStr := id.(string); !isStr || s != targetTraceOwnerID {
@@ -266,13 +266,13 @@ func projectExecution(traceSlice Slice, targetTraceOwnerID string, cutoff *Front
 	return exec, nil
 }
 
-// projectExecutionFromStore resolves a frontier and projects an execution.
-func projectExecutionFromStore(store *SQLiteTraceStore, readContext ReadContext, cutoff Frontier) (*Execution, error) {
+// ProjectExecutionFromStore resolves a frontier and projects an execution.
+func ProjectExecutionFromStore(store *SQLiteTraceStore, readContext ReadContext, cutoff Frontier) (*Execution, error) {
 	slice, err := store.ResolveFrontier(readContext, cutoff.FrontierID, ModeBoth)
 	if err != nil {
 		return nil, err
 	}
-	return projectExecution(slice, cutoff.TargetTraceOwnerID, &cutoff)
+	return ProjectExecution(slice, cutoff.TargetTraceOwnerID, &cutoff)
 }
 
 // executionCutoffFrom synthesizes a cutoff for a slice, mirroring Python's

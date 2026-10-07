@@ -136,7 +136,7 @@ func TestExecutionIDForMatchesPython(t *testing.T) {
 // kind label and payload keys, including parent_execution_id as JSON null
 // when absent — "" would digest differently.
 func TestExecutionDraftShapes(t *testing.T) {
-	created := executionCreatedDraft("exec:abc", "Task", map[string]any{"x": 1}, "")
+	created := ExecutionCreatedDraft("exec:abc", "Task", map[string]any{"x": 1}, "")
 	if created.Mode != Declaration || created.SchemaRef != SchemaExecutionCreated || created.KindLabel != "execution_created" {
 		t.Errorf("created draft: %+v", created)
 	}
@@ -147,17 +147,17 @@ func TestExecutionDraftShapes(t *testing.T) {
 		t.Errorf("absent parent must be JSON null, got %v", v)
 	}
 
-	withParent := executionCreatedDraft("exec:abc", "Task", nil, "exec:parent")
+	withParent := ExecutionCreatedDraft("exec:abc", "Task", nil, "exec:parent")
 	if v := withParent.Payload["parent_execution_id"]; v != "exec:parent" {
 		t.Errorf("parent link = %v, want exec:parent", v)
 	}
 
-	started := executionStartedDraft("exec:abc")
+	started := ExecutionStartedDraft("exec:abc")
 	if started.Mode != Capture || started.SchemaRef != SchemaExecutionStarted || started.KindLabel != "execution_started" {
 		t.Errorf("started draft: %+v", started)
 	}
 
-	completed := executionCompletedDraft("exec:abc", map[string]any{"ok": true})
+	completed := ExecutionCompletedDraft("exec:abc", map[string]any{"ok": true})
 	if completed.Mode != Capture || completed.SchemaRef != SchemaExecutionCompleted || completed.KindLabel != "execution_completed" {
 		t.Errorf("completed draft: %+v", completed)
 	}
@@ -165,7 +165,7 @@ func TestExecutionDraftShapes(t *testing.T) {
 		t.Error("completed payload must carry outputs")
 	}
 
-	failed := executionFailedDraft("exec:abc", "boom")
+	failed := ExecutionFailedDraft("exec:abc", "boom")
 	if failed.Mode != Capture || failed.SchemaRef != SchemaExecutionFailed || failed.KindLabel != "execution_failed" {
 		t.Errorf("failed draft: %+v", failed)
 	}
@@ -189,7 +189,7 @@ func replayExecutionVector(t *testing.T, doc executionVectorDoc, vec executionVe
 	for _, step := range vec.Steps {
 		switch step.Kind {
 		case "create":
-			receipt, err := store.Append(TrustedAppendContext, createExecutionBatch(
+			receipt, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
 				step.AppendIntentID, vec.ExecutionID, vec.TaskRef, vec.Inputs, "", nil,
 			))
 			if err != nil {
@@ -215,7 +215,7 @@ func replayExecutionVector(t *testing.T, doc executionVectorDoc, vec executionVe
 			}
 			causalTail = receipt.FactIDs[len(receipt.FactIDs)-1]
 		case "complete":
-			receipt, err := store.Append(TrustedAppendContext, completeExecutionBatch(
+			receipt, err := store.Append(TrustedAppendContext, CompleteExecutionBatch(
 				step.AppendIntentID, vec.ExecutionID, step.Outputs, []string{causalTail},
 			))
 			if err != nil {
@@ -223,7 +223,7 @@ func replayExecutionVector(t *testing.T, doc executionVectorDoc, vec executionVe
 			}
 			terminalFactID = receipt.FactIDs[len(receipt.FactIDs)-1]
 		case "fail":
-			receipt, err := store.Append(TrustedAppendContext, failExecutionBatch(
+			receipt, err := store.Append(TrustedAppendContext, FailExecutionBatch(
 				step.AppendIntentID, vec.ExecutionID, step.Error, []string{causalTail},
 			))
 			if err != nil {
@@ -231,7 +231,7 @@ func replayExecutionVector(t *testing.T, doc executionVectorDoc, vec executionVe
 			}
 			terminalFactID = receipt.FactIDs[len(receipt.FactIDs)-1]
 		case "frontier":
-			_, err := publishExecutionFrontier(store, TrustedAppendContext,
+			_, err := PublishExecutionFrontier(store, TrustedAppendContext,
 				step.FrontierID, vec.ExecutionID, terminalFactID, "", "", nil)
 			if err != nil {
 				t.Fatalf("replay frontier: %v", err)
@@ -293,9 +293,9 @@ func TestExecutionVectorRunSequenceReplay(t *testing.T) {
 	}
 
 	// The fold must agree with the vector's recorded terminal state.
-	exec, err := projectExecutionFromStore(store, reader, cutoff)
+	exec, err := ProjectExecutionFromStore(store, reader, cutoff)
 	if err != nil {
-		t.Fatalf("projectExecutionFromStore: %v", err)
+		t.Fatalf("ProjectExecutionFromStore: %v", err)
 	}
 	if exec.Status != ExecutionSucceeded {
 		t.Errorf("status = %s, want succeeded", exec.Status)
@@ -344,9 +344,9 @@ func TestExecutionVectorFailSequenceReplay(t *testing.T) {
 		t.Errorf("cutoff = %+v, want %+v", cutoff, want)
 	}
 
-	exec, err := projectExecutionFromStore(store, reader, cutoff)
+	exec, err := ProjectExecutionFromStore(store, reader, cutoff)
 	if err != nil {
-		t.Fatalf("projectExecutionFromStore: %v", err)
+		t.Fatalf("ProjectExecutionFromStore: %v", err)
 	}
 	if exec.Status != ExecutionFailed {
 		t.Errorf("status = %s, want failed", exec.Status)
@@ -364,7 +364,7 @@ func TestExecutionVectorFailSequenceReplay(t *testing.T) {
 func TestTerminalFrontierLawRejectsNonTerminal(t *testing.T) {
 	store := newMemStore(t)
 	execID := ExecutionIDFor("law:terminal:create", "execution")
-	receipt, err := store.Append(TrustedAppendContext, createExecutionBatch(
+	receipt, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
 		"law:terminal:create", execID, "Task", nil, "", nil,
 	))
 	if err != nil {
@@ -372,7 +372,7 @@ func TestTerminalFrontierLawRejectsNonTerminal(t *testing.T) {
 	}
 	startedID := receipt.FactIDs[len(receipt.FactIDs)-1]
 
-	_, err = publishExecutionFrontier(store, TrustedAppendContext,
+	_, err = PublishExecutionFrontier(store, TrustedAppendContext,
 		"frontier:law:terminal", execID, startedID, "", "", nil)
 	if err == nil {
 		t.Fatal("frontier through a started fact was published, want rejection")
@@ -389,7 +389,7 @@ func TestProjectExecutionFoldStates(t *testing.T) {
 	store := newMemStore(t)
 	execID := ExecutionIDFor("fold:run:create", "execution")
 
-	create, err := store.Append(TrustedAppendContext, createExecutionBatch(
+	create, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
 		"fold:run:create", execID, "FoldTask", map[string]any{"x": json.Number("1")}, "", nil,
 	))
 	if err != nil {
@@ -403,7 +403,7 @@ func TestProjectExecutionFoldStates(t *testing.T) {
 	// created+started land in one batch, so the fold is running from the first
 	// read; "pending" is a fold-internal state the both-mode requirement makes
 	// unobservable — a declarations_only slice would show it, and is rejected.
-	exec, err := projectExecution(pending, execID, nil)
+	exec, err := ProjectExecution(pending, execID, nil)
 	if err != nil {
 		t.Fatalf("project running: %v", err)
 	}
@@ -417,7 +417,7 @@ func TestProjectExecutionFoldStates(t *testing.T) {
 		t.Errorf("started fact = %s, want %s", exec.StartedFactID, create.FactIDs[1])
 	}
 
-	complete, err := store.Append(TrustedAppendContext, completeExecutionBatch(
+	complete, err := store.Append(TrustedAppendContext, CompleteExecutionBatch(
 		"fold:run:complete", execID, map[string]any{"done": true},
 		[]string{create.FactIDs[len(create.FactIDs)-1]},
 	))
@@ -428,7 +428,7 @@ func TestProjectExecutionFoldStates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read terminal: %v", err)
 	}
-	exec, err = projectExecution(running, execID, nil)
+	exec, err = ProjectExecution(running, execID, nil)
 	if err != nil {
 		t.Fatalf("project terminal: %v", err)
 	}
@@ -455,7 +455,7 @@ func TestProjectExecutionFoldStates(t *testing.T) {
 func TestProjectExecutionRequiresBothModes(t *testing.T) {
 	store := newMemStore(t)
 	execID := ExecutionIDFor("mode:run:create", "execution")
-	_, err := store.Append(TrustedAppendContext, createExecutionBatch(
+	_, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
 		"mode:run:create", execID, "Task", nil, "", nil,
 	))
 	if err != nil {
@@ -466,7 +466,7 @@ func TestProjectExecutionRequiresBothModes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	_, err = projectExecution(slice, execID, nil)
+	_, err = ProjectExecution(slice, execID, nil)
 	if !errors.Is(err, ErrProjectionMode) {
 		t.Fatalf("captures_only slice fed to the fold: got %v, want ErrProjectionMode", err)
 	}
