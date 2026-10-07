@@ -16,6 +16,114 @@ document wins; where they disagree on API shape, the workstream plan wins.
 
 ---
 
+## 0. Status — verified against the tree, 2026-10-05
+
+*Added during a reconciliation pass. Every entry below was checked against git
+tags, commit contents, and file presence — not inferred from the plan's own
+prose. Legend: ✅ done · 🔄 partial · ⬜ not started.*
+
+**HEAD at verification:** `55b4daf` (2026-09-17), **11 commits past `v0.4.0`**, none
+of them released for the core module.
+
+**The working tree is now clean** apart from this plan edit and an untracked `.kilo/`
+(tooling state). The containerd work that was in flight at the first pass has been
+committed as **`603fdcf`** — six files, +1202/−48 — and the live harness is now
+tracked. That commit is what T0.5's verdict below is based on.
+
+### ⚠️ Finding first: M0's tag does not contain M0's contents
+
+| Fact | Evidence |
+|---|---|
+| `v0.4.0` points at | `0c62788` — "Merge pull request #4 from `buchenberg/feat/containerd`" (2026-09-16) |
+| Bug batch `4203993` contained in `v0.4.0`? | **No** — `git merge-base --is-ancestor 4203993 v0.4.0` → exit 1 |
+| Core tags containing the bug batch | **NONE** |
+| Tag that does contain it | `sandbox/containerd/v0.1.0` → `e9252c9` (2026-09-17), i.e. *later* than the core tag |
+
+M0 is defined as *"Sandbox substrate shipped, tagged, consumable; bug batch; CI
+bootstrap"* (§3). The tag exists; the bug batch and CI do not. Anyone resolving
+`go get …@v0.4.0` gets the pre-fix code, and the nested containerd module pins
+exactly that version while its own tree already carries the fixes.
+
+**Decided (§15, 2026-10-05): cut `v0.4.1`** at/after HEAD before any Phase 1
+work — tracked as **T0.8** below. It is a pure patch release (bug batch only, no
+API break), it makes §3's M0 claim true, and it unblocks `yaah`, which otherwise
+has to pin a pseudo-version. Do **not** fold the bug batch into `v0.5.0` — that
+release already carries a deliberate digest-behaviour break (R4) and should not
+also be a bug-fix vehicle.
+
+### Phase 0 — Release hygiene & bug batch
+
+| ID | Task | Status | Evidence |
+|---|---|---|---|
+| T0.1 | Merge `feat/containerd` → `main` | ✅ | `0c62788` (PR #4) |
+| T0.2 | CHANGELOG + tag `v0.4.0` | 🔄 | CHANGELOG ✅ (`89ebeb3`, reconstructs v0.1.0→v0.4.0); **tag mis-positioned** — see finding above |
+| T0.3 | LICENSE | ✅ | `a7562d0` — MIT, matching upstream |
+| T0.4 | containerd publishability + tag | 🔄 | `40a2178` removes `replace`, `require`s tagged `v0.4.0`; tag `sandbox/containerd/v0.1.0` exists. **Build-tag split incomplete**: the only `//go:build` in the nested module is on `live_test.go` (`linux && !nolive`); no portable/tagged split of `client.go` as specified |
+| T0.5 | Manual live-daemon smoke | ❌ **FAILED** | **Run 2026-10-07 against containerd v2.3.5 (overlayfs).** Harness committed (`603fdcf`), 5 live tests added, and **nine defects found and fixed** — see `603fdcf`. But the suite is **not reliably green: 3 of 5 consecutive runs failed, with a different test failing each time**, which is the signature of a shared-resource race rather than a per-test bug. Root cause established by inspection: **the adapter holds no containerd lease** (the only "lease" matches in `client.go` are the word *release* in a comment and an error string), and this daemon's GC is aggressive (`mutation_threshold = 100`, `schedule_delay = '0s'`, `startup_delay = '100ms'`). `Capture` stops the task and then prepares a successor whose parent is the just-committed snapshot — which is **unreferenced** in that window, so the GC may reap it. Observed directly: `Capture: prepare successor snapshot: parent snapshot shepherd/<id>/committed/1 does not exist: not found`, followed by the cleanup `Destroy` failing on an already-reaped `active/0`. **Decisive validation is the fix itself: add the lease and require a green soak.** Tracked as T0.9 |
+| T0.5b | ~~Record live-daemon result~~ | ⬜ | Blocked on T0.9 — the README status note (`README.md:269-275`) must not claim the daemon path is verified until the soak is green |
+| T0.6 | Bug batch (6 items) | ✅ | `4203993` touches `checkpoint.go`, `sandbox.go`, `sandbox_git.go`, `scope.go`, `store.go`, `supervisor.go`, `types.go` + both containerd files, with tests |
+| T0.7 | CI bootstrap | ✅ | `7281fe1` + `3cf961d` + `55b4daf`; `ci.yml` has the 3-OS matrix, `gofmt` fail-on-output, `go vet`, `go test -race`, `go build -trimpath`, and a linux containerd job |
+| T0.8 | **Cut `v0.4.1`** at/after HEAD so a core release contains the Phase 0 bug batch; repin `sandbox/containerd/go.mod` to it. Closes the §0 mis-tag finding. | `CHANGELOG.md`, tag, `sandbox/containerd/go.mod` | 0.25d | T0.5 committed |
+| T0.9 | **Hold a containerd lease for the sandbox's lifetime** so its snapshots cannot be garbage-collected. Create a lease in `Create` (`LeasesService().Create`, namespace-scoped), thread `leases.WithLease(...)` through every snapshot/container/content call, and delete it in `Destroy`. Accept: **≥10 consecutive green soak runs** of the live suite | `client.go`, `sandbox.go`, `live_test.go` | 0.5–1d | T0.5 |
+
+**Phase 0 is materially complete except T0.5, which FAILED, and T0.8, which is
+pending.** Do not mark M0 closed until T0.9 is green and T0.8 is tagged.
+
+**The stop-gate did its job.** T0.5 was written as a de-risking step precisely so
+that a fatal containerd problem would surface before Phase 2b built on it, and it
+surfaced exactly that: nine defects fixed, and a tenth — GC-vulnerable snapshots —
+that makes the backend unfit for a long-running agent. Per §4 and the yaah plan's
+step-2 instruction (**"If it fails, stop"**), **Phase 2b and any `yaah` isolated-
+workspace activation remain blocked on T0.9.**
+
+T0.8 is **not** blocked by T0.9: the core bug batch is independent of the
+containerd lease, and `yaah` needs a pinnable tag. Cutting `v0.4.1` now is correct;
+the released nested module should carry a known-limitation note until T0.9 lands.
+
+### Phase 1 — ABI trust (v0.5.0)
+
+**Nothing has started.** All nine tasks are ⬜. Verified directly, not assumed:
+
+| ID | Task | Status | Evidence |
+|---|---|---|---|
+| T1.1 | Canonical string escaper | ⬜ | `canonical.go:34` `CanonicalJSONBytes` is still `json.Marshal`; the HTML-escaping divergence is live. `canonicalJSONOrdered` (`:41`) exists but is unexported |
+| T1.2 | `formatCanonicalFloat` | ⬜ | `canonical.go:62` still carries the integral-float rewrite (`val == float64(int64(val))` → `%d`), which emits `1` where CPython emits `1.0` |
+| T1.3 | Property test corpus | ⬜ | `testdata/canonical_corpus_v0.json` absent |
+| T1.4 | Extended golden vectors | ⬜ | Shared goldens unchanged; still ints/strings only (no `<>&`, no decimals) |
+| T1.5 | Store-level vectors | ⬜ | `testdata/store_vectors_v0.json` absent |
+| T1.6 | `ReadPathPrefix` | ⬜ | **0 implementations** in any `.go` file; `path_entries` table already exists |
+| T1.7 | Conformance suite port | ⬜ | `conformance_test.go` absent |
+| T1.8 | Law coverage map | ⬜ | `docs/law-coverage.md` absent |
+| T1.9 | `OpMaterialize`/`OpObserve` doc | ⬜ | — |
+
+**Also absent:** `testdata/UPSTREAM.md`, needed by the §13 v1.0 checklist.
+
+### Phases 2–4
+
+All ⬜ for Phases 2a, 3 and 4. No evidence of work on executions/relations/history
+(2a), the merge gate or settlement (3), or recovery/durability (4).
+
+**Phase 2b's harness now exists and has been exercised** (`sandbox/containerd/live_test.go`,
+committed in `603fdcf`, env-gated exactly as T2b.7 specifies). It is not a
+scaffold: it found nine defects and exposed a tenth that blocks the phase. T2b.7
+must not be estimated or started until **T0.9** makes the soak green — a
+materialization path built on GC-vulnerable snapshots would fail nondeterministically
+under a real workload, which is worse than failing outright.
+
+### Sequencing consequence
+
+The §4 dependency graph puts a **hard gate** at Phase 1 → Phase 2. Nothing in
+Phase 2b (the sandbox/substrate work) should start before v0.5.0, per §2
+principle 1. Note the asymmetry: **a `yaah`-side isolated workspace does not need
+Phase 1** because it consumes the `Sandbox` interface directly rather than the
+trace-mediated `WorkspaceSubstrate`. That distinction is developed in the
+companion plan, `yaah/docs/plans/isolated-workspace-activation.md` §7.
+
+**This section is the maintained status record** until the per-task status column
+in §14's convention is applied inline below. Keep it in sync at each phase exit.
+
+---
+
 ## 1. Reading guide
 
 - Work is organized into **phases 0–4**. Each phase is independently
@@ -50,7 +158,7 @@ document wins; where they disagree on API shape, the workstream plan wins.
 
 | Milestone | Tag | Phase | Contents | Target (weeks from start) |
 |---|---|---|---|---|
-| M0 | **v0.4.0** (+ `sandbox/containerd/v0.1.0`) | 0 | Sandbox substrate shipped, tagged, consumable; bug batch; CI bootstrap | W1 |
+| M0 | **v0.4.1** (patch; supersedes the mis-placed `v0.4.0`) + `sandbox/containerd/v0.1.0` | 0 | Sandbox substrate shipped, tagged, consumable; bug batch; CI bootstrap | W1 |
 | M1 | **v0.5.0** | 1 | Canonical byte-identity proven; conformance suite; store vectors; `ReadPathPrefix` | W2–3 |
 | M2 | **v0.6.0** | 2a | Execution/relation/history schemas, projections, runtime handles | W4–6 |
 | M3 | **v0.7.0** | 2b | Substrates, materialize dispatch + ledger, `WorkspaceSubstrate` | W5–7 (overlaps 2a) |
@@ -116,15 +224,26 @@ Linux spot-check (WSL/CI).
 | T0.6 | Bug batch (single PR, plan 05 §5): ① `HighErrorRateRule` denominator (`supervisor.go` ~393); ② `ExternalAnchor.AnchorKind` arg-position (`store.go` ~1034/1098); ③ scope-event intent IDs → atomic seq (`scope.go`); ④ `ExecResult.Duration` populated in containerd `Exec`; ⑤ stale `TreeState`/`DiffSince` comments (`sandbox.go:44`, `workspace_test.go:282`); ⑥ regression test: `Capture` with caller's pre-staged index | `supervisor.go`, `store.go`, `scope.go`, `sandbox/containerd/sandbox.go`, misc | 1d | T0.1 |
 | T0.7 | CI bootstrap (`ci.yml`): matrix `ubuntu/windows/macos` × `go test ./... -count=1 -race` (core); linux-only job builds+tests nested module; `go vet`; `gofmt -l` fail-on-output | `.github/workflows/ci.yml` | 0.5d | T0.1 |
 
-**Exit criteria / acceptance**:
-- [ ] `go get github.com/buchenberg/shepherd-kernel-go@v0.4.0` resolves and
+**Exit criteria / acceptance** (annotated 2026-10-05 — see §0):
+- [x] `go get github.com/buchenberg/shepherd-kernel-go@v0.4.0` resolves and
       builds; nested module resolvable without `replace`.
+      *(Verified: `sandbox/containerd/go.mod` has no `replace` and requires
+      tagged `v0.4.0`. Note the tag predates the bug batch — §0.)*
 - [ ] CI green on 3 OSes; nested module compiles on linux, is excluded (via
       build tags) — not broken — elsewhere.
+      *(Workflow exists with the 3-OS matrix and a linux containerd job;
+      **run status not verified from the tree**. Build-tag exclusion is
+      **partial** — only `live_test.go` is tagged.)*
 - [ ] All six bug-batch fixes merged with tests; T0.5 smoke result recorded
       (pass → phase 2b de-risked; fail → containerd findings converted to
       tasks before T2b.7).
-- [ ] CHANGELOG + LICENSE present.
+      *(Fixes merged with tests ✅ via `4203993`; **T0.5 not done**, so this
+      box stays open — it is the gate for Phase 2b.)*
+- [x] CHANGELOG + LICENSE present.
+      *(Verified: `89ebeb3`, `a7562d0`.)*
+- [ ] **Added (T0.8, decided §15):** `v0.4.1` tagged at/after `55b4daf` so that
+      at least one core release contains the bug batch (§0 finding), and
+      `sandbox/containerd/go.mod` repinned to it.
 
 **yaah coordination**: v0.4.0 is API-compatible with what yaah's
 `feat/containerd`-era code already expects; publish the tag so yaah can pin it.
@@ -319,3 +438,146 @@ v0.9.0 tagged; yaah pinned and compiling against ctx APIs.
   in the same PR.
 - This document is updated (status column per task: ⬜/🔄/✅) as work lands;
   it is the single source of sequencing truth.
+  *(Superseded in practice by §0, which is currently the maintained status
+  record. Apply the inline status column, or point §14 at §0 — do not let both
+  drift.)*
+
+---
+
+## 15. Decision note: enforcement vs materialization (R6)
+
+**Status: DECIDED — 2026-10-05 · Owner: buchenberg · Path A, with C as the
+designated fallback and B requiring its own plan.** R6 requires a written
+decision note before the containment fence is touched; this is that note. The
+fence **stands**, and the decision is to stay inside it.
+
+**Decision (summary).** The kernel remains a materialization/reversibility seam.
+No Go containment work is authorised. If real confinement is later required, the
+answer is **Option C — compose with a verified jail rather than port one** —
+unless B is deliberately chosen with its own plan and parity story. The
+re-evaluation gate is `plans/05 §4` durability (T4.1–T4.2), which is the gap
+`yaah` actually feels today.
+
+### 15.1 The fence, and what it protects
+
+R6 (§11) flags scope creep toward vcs-core parity — *"world values, carriers,
+jails"* — as Medium likelihood / **High** impact, with *"PARITY-PLAN §4 is the
+fence; any task touching it requires a written decision note reversing a
+GAP-REPORT rejection."*
+
+The fence protects decisions that were argued, not merely deferred.
+`GAP-REPORT.md:42-49` rejects two approaches with reasons:
+
+- **file-delta materialization** — git is a better materializer, and deltas
+  still miss bash side effects;
+- **effect-stream replay** — *"bash side effects are not invertible and the
+  trace is not a replayable mutation log."*
+
+and the resolution table records *"Scope state model (fold invariant) —
+❌ deliberately not ported"*. These are load-bearing (§2 principle 4).
+
+### 15.2 The fork: "sandbox work" means two different projects
+
+The word covers two activities with different scope, different prerequisites,
+and different fences.
+
+**Path A — materialization and reversibility (in scope, planned).**
+`Sandbox` as a seam for capturing, applying and diffing `WorkspaceState`, plus
+declaration→capture materialization of recorded intents. Planned in full:
+`plans/03` (`WorkspaceSubstrate`, gated on Phase 1) and `plans/05 §4`
+(durability). This is what the kernel's `Sandbox` interface *is*: git in-place and
+worktree backends written, containerd backend written, capability gating via
+`Capabilities()` + `ErrUnsupported`.
+
+**Path B — OS-level enforcement (fenced).** Actual confinement of untrusted
+execution — Seccomp/Landlock/Seatbelt-class syscall denial, network egress
+policy, secret injection. In the Python reference this is `shepherd`'s
+`vcs-core`: `_seatbelt_containment.py`, `_landlock_containment.py`,
+`_containment.py`, `_egress_broker.py`, `_execution_capability.py`, with a
+three-part conformance probe and `UnsupportedMayProfileError` refusing rather
+than weakening. **None of it is ported, and R6 says it must not be by accident.**
+
+The distinction is not academic. The kernel's own docs concede it:
+`sandboxWorkspace.ResolvePath` notes containment is *lexical* (`path.Clean`), so
+an in-sandbox symlink can escape the root — *"a weaker guarantee than the host
+validator's symlink resolution, and it is bounded by the container"*
+(`yaah/internal/tools/workspace_sandbox.go:55-58`). **A `Sandbox` is not a jail.**
+
+### 15.3 Options
+
+| | Option | Cost | Gets you |
+|---|---|---|---|
+| **A** | **Stay inside the fence.** Finish materialization: `plans/03`, then `plans/05 §4` durability. | Already estimated (~1–2 wk + ~2 wk) | Reversible, auditable, trace-mediated workspace operations; rollback that survives restart |
+| **B** | **Reverse the fence for a Go jail.** Port the containment ladder / syscall jails. | Unestimated; realistically a new workstream | Real confinement in the Go stack; removes the `yaah` "plumbed but not active, bounded by the container" caveat |
+| **C** | **Compose rather than port.** Keep the kernel jail-free; get enforcement from the substrate (`daytona`-class sandbox, or `shepherd`'s Python path over ACP). | Integration work, no kernel divergence | Enforcement without forking the ABI or diverging from Python |
+
+### 15.4 Considerations bearing on the choice
+
+**For A (and against B):**
+- The kernel's value is a **frozen cross-language ABI**. A Go-only jail adds a
+  large subsystem with no Python counterpart, so it cannot be vector-pinned —
+  and vectors are the arbiter of parity (§2 principle 3). A jail is precisely
+  the kind of thing that is *hard* to pin cross-language.
+- `plans/03` already delivers the property `yaah` most needs: isolation of
+  *effects*, which is what `supervised_task`'s rollback depends on.
+- Enforcement is largely orthogonal to the kernel's purpose. The kernel records
+  and reverses; a container runtime confines. Conflating them is how R6's High
+  impact arrives.
+
+**For B (and against A):**
+- "Plumbed but not active" is an unsatisfying resting place for a safety story,
+  and Path A does not change it. A user reading `yaah`'s sandbox code may
+  reasonably assume confinement that does not exist.
+- The seam already exists if it is ever wanted: `SandboxCapabilities` carries a
+  `Containment` field (`sandbox.go:24-41`), `ExecRequest`/`ExecResult` are
+  modelled on Daytona's toolbox request specifically so a future backend is a
+  straight mapping (`sandbox.go:94-98`), and `Containment` is already a typed
+  vocabulary (`full|contained|buffered|uncontained`). Adding enforcement is a
+  backend concern, not a redesign.
+
+**For C:**
+- Avoids the divergence risk entirely and is the only option that gets a
+  *verified* jail (shepherd's is the most rigorously probed in this stack:
+  liveness + per-root + deny-closed, with the additive-root nesting attack
+  closed at bind time).
+- Costs an integration boundary, and `shepherd` is alpha with Windows
+  unsupported.
+
+### 15.5 Decision and its consequences
+
+**DECIDED: take A now. C is the designated fallback if enforcement becomes a
+requirement. B requires its own plan.**
+
+Consequences, in force as of 2026-10-05:
+
+1. **No containment task may be scheduled** against this repo. The fence stands:
+   no syscall jails, no egress broker, no containment ladder, no `may=`-style
+   grant vocabulary in Go.
+2. **`plans/05 §4` durability (T4.1–T4.2) is the re-evaluation gate.** Finish
+   trace-based recovery and checkpoint durability, then revisit enforcement with
+   the durability question closed. This is also the highest-value work for `yaah`
+   today: in-memory checkpoints mean rollback does not survive a restart.
+3. **`plans/03` proceeds unchanged.** `WorkspaceSubstrate` is in-fence work and
+   remains the plan for the materialization path — still gated on Phase 1 by §4.
+4. **Documentation must not overclaim.** Because Path A leaves the
+   "plumbed but not active, bounded by the container" caveat in place, README and
+   package docs must state plainly that `Sandbox` is a *materialization seam, not
+   a containment boundary*, and that `sandboxWorkspace.ResolvePath` containment is
+   lexical. Add this to T4.7's doc pass. A user must not be able to read the
+   `Sandbox` docs and infer confinement.
+5. **If C is ever adopted**, it is an integration, not a fork: the jail stays in
+   the substrate (a `daytona`-class sandbox, or `shepherd`'s Python `vcs-core`
+   over ACP), and this repo gains no containment surface.
+
+If B is ever proposed, it must arrive with: the Python-side story (permanent
+divergence, or a port awaiting upstream?), a non-vector verification strategy to
+replace the missing cross-language pin (§2 principle 3), the
+`SandboxCapabilities.Containment` semantics, and an explicit statement of what
+`yaah` may then claim. Until that exists, no task may touch the fence.
+
+### 15.6 What this note does *not* decide
+
+It does not authorise containment work. It does not change `plans/03`,
+`plans/05`, or `PARITY-PLAN §4`, all of which proceed as written. What changes is
+that the fork is now closed rather than pending: **Path A is the plan of record**,
+and any future move to B re-opens this note rather than silently extending it.

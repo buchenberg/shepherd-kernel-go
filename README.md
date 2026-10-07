@@ -269,10 +269,22 @@ Two backends ship in the core module:
 A third backend lives in the nested module `sandbox/containerd/`: an
 overlay-snapshotter backend with namespace isolation. Its snapshot lifecycle,
 teardown ordering, layer pruning, file I/O, and diff are implemented and
-unit-tested against containerd's real snapshotter interface. Its daemon adapter
-compiles but has **not** been exercised — it needs a Linux host with a running
-containerd daemon and root or user namespaces. It is Linux-only and can never be
-this module's default.
+unit-tested against containerd's real snapshotter interface.
+
+**Daemon status: exercised, not yet reliable.** The live harness
+(`sandbox/containerd/live_test.go`, env-gated on `SHEPHERD_CONTAINERD_ADDR`) was
+first run against a real containerd v2.3.5 in October 2026. It found and fixed
+nine defects the fakes could not reach — exec never started its process, the
+rootfs snapshot key was the manifest digest rather than the layer chainID,
+teardown orphaned exec'd processes, and `Diff` mutated the caller's git index.
+**But the suite is flaky: 3 of 5 consecutive runs failed, with a different test
+failing each time.** The cause is that the adapter holds **no containerd lease**,
+so once `Capture` stops the task its just-committed snapshot is unreferenced and
+the daemon's garbage collector can reap it before the successor is prepared
+(`mutation_threshold = 100`, `schedule_delay = 0s` on a default install).
+Until a lease is held for the sandbox's lifetime, treat this backend as
+**unverified**: it can lose its workspace mid-operation under a long run. It is
+Linux-only and can never be this module's default.
 
 ### Workspace State
 
