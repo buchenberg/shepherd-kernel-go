@@ -82,7 +82,12 @@ func TestCanonicalEdgeVectorsMatchPython(t *testing.T) {
 	if doc.CanonicalVersion != CanonicalVersion {
 		t.Errorf("vector file canonical_version = %q, want %q", doc.CanonicalVersion, CanonicalVersion)
 	}
-	if doc.SourceCommit == "" || doc.SourceCommit == "unknown" {
+	// HasPrefix, not ==: the generator's git_commit swallows every failure and
+	// returns "unknown (<exc>)", which an equality check against "unknown"
+	// would let through — a corpus regenerated without a usable Python
+	// checkout would then pass with provenance that names nothing. The corpus
+	// test checks the same way.
+	if doc.SourceCommit == "" || strings.HasPrefix(doc.SourceCommit, "unknown") {
 		t.Error("vector file has no source_commit, so the vectors cannot be traced to a revision")
 	}
 
