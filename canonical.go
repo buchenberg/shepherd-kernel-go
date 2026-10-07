@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -56,7 +58,7 @@ func sha256Sum(b []byte) []byte {
 // integers and silently corrupted real float values.
 func CanonicalJSONBytes(v any) ([]byte, error) {
 	var buf strings.Builder
-	if err := writeCanonicalValue(&buf, v); err != nil {
+	if err := writeCanonicalValue(&buf, v, make(map[canonicalVisit]bool)); err != nil {
 		return nil, err
 	}
 	return []byte(buf.String()), nil
@@ -124,12 +126,6 @@ func pythonExponent(exp int) string {
 	return sign + digits
 }
 
-// isJSONIntegerToken reports whether a JSON number token denotes an integer,
-// meaning Python's json.loads would produce an int rather than a float.
-func isJSONIntegerToken(s string) bool {
-	return !strings.ContainsAny(s, ".eE")
-}
-
 // writeCanonicalString writes s as CPython's json.dumps(ensure_ascii=False)
 // would: UTF-8 passed through verbatim, with only the mandatory escapes.
 //
@@ -137,7 +133,16 @@ func isJSONIntegerToken(s string) bool {
 // UTF-8 sequence is >= 0x80, so none can collide with an escape, and copying
 // them one at a time passes the sequence through unchanged — including the
 // U+2028 and U+2029 that Python leaves raw and that many encoders escape.
-func writeCanonicalString(buf *strings.Builder, s string) {
+func writeCanonicalString(buf *strings.Builder, s string) error {
+	if !utf8.ValidString(s) {
+		// CPython raises UnicodeEncodeError when it encodes a lone surrogate as
+		// UTF-8 to produce the final bytes, so this mirrors an existing failure
+		// rather than inventing one. The alternatives are both silent: pass the
+		// bytes through and emit invalid JSON, or substitute U+FFFD the way
+		// encoding/json does and digest a string the caller never held.
+		return fmt.Errorf("canonical JSON: string is not valid UTF-8: %q", s)
+	}
+
 	buf.WriteByte('"')
 	for i := 0; i < len(s); i++ {
 		switch c := s[i]; c {
@@ -165,19 +170,118 @@ func writeCanonicalString(buf *strings.Builder, s string) {
 		}
 	}
 	buf.WriteByte('"')
+	return nil
+}
+
+// canonicalVisit identifies an in-progress container, so a cycle can be reported
+// rather than overflowing the stack.
+type canonicalVisit struct {
+	kind reflect.Kind
+	ptr  uintptr
+}
+
+// enterContainer marks a container as being written, reporting a cycle if it is
+// already active.
+func enterContainer(seen map[canonicalVisit]bool, kind reflect.Kind, ptr uintptr) error {
+	if ptr == 0 {
+		return nil
+	}
+	key := canonicalVisit{kind: kind, ptr: ptr}
+	if seen[key] {
+		return fmt.Errorf("canonical JSON: circular reference detected")
+	}
+	seen[key] = true
+	return nil
+}
+
+func leaveContainer(seen map[canonicalVisit]bool, kind reflect.Kind, ptr uintptr) {
+	if ptr != 0 {
+		delete(seen, canonicalVisit{kind: kind, ptr: ptr})
+	}
+}
+
+// validJSONNumber reports whether s matches the JSON number grammar:
+//
+//	-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?
+//
+// json.Number carries caller-supplied text, and strconv.ParseFloat is more
+// permissive than JSON — it accepts "Inf", "NaN" and digit separators — so
+// without this a malformed token would be written into digest input as invalid
+// JSON, or accepted where Python's json.loads rejects it.
+func validJSONNumber(s string) bool {
+	i := 0
+	if i < len(s) && s[i] == '-' {
+		i++
+	}
+
+	// Integer part: a lone 0, or a non-zero digit followed by any digits.
+	switch {
+	case i < len(s) && s[i] == '0':
+		i++
+	case i < len(s) && s[i] >= '1' && s[i] <= '9':
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+	default:
+		return false
+	}
+
+	// Optional fraction; a '.' must be followed by at least one digit.
+	if i < len(s) && s[i] == '.' {
+		i++
+		start := i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if i == start {
+			return false
+		}
+	}
+
+	// Optional exponent; the digits are mandatory once e/E appears.
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		i++
+		if i < len(s) && (s[i] == '+' || s[i] == '-') {
+			i++
+		}
+		start := i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if i == start {
+			return false
+		}
+	}
+
+	return i == len(s)
+}
+
+// isJSONIntegerToken reports whether a JSON number token denotes an integer,
+// meaning Python's json.loads would produce an int rather than a float.
+func isJSONIntegerToken(s string) bool {
+	return !strings.ContainsAny(s, ".eE")
 }
 
 // writeCanonicalValue writes v in canonical form.
 //
-// Map keys are sorted at every level. Only string keys are supported: Python
-// coerces int/float/bool/None keys, but a non-string key here means the caller
-// built a payload the kernel never produces, so it is an error rather than a
-// guess.
+// Map keys are sorted at every level, and only string keys are supported: Python
+// coerces int/float/bool/None keys, but a non-string key means the caller built a
+// payload the kernel never produces, so it is an error rather than a guess.
 //
-// Unsupported types are an error, deliberately. The previous implementation fell
-// back to json.Marshal here, which is exactly how the escaping divergence went
-// unnoticed — a silent fallback produces a plausible digest over different bytes.
-func writeCanonicalValue(buf *strings.Builder, v any) error {
+// seen holds the containers currently being written, so a self-referential map or
+// slice is reported instead of overflowing the stack — CPython's json.dumps
+// raises "Circular reference detected". It tracks *ancestors* rather than
+// everything visited, because a value legitimately reachable by two paths is not
+// a cycle.
+//
+// JSON-compatible typed containers ([]int, map[string]int, ...) are accepted, not
+// only map[string]any and []any: the public payload API does not require callers
+// to convert, and rejecting them would break existing callers for no gain. Types
+// JSON cannot represent at all — structs, funcs, channels — remain an explicit
+// error, because the previous json.Marshal fallback is exactly how the escaping
+// divergence went unnoticed: a silent fallback produces a plausible digest over
+// different bytes.
+func writeCanonicalValue(buf *strings.Builder, v any, seen map[canonicalVisit]bool) error {
 	switch val := v.(type) {
 	case nil:
 		buf.WriteString("null")
@@ -188,7 +292,7 @@ func writeCanonicalValue(buf *strings.Builder, v any) error {
 			buf.WriteString("false")
 		}
 	case string:
-		writeCanonicalString(buf, val)
+		return writeCanonicalString(buf, val)
 	case json.Number:
 		// A json.Number carries the original token text, which is the only way to
 		// recover Python's int/float distinction: encoding/json's default
@@ -196,17 +300,25 @@ func writeCanonicalValue(buf *strings.Builder, v any) error {
 		// and `1.0` are different values to Python ("1" vs "1.0").
 		//
 		// Python's json.loads yields an int for a token with no fraction or
-		// exponent and a float otherwise, then json.dumps renders accordingly. So
-		// an integer token is emitted verbatim — which also preserves Python's
-		// arbitrary-precision ints, beyond float64's range — while anything with a
-		// '.' or exponent is parsed and formatted as a float, so `1e2` canonicalises
-		// to `100.0` exactly as Python does rather than staying `1e2`.
+		// exponent and a float otherwise, then json.dumps renders accordingly.
+		// Anything with a '.' or exponent is parsed and formatted as a float, so
+		// `1e2` canonicalises to `100.0` as Python does rather than staying `1e2`.
 		//
 		// Callers decoding JSON payloads for digesting MUST use
 		// json.Decoder.UseNumber() (or unmarshal into json.Number) to reach this
 		// case; see the CanonicalJSONBytes doc comment.
 		s := val.String()
+		if !validJSONNumber(s) {
+			return fmt.Errorf("canonical JSON: json.Number %q is not a valid JSON number", s)
+		}
 		if isJSONIntegerToken(s) {
+			// Integer tokens are emitted as-is, which also preserves Python's
+			// arbitrary-precision ints beyond float64's range — except negative
+			// zero, which Python parses as the integer 0 and re-serialises as "0".
+			if s == "-0" {
+				buf.WriteString("0")
+				return nil
+			}
 			buf.WriteString(s)
 			return nil
 		}
@@ -252,65 +364,213 @@ func writeCanonicalValue(buf *strings.Builder, v any) error {
 	case uint64:
 		buf.WriteString(strconv.FormatUint(val, 10))
 	case []any:
+		if val == nil {
+			buf.WriteString("null")
+			return nil
+		}
+		ptr := reflect.ValueOf(val).Pointer()
+		if err := enterContainer(seen, reflect.Slice, ptr); err != nil {
+			return err
+		}
+		defer leaveContainer(seen, reflect.Slice, ptr)
+
 		buf.WriteByte('[')
 		for i, item := range val {
 			if i > 0 {
 				buf.WriteByte(',')
 			}
-			if err := writeCanonicalValue(buf, item); err != nil {
+			if err := writeCanonicalValue(buf, item, seen); err != nil {
 				return err
 			}
 		}
 		buf.WriteByte(']')
 	case []string:
+		if val == nil {
+			buf.WriteString("null")
+			return nil
+		}
+		ptr := reflect.ValueOf(val).Pointer()
+		if err := enterContainer(seen, reflect.Slice, ptr); err != nil {
+			return err
+		}
+		defer leaveContainer(seen, reflect.Slice, ptr)
+
 		buf.WriteByte('[')
 		for i, item := range val {
 			if i > 0 {
 				buf.WriteByte(',')
 			}
-			writeCanonicalString(buf, item)
+			if err := writeCanonicalString(buf, item); err != nil {
+				return err
+			}
 		}
 		buf.WriteByte(']')
 	case map[string]any:
-		keys := make([]string, 0, len(val))
-		for k := range val {
-			keys = append(keys, k)
+		if val == nil {
+			buf.WriteString("null")
+			return nil
 		}
+		ptr := reflect.ValueOf(val).Pointer()
+		if err := enterContainer(seen, reflect.Map, ptr); err != nil {
+			return err
+		}
+		defer leaveContainer(seen, reflect.Map, ptr)
+
 		// Sorting UTF-8 bytes equals sorting code points, which is what Python's
 		// sort_keys does for str keys.
-		sort.Strings(keys)
+		keys := sortedKeys(len(val), func(yield func(string) bool) {
+			for k := range val {
+				if !yield(k) {
+					return
+				}
+			}
+		})
 		buf.WriteByte('{')
 		for i, k := range keys {
 			if i > 0 {
 				buf.WriteByte(',')
 			}
-			writeCanonicalString(buf, k)
+			if err := writeCanonicalString(buf, k); err != nil {
+				return err
+			}
 			buf.WriteByte(':')
-			if err := writeCanonicalValue(buf, val[k]); err != nil {
+			if err := writeCanonicalValue(buf, val[k], seen); err != nil {
 				return err
 			}
 		}
 		buf.WriteByte('}')
 	case map[string]string:
-		keys := make([]string, 0, len(val))
-		for k := range val {
-			keys = append(keys, k)
+		if val == nil {
+			buf.WriteString("null")
+			return nil
 		}
-		sort.Strings(keys)
+		ptr := reflect.ValueOf(val).Pointer()
+		if err := enterContainer(seen, reflect.Map, ptr); err != nil {
+			return err
+		}
+		defer leaveContainer(seen, reflect.Map, ptr)
+
+		keys := sortedKeys(len(val), func(yield func(string) bool) {
+			for k := range val {
+				if !yield(k) {
+					return
+				}
+			}
+		})
 		buf.WriteByte('{')
 		for i, k := range keys {
 			if i > 0 {
 				buf.WriteByte(',')
 			}
-			writeCanonicalString(buf, k)
+			if err := writeCanonicalString(buf, k); err != nil {
+				return err
+			}
 			buf.WriteByte(':')
-			writeCanonicalString(buf, val[k])
+			if err := writeCanonicalString(buf, val[k]); err != nil {
+				return err
+			}
 		}
 		buf.WriteByte('}')
 	default:
-		return fmt.Errorf("canonical JSON: unsupported type %T", v)
+		return writeCanonicalReflect(buf, val, seen)
 	}
 	return nil
+}
+
+// sortedKeys collects keys via yield and returns them sorted.
+func sortedKeys(n int, yield func(func(string) bool)) []string {
+	keys := make([]string, 0, n)
+	yield(func(k string) bool {
+		keys = append(keys, k)
+		return true
+	})
+	sort.Strings(keys)
+	return keys
+}
+
+// writeCanonicalReflect handles JSON-compatible containers of named or
+// non-interface element types, which the type switch above cannot enumerate.
+// Anything JSON cannot represent is rejected.
+func writeCanonicalReflect(buf *strings.Builder, v any, seen map[canonicalVisit]bool) error {
+	rv := reflect.ValueOf(v)
+
+	switch rv.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if rv.IsNil() {
+			buf.WriteString("null")
+			return nil
+		}
+		return writeCanonicalValue(buf, rv.Elem().Interface(), seen)
+
+	case reflect.Slice, reflect.Array:
+		// A nil slice has no JSON representation of its own; encoding/json emits
+		// null for it, and that is what callers previously got.
+		if rv.Kind() == reflect.Slice && rv.IsNil() {
+			buf.WriteString("null")
+			return nil
+		}
+		var ptr uintptr
+		if rv.Kind() == reflect.Slice {
+			ptr = rv.Pointer()
+		}
+		kind := reflect.Slice
+		if err := enterContainer(seen, kind, ptr); err != nil {
+			return err
+		}
+		defer leaveContainer(seen, kind, ptr)
+
+		buf.WriteByte('[')
+		for i := 0; i < rv.Len(); i++ {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			if err := writeCanonicalValue(buf, rv.Index(i).Interface(), seen); err != nil {
+				return err
+			}
+		}
+		buf.WriteByte(']')
+		return nil
+
+	case reflect.Map:
+		if rv.IsNil() {
+			buf.WriteString("null")
+			return nil
+		}
+		if rv.Type().Key().Kind() != reflect.String {
+			return fmt.Errorf("canonical JSON: map keys must be strings, got %s", rv.Type().Key())
+		}
+		ptr := rv.Pointer()
+		if err := enterContainer(seen, reflect.Map, ptr); err != nil {
+			return err
+		}
+		defer leaveContainer(seen, reflect.Map, ptr)
+
+		keys := rv.MapKeys()
+		names := make([]string, 0, len(keys))
+		for _, k := range keys {
+			names = append(names, k.String())
+		}
+		sort.Strings(names)
+
+		buf.WriteByte('{')
+		for i, name := range names {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			if err := writeCanonicalString(buf, name); err != nil {
+				return err
+			}
+			buf.WriteByte(':')
+			if err := writeCanonicalValue(buf, rv.MapIndex(reflect.ValueOf(name)).Interface(), seen); err != nil {
+				return err
+			}
+		}
+		buf.WriteByte('}')
+		return nil
+
+	default:
+		return fmt.Errorf("canonical JSON: unsupported type %T", v)
+	}
 }
 
 // CanonicalDigest returns the kernel digest for a canonical input payload.

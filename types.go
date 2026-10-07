@@ -1,5 +1,7 @@
 package shepherd
 
+import "sort"
+
 // RecordMode distinguishes observed facts from stated intentions.
 type RecordMode string
 
@@ -40,9 +42,20 @@ const (
 type OperationKind string
 
 const (
-	OpAppend      OperationKind = "append"
-	OpRead        OperationKind = "read"
-	OpPublishCut  OperationKind = "publish_cut"
+	OpAppend     OperationKind = "append"
+	OpRead       OperationKind = "read"
+	OpPublishCut OperationKind = "publish_cut"
+
+	// OpMaterialize and OpObserve are reserved for plan 03 (substrate
+	// materialization) and are not reachable today: no exported entry point
+	// accepts an OperationContext, and the exported AppendContext/ReadContext
+	// helpers set the operation themselves. They are declared so the vocabulary
+	// is fixed before the callers exist.
+	//
+	// Note that OperationContext.Operation is carried but not yet consulted by any
+	// authorization check. Do not rely on it to gate anything until plan 03 wires
+	// it; see TestReservedOperationKindsAreUnreachable, which asserts both facts
+	// so the gap is deliberate rather than assumed.
 	OpMaterialize OperationKind = "materialize"
 	OpObserve     OperationKind = "observe"
 )
@@ -158,6 +171,12 @@ type AppendReceipt struct {
 }
 
 // OperationContext is the trace-facing operation context for kernel operations.
+//
+// Operation records which operation the context was built for, but no
+// authorization check consults it yet: ensureAppendAuthorized and
+// ensureReadAuthorized look only at the trust mode, authority refs and
+// visibility profile. Treat it as descriptive, not enforcing, until plan 03 adds
+// materialization and the checks that go with it.
 type OperationContext struct {
 	ActorRef               string
 	Operation              OperationKind
@@ -265,11 +284,17 @@ type Slice struct {
 	FactsByID         map[string]VisibleRecord
 	ContextsByID      map[string]RetainedContext
 	OwnerPaths        map[string][]string
-	CausalEdges       [][2]string
-	ExternalAnchors   []ExternalAnchor
-	ContextAnchors    []ContextAnchor
-	WitnessesByID     map[string]VisibleRecord
-	WitnessAnchors    []WitnessAnchor
+	// OwnerPathOrder lists the owner paths in the order they were first
+	// encountered while reading. FactIDs uses it so the flattened order is
+	// deterministic and matches Python, where owner_paths is a dict and
+	// TraceSlice.fact_ids() therefore flattens in insertion order. Without it,
+	// FactIDs would iterate Go's map and return a different order every call.
+	OwnerPathOrder  []string
+	CausalEdges     [][2]string
+	ExternalAnchors []ExternalAnchor
+	ContextAnchors  []ContextAnchor
+	WitnessesByID   map[string]VisibleRecord
+	WitnessAnchors  []WitnessAnchor
 }
 
 // ContextAnchor is a visible reference to a retained context hidden by visibility.
@@ -280,10 +305,25 @@ type ContextAnchor struct {
 }
 
 // FactIDs returns all fact IDs across all owner paths in the slice.
+//
+// Paths are visited in the order they were first encountered while reading,
+// matching Python's TraceSlice.fact_ids(), which flattens the insertion-ordered
+// owner_paths dict. The fallback sorts rather than ranging over the map: a
+// hand-built Slice should still produce a stable order, and ranging over a Go map
+// does not.
 func (s Slice) FactIDs() []string {
+	order := s.OwnerPathOrder
+	if len(order) != len(s.OwnerPaths) {
+		order = make([]string, 0, len(s.OwnerPaths))
+		for ref := range s.OwnerPaths {
+			order = append(order, ref)
+		}
+		sort.Strings(order)
+	}
+
 	var ids []string
-	for _, path := range s.OwnerPaths {
-		ids = append(ids, path...)
+	for _, ref := range order {
+		ids = append(ids, s.OwnerPaths[ref]...)
 	}
 	return ids
 }

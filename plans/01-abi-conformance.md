@@ -71,6 +71,46 @@ Two known divergence classes between Go `json.Marshal` and Python
   test asserting they are currently rejected/ignored consistently rather than
   silently trusted.
 
+### 2a. Status, corrected against the Python reference (2026-10-07)
+
+Three of the four items above were wrong when written. Verified by reading
+`../shepherd/shepherd2/src/shepherd2/kernel/facts.py` and `trace_store.py`:
+
+| Item | Verdict |
+|---|---|
+| `ReadPathPrefix` | **Real gap**, but the description was wrong. It *is* in the protocol (`facts.py:443`), however its body is a pure delegation — `return self.read_owner_prefix(read_context, trace_owner_id, through, mode_filter)` — and it takes a **trace owner id, not a free-form path**. There is no "owner-agnostic path addressing" distinct from `ReadOwnerPrefix`. Implemented as a documented alias. |
+| `ExternalAnchor.AnchorKind` | **Already fixed.** Set in `anchorForFact` (both its early-return and success paths) by the Phase 0 bug batch (`4203993`, shipped in `v0.4.1`) — the original note described the pre-fix state. Referenced by symbol, not line: the line numbers this note first cited had already drifted by the time it was reviewed. |
+| `ReadOwnerCutoff` signature | **The premise is false.** Python's protocol member is `def read_owner_cutoff(self, frontier_id: FrontierId) -> OwnerCutoff`, taking **no context**. Go already matches Python. No change needed. |
+| `OpMaterialize` / `OpObserve` | Still open. |
+
+### 2b. Found while implementing: read-result ordering was nondeterministic
+
+Implementing the alias surfaced a genuine ABI divergence the plan did not
+anticipate.
+
+`Slice.FactIDs()` flattened `OwnerPaths` by ranging over a Go **map**, so the
+order changed on every call. Python's equivalent is deterministic:
+`TraceSlice.owner_paths` is a `dict[TraceOwnerId, tuple[FactId, ...]]` and
+`fact_ids()` flattens it — and dict order is insertion order. So Go disagreed with
+Python *and with itself*: the first run of the new alias test failed with the same
+fact IDs at different positions on two consecutive reads.
+
+The same defect applied to `ExternalAnchors`, `ContextAnchors` and
+`WitnessAnchors`, all built via `mapToSlice`, which ranged over a map. Python holds
+all three as dicts (`trace_store.py:646-649`) and converts to tuples in insertion
+order.
+
+Fixed by recording first-insertion order for each collection and emitting through
+`orderedValues`, with a sorted-key fallback so a missed insertion site degrades to
+a *different deterministic* order rather than to nondeterminism. `Slice` gains
+`OwnerPathOrder`. Pinned by `TestSliceOutputOrderIsDeterministic`, which asserts 20
+consecutive reads agree — a single read always looks correct, which is why this
+survived.
+
+**Worth generalising:** any Go field backed by a `map` and compared against Python
+is suspect, because Python's dicts are ordered and Go's maps are not. Where a
+Python structure is a dict or tuple, the Go port needs an explicit order.
+
 ## 3. Extended golden vectors (co-generated with Python)
 
 Extend the **shared** file (`testdata/kernel_abi_v0.json` ≡
@@ -88,6 +128,64 @@ Extend the **shared** file (`testdata/kernel_abi_v0.json` ≡
   the hash check against the cloned reference pinned in CI.
 
 ## 4. Store-level cross-language vectors
+
+> ### ⚠️ §4 measured, 2026-10-07: the store identities currently DIVERGE
+>
+> The digest layer is now byte-identical to Python (§1), but **the store does not
+> construct the same inputs**, so record, witness and context IDs all differ. This
+> is the single most important open item in Phase 1.
+>
+> Evidence: one fixture — `intent:a` / owner `exec:one` /
+> `draft(kind="step", mode=capture, schema_ref="shepherd2.conformance.step.v1",
+> payload={"value":1})` with the trusted internal append context — driven through
+> `SQLiteTraceStore.append` on both sides.
+>
+> | identity | Python | Go | |
+> |---|---|---|---|
+> | record id | `sha256:2dc99e3f6954d51b…` | `sha256:ef285c4c3e3f34ec…` | ❌ |
+> | witness ref | `sha256:160548ff3f251949…` | `sha256:7a44a4fdd8e87b0d…` | ❌ |
+> | context id | `context:445f12c02f7e458fd07811dc7df7fc47` | `ctx:df5e52a317598773236d8a76e38aadeee6dcbe1b25638f2c2888e01ccba0608f` | ❌ |
+> | commit receipt | `commit:0` | `commit:0` | ✅ |
+> | owner ordinal range | `(0, 0)` | `(0, 0)` | ✅ |
+>
+> Three distinct causes, established by reading both implementations:
+>
+> 1. **Context-id algorithm differs outright.** Python is
+>    `f"context:{sha256(f'{intent}\\0{group_index}\\0{json}').hexdigest()[:32]}"`
+>    over a NUL-joined *string* (`trace_store.py:_context_id`); Go hashes a JSON
+>    *object* with keys `intent`/`group_index`/`payload` and prefixes `ctx:` with
+>    all 64 hex characters. Different input shape, different prefix, different
+>    length.
+> 2. **Two JSON encoders in the Python path, and the Go store uses one.**
+>    Record and witness ids go through `canonical_json_bytes` (`ensure_ascii=False`,
+>    raw UTF-8). But `_json_dumps` (`trace_store.py:1519-1520`) uses **default
+>    `ensure_ascii=True`**, and *that* is what produces the context id, the batch
+>    digest, stored `body_json`/`caused_by_json` and `receipt_json`. So the Go port
+>    needs both flavours: raw UTF-8 for record digests, `\\uXXXX`-escaped for
+>    context ids and batch digests. §1 fixed only the first.
+> 3. **The witness plan differs**, so the record id differs too — the witness
+>    record id is an input to the record digest
+>    (`canonical_record_input(..., witness=witness_plan.record_id)`). Compare
+>    `ordinaryWitnessPlan` (`store.go`) against `_ordinary_witness_plan`
+>    (`trace_store.py:1278-1302`) field by field: Python's body comes from
+>    `WitnessBody.to_payload()` with exactly eight keys, `authority_refs` taken
+>    from the *retained context's* `capability_witness_refs` (not the append
+>    context's presented refs), and `provenance_policy_refs` always `[]`.
+>
+> Also note the **batch digest** is structurally different and must be aligned for
+> "same intent, different batch" rejection to agree cross-language: Python's
+> payload has `atomicity` and `schema_version_set` and spells group/draft keys in
+> snake_case; Go marshals `batch.Groups` as Go structs, so the JSON carries Go
+> field names and declaration order rather than sorted snake_case keys.
+>
+> **Order of work:** (1) context id, (2) witness plan, (3) batch digest — then the
+> record id follows from (2). Do not start plan 02 until this is closed: schema
+> IDs are digests, and this is the same class of drift, one layer up.
+>
+> A working transcript generator was prototyped during this measurement and is
+> worth rebuilding properly as `testdata/store_vectors_v0.json`'s producer. Note
+> the Python `RecordView` has no `context_ref` attribute (the generator hit that);
+> read the context id from the receipt and from the context table.
 
 Digest-layer identity does not prove the *store* is identical — witness plan
 construction, retained-context hashing (`ctx:<sha256>`), frontier records, and

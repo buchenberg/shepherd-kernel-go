@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -233,6 +235,20 @@ func (s *SQLiteTraceStore) ReadOwnerPrefix(ctx ReadContext, ownerID string, thro
 	}
 
 	return s.buildSlice(pathEntries, nil, opCtx.VisibilityProfile, modeFilter, true)
+}
+
+// ReadPathPrefix is the TraceStore protocol's path-addressed prefix read.
+//
+// In shepherd2 this is a pure alias for read_owner_prefix — the protocol declares
+// it (facts.py:443) but the reference implementation's body is
+// `return self.read_owner_prefix(read_context, trace_owner_id, through,
+// mode_filter)`. It takes a trace owner id, not a free-form path, and applies no
+// different addressing, so this delegates rather than reimplementing the query.
+//
+// It exists for protocol completeness: a caller written against the Python
+// protocol can call either name and get the same slice.
+func (s *SQLiteTraceStore) ReadPathPrefix(ctx ReadContext, pathRef string, through int, modeFilter ModeFilter) (Slice, error) {
+	return s.ReadOwnerPrefix(ctx, pathRef, through, modeFilter)
 }
 
 // ReadCausalClosure reads the causal closure for one or more root facts.
@@ -945,9 +961,9 @@ func frontierFromPayload(payload map[string]any, createdByFactID string) (Fronti
 	if !ok || throughFact == "" {
 		return Frontier{}, &TraceStoreError{"frontier fact missing or invalid through_fact_id"}
 	}
-	throughOrdinalRaw, ok := payload["through_owner_ordinal"].(float64)
-	if !ok {
-		return Frontier{}, &TraceStoreError{"frontier fact missing or invalid through_owner_ordinal"}
+	throughOrdinal, err := intFromPayload(payload, "through_owner_ordinal")
+	if err != nil {
+		return Frontier{}, err
 	}
 	publisher, _ := payload["publisher_trace_owner_id"].(string) // optional
 
@@ -955,10 +971,31 @@ func frontierFromPayload(payload map[string]any, createdByFactID string) (Fronti
 		FrontierID:          frontierID,
 		TargetTraceOwnerID:  targetOwner,
 		ThroughFactID:       throughFact,
-		ThroughOwnerOrdinal: int(throughOrdinalRaw),
+		ThroughOwnerOrdinal: throughOrdinal,
 		PublisherOwnerID:    publisher,
 		CreatedByFactID:     createdByFactID,
 	}, nil
+}
+
+// intFromPayload reads an integer field from a decoded payload.
+//
+// The value may be a json.Number, because bodies are decoded with UseNumber to
+// preserve the int/float distinction the canonical writer needs, or a float64
+// from a decoder that was not. Rejecting either would silently read an ordinal as
+// zero.
+func intFromPayload(payload map[string]any, key string) (int, error) {
+	switch v := payload[key].(type) {
+	case json.Number:
+		n, err := strconv.ParseInt(v.String(), 10, 64)
+		if err != nil {
+			return 0, &TraceStoreError{"frontier fact missing or invalid " + key}
+		}
+		return int(n), nil
+	case float64:
+		return int(v), nil
+	default:
+		return 0, &TraceStoreError{"frontier fact missing or invalid " + key}
+	}
 }
 
 func (s *SQLiteTraceStore) readFrontierRow(frontierID string) (*sql.Row, error) {
@@ -1009,20 +1046,35 @@ func (s *SQLiteTraceStore) buildSlice(
 		selected[l.entry.recordID] = true
 	}
 
+	// Owner paths and the three anchor collections are maps, but their order is
+	// part of the read result. Python's TraceSlice holds all four as dicts and
+	// emits them in insertion order — dict order is insertion order — so
+	// fact_ids() and the anchor tuples are deterministic there. Go's map
+	// iteration is randomised, so each map is paired with the order its keys were
+	// first inserted and emitted through orderedValues. Iterating these maps
+	// directly makes every read produce a different order: different from Python,
+	// and different from the previous call in the same process.
 	factsByID := make(map[string]VisibleRecord)
 	contextsByID := make(map[string]RetainedContext)
 	ownerPaths := make(map[string][]string)
+	var ownerPathOrder []string
 	var causalEdges [][2]string
 	externalAnchors := make(map[string]ExternalAnchor)
+	var externalAnchorOrder []string
 	contextAnchors := make(map[string]ContextAnchor)
+	var contextAnchorOrder []string
 	witnessesByID := make(map[string]VisibleRecord)
 	witnessAnchors := make(map[string]WitnessAnchor)
+	var witnessAnchorOrder []string
 
 	for _, l := range loaded {
 		factID := l.entry.recordID
 		visible := visibleFact(l.fact, visibility)
 		if visible != nil {
 			factsByID[factID] = visible
+		}
+		if _, seen := ownerPaths[l.entry.pathRef]; !seen {
+			ownerPathOrder = append(ownerPathOrder, l.entry.pathRef)
 		}
 		ownerPaths[l.entry.pathRef] = append(ownerPaths[l.entry.pathRef], factID)
 
@@ -1031,6 +1083,7 @@ func (s *SQLiteTraceStore) buildSlice(
 				causalEdges = append(causalEdges, [2]string{parent, factID})
 			} else if includeExternalAnchors {
 				if _, exists := externalAnchors[parent]; !exists {
+					externalAnchorOrder = append(externalAnchorOrder, parent)
 					externalAnchors[parent] = s.anchorForFact(parent, "outside_frontier")
 				}
 			}
@@ -1043,6 +1096,7 @@ func (s *SQLiteTraceStore) buildSlice(
 		if ctxID != "" {
 			if visibility == VisibilityShapeOnly {
 				if _, exists := contextAnchors[ctxID]; !exists {
+					contextAnchorOrder = append(contextAnchorOrder, ctxID)
 					contextAnchors[ctxID] = ContextAnchor{
 						ContextID:    ctxID,
 						VisibleShape: map[string]any{"context_id": ctxID},
@@ -1073,6 +1127,7 @@ func (s *SQLiteTraceStore) buildSlice(
 		visible := visibleFact(w, visibility)
 		if visibility == VisibilityShapeOnly {
 			if _, exists := witnessAnchors[wRef]; !exists {
+				witnessAnchorOrder = append(witnessAnchorOrder, wRef)
 				witnessAnchors[wRef] = witnessAnchor(w)
 			}
 		} else if visible != nil {
@@ -1087,11 +1142,12 @@ func (s *SQLiteTraceStore) buildSlice(
 		FactsByID:         factsByID,
 		ContextsByID:      contextsByID,
 		OwnerPaths:        ownerPaths,
+		OwnerPathOrder:    ownerPathOrder,
 		CausalEdges:       causalEdges,
-		ExternalAnchors:   mapToSlice(externalAnchors),
-		ContextAnchors:    mapToSlice(contextAnchors),
+		ExternalAnchors:   orderedValues(externalAnchors, externalAnchorOrder),
+		ContextAnchors:    orderedValues(contextAnchors, contextAnchorOrder),
 		WitnessesByID:     witnessesByID,
-		WitnessAnchors:    mapToSlice(witnessAnchors),
+		WitnessAnchors:    orderedValues(witnessAnchors, witnessAnchorOrder),
 	}, nil
 }
 
@@ -1124,8 +1180,48 @@ func (s *SQLiteTraceStore) anchorForFact(factID, hiddenReason string) ExternalAn
 	}
 }
 
+// witnessSupport accumulates the witness records a slice depends on, remembering
+// the order each was first encountered.
+//
+// The order matters and is not incidental: it becomes Slice.WitnessAnchors, and
+// Python builds the equivalent structure as a dict — insertion-ordered — then
+// converts it to a tuple. Returning these records from a bare map range, as this
+// did, made the anchor order differ on every read.
+type witnessSupport struct {
+	byID  map[string]Record
+	order []string
+}
+
+func newWitnessSupport() *witnessSupport {
+	return &witnessSupport{byID: make(map[string]Record)}
+}
+
+func (w *witnessSupport) add(rec Record) {
+	id := rec.Envelope.RecordID
+	if _, exists := w.byID[id]; !exists {
+		w.order = append(w.order, id)
+	}
+	w.byID[id] = rec
+}
+
+func (w *witnessSupport) get(id string) (Record, bool) {
+	rec, ok := w.byID[id]
+	return rec, ok
+}
+
+// records returns the witnesses in first-seen order.
+func (w *witnessSupport) records() []Record {
+	out := make([]Record, 0, len(w.byID))
+	for _, id := range w.order {
+		if rec, ok := w.byID[id]; ok {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
 func (s *SQLiteTraceStore) witnessSupportClosure(records []Record) ([]Record, error) {
-	supportByID := make(map[string]Record)
+	support := newWitnessSupport()
 	validatedToRoot := make(map[string]bool)
 
 	for _, record := range records {
@@ -1136,20 +1232,16 @@ func (s *SQLiteTraceStore) witnessSupportClosure(records []Record) ([]Record, er
 
 	for _, record := range records {
 		if record.Envelope.WitnessRef != "" {
-			if err := s.validateWitnessChain(record.Envelope.WitnessRef, supportByID, validatedToRoot); err != nil {
+			if err := s.validateWitnessChain(record.Envelope.WitnessRef, support, validatedToRoot); err != nil {
 				return nil, err
 			}
 		}
 	}
 
-	result := make([]Record, 0, len(supportByID))
-	for _, w := range supportByID {
-		result = append(result, w)
-	}
-	return result, nil
+	return support.records(), nil
 }
 
-func (s *SQLiteTraceStore) validateWitnessChain(startRef string, supportByID map[string]Record, validatedToRoot map[string]bool) error {
+func (s *SQLiteTraceStore) validateWitnessChain(startRef string, support *witnessSupport, validatedToRoot map[string]bool) error {
 	seenInChain := make(map[string]bool)
 	witnessRef := startRef
 
@@ -1162,7 +1254,7 @@ func (s *SQLiteTraceStore) validateWitnessChain(startRef string, supportByID map
 		}
 		seenInChain[witnessRef] = true
 
-		witness, ok := supportByID[witnessRef]
+		witness, ok := support.get(witnessRef)
 		if !ok {
 			var err error
 			witness, err = s.readFact(witnessRef)
@@ -1172,7 +1264,7 @@ func (s *SQLiteTraceStore) validateWitnessChain(startRef string, supportByID map
 			if witness.Envelope.SchemaRef != RootWitnessSchemaRef && witness.Envelope.SchemaRef != WitnessSchemaRef {
 				return &TraceStoreError{fmt.Sprintf("witness_ref does not resolve to a witness record: %s", witnessRef)}
 			}
-			supportByID[witnessRef] = witness
+			support.add(witness)
 		}
 
 		if witness.Envelope.SchemaRef != RootWitnessSchemaRef && witness.Envelope.SchemaRef != WitnessSchemaRef {
@@ -1770,9 +1862,21 @@ func bodyToJSON(body RecordBody) string {
 	return string(b)
 }
 
+// bodyFromJSON decodes a retained body.
+//
+// It uses UseNumber because the canonical writer depends on the int/float
+// distinction that JSON carries in the token text: `1` and `1.0` are different
+// values to Python and canonicalise to "1" and "1.0". With the default decoder
+// every number becomes float64, so a retained body that said `1` would
+// re-canonicalise as `1.0` and the record could no longer reproduce its own id —
+// which is exactly what happened before this was fixed.
 func bodyFromJSON(s string) RecordBody {
 	var payload map[string]any
-	json.Unmarshal([]byte(s), &payload)
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
+	if err := dec.Decode(&payload); err != nil {
+		return RecordBody{}
+	}
 	return RecordBody{Payload: payload}
 }
 
@@ -1822,10 +1926,29 @@ func nextCommitSeq(receipts []string) int {
 	return maxSeq
 }
 
-func mapToSlice[T any](m map[string]T) []T {
+// orderedValues returns a map's values in the given key order.
+//
+// It exists because every map-backed field of a read result has a defined order
+// in the Python reference — dicts are insertion-ordered — while Go's map
+// iteration is randomised. Callers pass the insertion order they recorded.
+//
+// The length check is a guard, not an expected path: if the supplied order does
+// not cover the map, this falls back to sorted keys rather than to map iteration,
+// so a missed insertion site degrades to a different deterministic order instead
+// of to nondeterminism.
+func orderedValues[T any](m map[string]T, order []string) []T {
+	if len(order) != len(m) {
+		order = make([]string, 0, len(m))
+		for k := range m {
+			order = append(order, k)
+		}
+		sort.Strings(order)
+	}
 	s := make([]T, 0, len(m))
-	for _, v := range m {
-		s = append(s, v)
+	for _, k := range order {
+		if v, ok := m[k]; ok {
+			s = append(s, v)
+		}
 	}
 	return s
 }

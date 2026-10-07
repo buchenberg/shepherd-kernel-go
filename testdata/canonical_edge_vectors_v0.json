@@ -276,7 +276,7 @@
       }
     }
   ],
-  "generator": "generate_canonical_edge_vectors.py",
+  "generator": "testdata/generate_canonical_edge_vectors.py",
   "mixed": [
     {
       "canonical_bytes": "{\"v\":{\"a\":{\"c\":null},\"b\":[1,2.0,\"x<y\"]}}",

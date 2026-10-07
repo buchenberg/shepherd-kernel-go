@@ -1,6 +1,7 @@
 package shepherd
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,6 +79,288 @@ func TestAppendThenReadOwnerPrefix(t *testing.T) {
 	}
 }
 
+// TestReadPathPrefixIsAnAliasForReadOwnerPrefix pins the protocol method against
+// the Python reference, where read_path_prefix is a pure delegation:
+//
+//	def read_path_prefix(self, read_context, trace_owner_id, through,
+//	                     mode_filter="both") -> TraceSlice:
+//	    return self.read_owner_prefix(read_context, trace_owner_id, through, mode_filter)
+//
+// It is not a distinct owner-agnostic read, which the plan originally assumed,
+// and it takes a trace owner id rather than a free-form path. Pinning the
+// equivalence stops the two from drifting, since a caller written against the
+// Python protocol may use either name.
+func TestReadPathPrefixIsAnAliasForReadOwnerPrefix(t *testing.T) {
+	store := newMemStore(t)
+	appendDrafts(t, store, "intent:a", "owner:a",
+		draft("step", Capture, map[string]any{"value": 1}))
+	appendDrafts(t, store, "intent:b", "owner:b",
+		draft("step", Capture, map[string]any{"value": 2}))
+
+	cases := []struct {
+		name       string
+		pathRef    string
+		through    int
+		modeFilter ModeFilter
+	}{
+		{"owner scoped", "owner:a", 99, ModeBoth},
+		{"other owner", "owner:b", 99, ModeBoth},
+		{"empty ref", "", 99, ModeBoth},
+		{"ordinal bounded", "owner:a", 0, ModeBoth},
+		{"captures only", "owner:a", 99, ModeCapturesOnly},
+		{"declarations only", "owner:a", 99, ModeDeclarationsOnly},
+		{"unknown ref", "owner:missing", 99, ModeBoth},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			want, err := store.ReadOwnerPrefix(reader, tc.pathRef, tc.through, tc.modeFilter)
+			if err != nil {
+				t.Fatalf("ReadOwnerPrefix: %v", err)
+			}
+			got, err := store.ReadPathPrefix(reader, tc.pathRef, tc.through, tc.modeFilter)
+			if err != nil {
+				t.Fatalf("ReadPathPrefix: %v", err)
+			}
+			if len(got.FactIDs()) != len(want.FactIDs()) {
+				t.Fatalf("ReadPathPrefix returned %d facts, ReadOwnerPrefix %d",
+					len(got.FactIDs()), len(want.FactIDs()))
+			}
+			for i := range want.FactIDs() {
+				if got.FactIDs()[i] != want.FactIDs()[i] {
+					t.Errorf("fact[%d] = %q, want %q", i, got.FactIDs()[i], want.FactIDs()[i])
+				}
+			}
+		})
+	}
+}
+
+// TestReadPathPrefixEmptyRefSpansOwners documents what the empty ref does. It is
+// ReadOwnerPrefix's existing all-paths query, not something read_path_prefix
+// adds — the plan described this as "owner-agnostic path addressing", which the
+// Python source does not support.
+func TestReadPathPrefixEmptyRefSpansOwners(t *testing.T) {
+	store := newMemStore(t)
+	appendDrafts(t, store, "intent:a", "owner:a",
+		draft("step", Capture, map[string]any{"value": 1}))
+	appendDrafts(t, store, "intent:b", "owner:b",
+		draft("step", Capture, map[string]any{"value": 2}))
+
+	all, err := store.ReadPathPrefix(reader, "", 99, ModeBoth)
+	if err != nil {
+		t.Fatalf("ReadPathPrefix: %v", err)
+	}
+
+	owners := map[string]bool{}
+	for _, fact := range all.FactsByID {
+		if rec, ok := fact.(Record); ok && rec.View != nil {
+			owners[rec.View.TraceOwnerID] = true
+		}
+	}
+	if !owners["owner:a"] || !owners["owner:b"] {
+		t.Errorf("empty ref should span both owners, saw %v", owners)
+	}
+}
+
+// TestSliceOutputOrderIsDeterministic pins that every map-backed field of a read
+// result comes out in a stable order, across every visibility profile that
+// populates one.
+//
+// Python's TraceSlice holds owner_paths, external_anchors, context_anchors and
+// witness_anchors as dicts, so all four are insertion-ordered and deterministic.
+// Go's equivalents were plain map iterations, so two identical reads could
+// disagree with each other and would necessarily disagree with Python.
+//
+// This was found by the ReadPathPrefix alias test, which failed on the empty-ref
+// case with the same fact IDs in a different order on each call. That first
+// version of this test covered only OwnerPaths; the anchor sequences were fixed
+// later and needed their own coverage, including the witness closure, which was
+// itself returning records from a map range.
+//
+// Reading repeatedly is the assertion that matters — any single read looks
+// correct, and only repetition exposes map iteration.
+func TestSliceOutputOrderIsDeterministic(t *testing.T) {
+	store := newMemStore(t)
+
+	// A parent on its own owner, so reading the child's owner sees a causal parent
+	// it did not select. That is what produces an external anchor.
+	parent := appendDrafts(t, store, "intent:parent", "owner:parent",
+		draft("step", Capture, map[string]any{"value": 0}))
+
+	if _, err := store.Append(trustedAppend, AppendBatch{
+		AppendIntentID: "intent:child",
+		Groups: []AppendGroup{{
+			TraceOwnerID:  "owner:child",
+			CausalParents: []string{parent.FactIDs[0]},
+			// A retained context, so the record carries a context_ref and a
+			// shape-only read exposes it as a context anchor.
+			RetainedContext: &RetainedContext{
+				ActiveBindingRefs:       []string{"binding:one"},
+				CapabilityWitnessRefs:   []string{"trusted:internal"},
+				SemanticEnvironmentRefs: []string{"schema-set:test"},
+				VisibilityPolicyRefs:    []string{"visibility:payload"},
+				SubstrateRef:            "sqlite.local.v1",
+				Containment:             "contained",
+			},
+			FactDrafts: []RecordDraft{
+				draft("step", Capture, map[string]any{"value": 1}),
+				draft("other", Declaration, map[string]any{"value": 2}),
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("append child: %v", err)
+	}
+
+	shapeOnly := ReadContext{ActorRef: "reader", VisibilityProfile: VisibilityShapeOnly}
+
+	reads := []struct {
+		name  string
+		ctx   ReadContext
+		owner string
+	}{
+		{"payload", reader, "owner:child"},
+		{"shape_only", shapeOnly, "owner:child"},
+		{"cross_owner", reader, ""},
+	}
+
+	for _, r := range reads {
+		t.Run(r.name, func(t *testing.T) {
+			first, err := store.ReadOwnerPrefix(r.ctx, r.owner, 99, ModeBoth)
+			if err != nil {
+				t.Fatalf("first read: %v", err)
+			}
+
+			wantIDs := first.FactIDs()
+			wantPaths := append([]string(nil), first.OwnerPathOrder...)
+			wantExt := externalAnchorRefs(first.ExternalAnchors)
+			wantCtxAnchors := contextAnchorIDs(first.ContextAnchors)
+			wantWit := witnessAnchorRefs(first.WitnessAnchors)
+
+			if len(wantIDs) == 0 {
+				t.Fatal("expected facts")
+			}
+
+			for i := 0; i < 20; i++ {
+				got, err := store.ReadOwnerPrefix(r.ctx, r.owner, 99, ModeBoth)
+				if err != nil {
+					t.Fatalf("read %d: %v", i, err)
+				}
+				assertSameSequence(t, i, "FactIDs", got.FactIDs(), wantIDs)
+				assertSameSequence(t, i, "OwnerPathOrder", got.OwnerPathOrder, wantPaths)
+				assertSameSequence(t, i, "ExternalAnchors", externalAnchorRefs(got.ExternalAnchors), wantExt)
+				assertSameSequence(t, i, "ContextAnchors", contextAnchorIDs(got.ContextAnchors), wantCtxAnchors)
+				assertSameSequence(t, i, "WitnessAnchors", witnessAnchorRefs(got.WitnessAnchors), wantWit)
+			}
+
+			// Guard against passing vacuously on empty sequences. Witness anchors
+			// are shape-only by construction — under payload visibility the
+			// witnesses are returned in WitnessesByID instead — so each sequence is
+			// required to be covered by the profile that actually populates it.
+			switch r.name {
+			case "payload":
+				if len(wantExt) == 0 {
+					t.Error("no external anchors: the external-anchor ordering is not covered")
+				}
+			case "shape_only":
+				if len(wantCtxAnchors) == 0 {
+					t.Error("no context anchors: the context-anchor ordering is not covered")
+				}
+				if len(wantWit) == 0 {
+					t.Error("no witness anchors: the witness-support ordering is not covered")
+				}
+				if len(first.WitnessesByID) != 0 {
+					t.Errorf("shape-only read returned %d visible witnesses, want none",
+						len(first.WitnessesByID))
+				}
+			}
+		})
+	}
+}
+
+func externalAnchorRefs(anchors []ExternalAnchor) []string {
+	out := make([]string, 0, len(anchors))
+	for _, a := range anchors {
+		out = append(out, a.Ref)
+	}
+	return out
+}
+
+func contextAnchorIDs(anchors []ContextAnchor) []string {
+	out := make([]string, 0, len(anchors))
+	for _, a := range anchors {
+		out = append(out, a.ContextID)
+	}
+	return out
+}
+
+func witnessAnchorRefs(anchors []WitnessAnchor) []string {
+	out := make([]string, 0, len(anchors))
+	for _, a := range anchors {
+		out = append(out, a.WitnessRef)
+	}
+	return out
+}
+
+func assertSameSequence(t *testing.T, read int, field string, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("read %d %s has %d entries, first read %d", read, field, len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("read %d %s[%d] = %q, first read %q: %s order must not depend on "+
+				"Go map iteration", read, field, i, got[i], want[i], field)
+		}
+	}
+}
+
+// TestReservedOperationKindsAreUnreachable pins the current status of
+// OpMaterialize and OpObserve, which plan 03 reserves for substrate
+// materialization.
+//
+// Plan 01 §2 expected these to be "rejected or ignored consistently rather than
+// silently trusted". Verified instead: they cannot be supplied at all through the
+// exported API — the entry points take AppendContext or ReadContext, whose
+// ToOperationContext helpers set the operation themselves — and
+// OperationContext.Operation is never read anywhere in the package (no
+// occurrence of `.Operation` selects a code path).
+//
+// So there is nothing to reject today, and the hazard the plan described does not
+// exist: a caller cannot make an append present itself as a materialization.
+// What this test does is make the two supporting facts deliberate, and leave a
+// tripwire for the moment plan 03 makes Operation load-bearing.
+func TestReservedOperationKindsAreUnreachable(t *testing.T) {
+	// A reserved kind must not collide with an enforced one, or declaring it
+	// would silently change the meaning of an existing operation.
+	enforced := []OperationKind{OpAppend, OpRead, OpPublishCut}
+	for _, reserved := range []OperationKind{OpMaterialize, OpObserve} {
+		for _, e := range enforced {
+			if reserved == e {
+				t.Fatalf("reserved operation %q is the same as enforced %q", reserved, e)
+			}
+		}
+	}
+
+	// The exported entry points derive their own operation, which is what makes
+	// the reserved kinds unreachable rather than merely unused.
+	if got := trustedAppend.ToOperationContext(OpAppend).Operation; got != OpAppend {
+		t.Errorf("AppendContext.ToOperationContext(OpAppend).Operation = %q, want %q", got, OpAppend)
+	}
+	if got := reader.ToOperationContext().Operation; got != OpRead {
+		t.Errorf("ReadContext.ToOperationContext().Operation = %q, want %q", got, OpRead)
+	}
+
+	// The documented gap, asserted so it stays deliberate. The authorization
+	// helpers do not consult Operation, so routing a reserved kind through one of
+	// them today would be accepted. This assertion is expected to be *inverted*
+	// into a rejection check when plan 03 wires materialization; if it starts
+	// failing before then, someone has added the check and this test should be
+	// updated to pin the rejection instead.
+	if err := ensureAppendAuthorized(trustedAppend.ToOperationContext(OpMaterialize)); err != nil {
+		t.Fatalf("ensureAppendAuthorized now rejects a reserved operation (%v): good — "+
+			"invert this assertion to pin the rejection rather than the gap", err)
+	}
+}
+
 func TestAppendIntentIdempotent(t *testing.T) {
 	store := newMemStore(t)
 	d := draft("execution_started", Capture, map[string]any{"execution_id": "exec:parent"})
@@ -131,8 +414,30 @@ func TestSameIntentDifferentBatchIsRejected(t *testing.T) {
 	if !ok {
 		t.Fatal("expected Record, got RecordShape")
 	}
-	if fact.Body.Payload["value"].(float64) != 1 {
-		t.Errorf("expected value=1, got %v", fact.Body.Payload["value"])
+	// The retained body must keep the integer an integer. Before bodyFromJSON used
+	// UseNumber this asserted float64, which encoded the bug: every number came
+	// back as float64, so a record could not reproduce its own id after a read.
+	got, ok := fact.Body.Payload["value"].(json.Number)
+	if !ok {
+		t.Fatalf("payload value is %T, want json.Number: retained bodies must be decoded "+
+			"with UseNumber so a JSON integer stays an integer", fact.Body.Payload["value"])
+	}
+	if got.String() != "1" {
+		t.Errorf("value = %q, want \"1\"", got.String())
+	}
+
+	// And it must still digest to the id it was stored under, which is the
+	// property the float64 decoding silently broke.
+	rebuilt, err := RecordDigest(
+		fact.Envelope.SchemaRef, fact.Envelope.Mode, fact.Body.Payload,
+		fact.Envelope.CausedByIDs, fact.Envelope.WitnessRef,
+	)
+	if err != nil {
+		t.Fatalf("RecordDigest: %v", err)
+	}
+	if rebuilt != fact.Envelope.RecordID {
+		t.Errorf("re-digested body = %s, want the stored record id %s: a retained record "+
+			"must reproduce its own identity after a read", rebuilt, fact.Envelope.RecordID)
 	}
 }
 
