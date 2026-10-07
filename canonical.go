@@ -57,11 +57,39 @@ func sha256Sum(b []byte) []byte {
 // by rendering integral float64s without a decimal point, which happened to fix
 // integers and silently corrupted real float values.
 func CanonicalJSONBytes(v any) ([]byte, error) {
-	var buf strings.Builder
-	if err := writeCanonicalValue(&buf, v, make(map[canonicalVisit]bool)); err != nil {
+	return canonicalJSON(v, false)
+}
+
+// canonicalJSONASCIIBytes encodes with CPython's json.dumps *default*
+// (ensure_ascii=True), which is a different escaping flavour from the one the
+// record digest uses.
+//
+// The store needs both, and that is not an artefact of the Go port: shepherd2's
+// trace_store.py runs two encoders in the same append path. Record and witness ids
+// go through kernel.canonical.canonical_json_bytes (ensure_ascii=False), while its
+// `_json_dumps` helper omits the argument, so the context id, the batch digest and
+// the stored body/receipt JSON all use ensure_ascii=True. With an ASCII-only
+// payload the two agree, which is why this is invisible in the existing tests.
+func canonicalJSONASCIIBytes(v any) ([]byte, error) {
+	return canonicalJSON(v, true)
+}
+
+// canonicalJSON encodes v canonically, choosing the string-escaping flavour.
+func canonicalJSON(v any, ascii bool) ([]byte, error) {
+	buf := &canonicalBuf{ascii: ascii}
+	if err := writeCanonicalValue(buf, v, make(map[canonicalVisit]bool)); err != nil {
 		return nil, err
 	}
 	return []byte(buf.String()), nil
+}
+
+// canonicalBuf is the output buffer for one encoding pass. It carries the escape
+// flavour so the writer need not thread a flag through every case; the embedded
+// Builder promotes WriteByte, WriteString and Write, so the writer body is
+// unchanged.
+type canonicalBuf struct {
+	strings.Builder
+	ascii bool
 }
 
 // formatCanonicalFloat renders f the way CPython's repr does, which is what
@@ -133,7 +161,7 @@ func pythonExponent(exp int) string {
 // UTF-8 sequence is >= 0x80, so none can collide with an escape, and copying
 // them one at a time passes the sequence through unchanged — including the
 // U+2028 and U+2029 that Python leaves raw and that many encoders escape.
-func writeCanonicalString(buf *strings.Builder, s string) error {
+func writeCanonicalString(buf *canonicalBuf, s string) error {
 	if !utf8.ValidString(s) {
 		// CPython raises UnicodeEncodeError when it encodes a lone surrogate as
 		// UTF-8 to produce the final bytes, so this mirrors an existing failure
@@ -141,6 +169,9 @@ func writeCanonicalString(buf *strings.Builder, s string) error {
 		// bytes through and emit invalid JSON, or substitute U+FFFD the way
 		// encoding/json does and digest a string the caller never held.
 		return fmt.Errorf("canonical JSON: string is not valid UTF-8: %q", s)
+	}
+	if buf.ascii {
+		return writeCanonicalStringASCII(buf, s)
 	}
 
 	buf.WriteByte('"')
@@ -167,6 +198,50 @@ func writeCanonicalString(buf *strings.Builder, s string) error {
 				continue
 			}
 			buf.WriteByte(c)
+		}
+	}
+	buf.WriteByte('"')
+	return nil
+}
+
+// writeCanonicalStringASCII escapes as CPython's json.dumps does with
+// ensure_ascii=True — its default, and what the store's context-id and
+// batch-digest helpers use.
+//
+// Every non-ASCII rune becomes \uXXXX with lowercase hex, and above U+FFFF a
+// surrogate pair, exactly as CPython emits. DEL is escaped too. Note it does NOT
+// HTML-escape <, > or & : Python never does, at either setting, which is a
+// different behaviour from Go's encoding/json and the reason this is hand-written.
+func writeCanonicalStringASCII(buf *canonicalBuf, s string) error {
+	buf.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			buf.WriteString(`\"`)
+		case '\\':
+			buf.WriteString(`\\`)
+		case '\b':
+			buf.WriteString(`\b`)
+		case '\f':
+			buf.WriteString(`\f`)
+		case '\n':
+			buf.WriteString(`\n`)
+		case '\r':
+			buf.WriteString(`\r`)
+		case '\t':
+			buf.WriteString(`\t`)
+		default:
+			switch {
+			case r < 0x20 || r == 0x7f:
+				fmt.Fprintf(buf, `\u%04x`, r)
+			case r < utf8.RuneSelf:
+				buf.WriteByte(byte(r))
+			case r > 0xFFFF:
+				r -= 0x10000
+				fmt.Fprintf(buf, `\u%04x\u%04x`, 0xD800+(r>>10), 0xDC00+(r&0x3FF))
+			default:
+				fmt.Fprintf(buf, `\u%04x`, r)
+			}
 		}
 	}
 	buf.WriteByte('"')
@@ -281,7 +356,7 @@ func isJSONIntegerToken(s string) bool {
 // error, because the previous json.Marshal fallback is exactly how the escaping
 // divergence went unnoticed: a silent fallback produces a plausible digest over
 // different bytes.
-func writeCanonicalValue(buf *strings.Builder, v any, seen map[canonicalVisit]bool) error {
+func writeCanonicalValue(buf *canonicalBuf, v any, seen map[canonicalVisit]bool) error {
 	switch val := v.(type) {
 	case nil:
 		buf.WriteString("null")
@@ -491,7 +566,7 @@ func sortedKeys(n int, yield func(func(string) bool)) []string {
 // writeCanonicalReflect handles JSON-compatible containers of named or
 // non-interface element types, which the type switch above cannot enumerate.
 // Anything JSON cannot represent is rejected.
-func writeCanonicalReflect(buf *strings.Builder, v any, seen map[canonicalVisit]bool) error {
+func writeCanonicalReflect(buf *canonicalBuf, v any, seen map[canonicalVisit]bool) error {
 	rv := reflect.ValueOf(v)
 
 	switch rv.Kind() {

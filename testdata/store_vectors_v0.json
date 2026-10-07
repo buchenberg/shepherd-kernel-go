@@ -1,0 +1,900 @@
+{
+  "canonical_version": "shepherd.kernel.canonical.v2",
+  "generator": "testdata/generate_store_vectors.py",
+  "python_version": "3.13.13",
+  "source_commit": "d34d5ca334871dfcb5a3dc76dd78045829fa4e56",
+  "source_repo": "../shepherd",
+  "vectors": [
+    {
+      "append_context": {
+        "actor_ref": "runtime:conformance",
+        "presented_witness_refs": [
+          "trusted:internal"
+        ],
+        "schema_version_set": "shepherd2-slice-a",
+        "trust_mode": "internal"
+      },
+      "batches": [
+        {
+          "append_intent_id": "intent:a",
+          "groups": [
+            {
+              "causal_parents": [],
+              "fact_drafts": [
+                {
+                  "append_local_id": null,
+                  "caused_by_fact_ids": [],
+                  "caused_by_local_refs": [],
+                  "kind_label": "step",
+                  "mode": "capture",
+                  "payload": {
+                    "value": 1
+                  },
+                  "schema_ref": "shepherd2.conformance.step.v1"
+                }
+              ],
+              "retained_context": null,
+              "trace_owner_id": "exec:one"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "frontier_ids": [],
+        "owner_paths": {
+          "_kind_labels": {
+            "sha256:160548ff3f2519492a9aa70576b5183b38a293277006ceeadbead5ff8356ad10": "witness",
+            "sha256:2dc99e3f6954d51bf81b11512b10f1dcad559f44971498181395f7bd4bf0bace": "step",
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777": "witness_root"
+          },
+          "exec:one": [
+            "sha256:2dc99e3f6954d51bf81b11512b10f1dcad559f44971498181395f7bd4bf0bace"
+          ],
+          "kernel:witness": [
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777",
+            "sha256:160548ff3f2519492a9aa70576b5183b38a293277006ceeadbead5ff8356ad10"
+          ]
+        },
+        "receipts": [
+          {
+            "append_intent_id": "intent:a",
+            "causal_edges": [],
+            "commit_receipts": [
+              "commit:0"
+            ],
+            "context_receipts": [
+              "context:445f12c02f7e458fd07811dc7df7fc47"
+            ],
+            "fact_ids": [
+              "sha256:2dc99e3f6954d51bf81b11512b10f1dcad559f44971498181395f7bd4bf0bace"
+            ],
+            "owner_ordinal_ranges": {
+              "exec:one": [
+                0,
+                0
+              ]
+            }
+          }
+        ]
+      },
+      "frontiers": [],
+      "label": "root_witness_auto_plan",
+      "note": "The root witness is created regardless, and the ordinary witness for a default retained context cites it."
+    },
+    {
+      "append_context": {
+        "actor_ref": "runtime:conformance",
+        "presented_witness_refs": [
+          "trusted:internal"
+        ],
+        "schema_version_set": "shepherd2-slice-a",
+        "trust_mode": "internal"
+      },
+      "batches": [
+        {
+          "append_intent_id": "intent:ctx",
+          "groups": [
+            {
+              "causal_parents": [],
+              "fact_drafts": [
+                {
+                  "append_local_id": null,
+                  "caused_by_fact_ids": [],
+                  "caused_by_local_refs": [],
+                  "kind_label": "step",
+                  "mode": "capture",
+                  "payload": {
+                    "value": 2
+                  },
+                  "schema_ref": "shepherd2.conformance.step.v1"
+                }
+              ],
+              "retained_context": {
+                "active_binding_refs": [
+                  "binding:one"
+                ],
+                "capability_witness_refs": [
+                  "trusted:capability"
+                ],
+                "containment": "contained",
+                "reuse_context_id": null,
+                "semantic_environment_refs": [
+                  "schema-set:extra"
+                ],
+                "substrate_ref": "sqlite.local.v1",
+                "visibility_policy_refs": [
+                  "visibility:payload"
+                ]
+              },
+              "trace_owner_id": "exec:ctx"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "frontier_ids": [],
+        "owner_paths": {
+          "_kind_labels": {
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777": "witness_root",
+            "sha256:b444d392b23c8daf33e5383dc6e58d7f2d09856858f172b6be4d251d0a0e7bf6": "witness",
+            "sha256:ce5197892515c4723a4a3d89a22b63c221dbd852e64a8e263466219fa17db1ed": "step"
+          },
+          "exec:ctx": [
+            "sha256:ce5197892515c4723a4a3d89a22b63c221dbd852e64a8e263466219fa17db1ed"
+          ],
+          "kernel:witness": [
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777",
+            "sha256:b444d392b23c8daf33e5383dc6e58d7f2d09856858f172b6be4d251d0a0e7bf6"
+          ]
+        },
+        "receipts": [
+          {
+            "append_intent_id": "intent:ctx",
+            "causal_edges": [],
+            "commit_receipts": [
+              "commit:0"
+            ],
+            "context_receipts": [
+              "context:cba457d806542b1145e4545e9c81456c"
+            ],
+            "fact_ids": [
+              "sha256:ce5197892515c4723a4a3d89a22b63c221dbd852e64a8e263466219fa17db1ed"
+            ],
+            "owner_ordinal_ranges": {
+              "exec:ctx": [
+                0,
+                0
+              ]
+            }
+          }
+        ]
+      },
+      "frontiers": [],
+      "label": "ordinary_witness_non_default_context",
+      "note": "A retained context with capability_witness_refs, so the witness authority_refs come from the context rather than the append context."
+    },
+    {
+      "append_context": {
+        "actor_ref": "runtime:conformance",
+        "presented_witness_refs": [
+          "trusted:internal"
+        ],
+        "schema_version_set": "shepherd2-slice-a",
+        "trust_mode": "internal"
+      },
+      "batches": [
+        {
+          "append_intent_id": "intent:reuse-1",
+          "groups": [
+            {
+              "causal_parents": [],
+              "fact_drafts": [
+                {
+                  "append_local_id": null,
+                  "caused_by_fact_ids": [],
+                  "caused_by_local_refs": [],
+                  "kind_label": "step",
+                  "mode": "capture",
+                  "payload": {
+                    "value": 3
+                  },
+                  "schema_ref": "shepherd2.conformance.step.v1"
+                }
+              ],
+              "retained_context": {
+                "active_binding_refs": [
+                  "binding:reuse"
+                ],
+                "capability_witness_refs": [],
+                "containment": "contained",
+                "reuse_context_id": null,
+                "semantic_environment_refs": [],
+                "substrate_ref": "sqlite.local.v1",
+                "visibility_policy_refs": []
+              },
+              "trace_owner_id": "exec:reuse"
+            }
+          ]
+        },
+        {
+          "append_intent_id": "intent:reuse-2",
+          "groups": [
+            {
+              "causal_parents": [],
+              "fact_drafts": [
+                {
+                  "append_local_id": null,
+                  "caused_by_fact_ids": [],
+                  "caused_by_local_refs": [],
+                  "kind_label": "step",
+                  "mode": "capture",
+                  "payload": {
+                    "value": 4
+                  },
+                  "schema_ref": "shepherd2.conformance.step.v1"
+                }
+              ],
+              "retained_context": {
+                "reuse_of_batch": 0,
+                "reuse_of_group": 0
+              },
+              "trace_owner_id": "exec:reuse"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "frontier_ids": [],
+        "owner_paths": {
+          "_kind_labels": {
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777": "witness_root",
+            "sha256:73eed6b36bbd077f1797e5187e62e6d6a9d3af2e5a0888ec395542088efb0c90": "witness",
+            "sha256:b879d4019bf24f3ee242c9246ea0a5e821d2c0d96efcce0db856f2ca2abbf777": "step",
+            "sha256:d65d19b0da2a47d806110460955e4b5f6a57c07ee3c5bc20e9a56dcbe195c72e": "step"
+          },
+          "exec:reuse": [
+            "sha256:b879d4019bf24f3ee242c9246ea0a5e821d2c0d96efcce0db856f2ca2abbf777",
+            "sha256:d65d19b0da2a47d806110460955e4b5f6a57c07ee3c5bc20e9a56dcbe195c72e"
+          ],
+          "kernel:witness": [
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777",
+            "sha256:73eed6b36bbd077f1797e5187e62e6d6a9d3af2e5a0888ec395542088efb0c90"
+          ]
+        },
+        "receipts": [
+          {
+            "append_intent_id": "intent:reuse-1",
+            "causal_edges": [],
+            "commit_receipts": [
+              "commit:0"
+            ],
+            "context_receipts": [
+              "context:44d5fa2e1a4dd82c5c5c96859500e079"
+            ],
+            "fact_ids": [
+              "sha256:b879d4019bf24f3ee242c9246ea0a5e821d2c0d96efcce0db856f2ca2abbf777"
+            ],
+            "owner_ordinal_ranges": {
+              "exec:reuse": [
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "append_intent_id": "intent:reuse-2",
+            "causal_edges": [],
+            "commit_receipts": [
+              "commit:1"
+            ],
+            "context_receipts": [
+              "context:44d5fa2e1a4dd82c5c5c96859500e079"
+            ],
+            "fact_ids": [
+              "sha256:d65d19b0da2a47d806110460955e4b5f6a57c07ee3c5bc20e9a56dcbe195c72e"
+            ],
+            "owner_ordinal_ranges": {
+              "exec:reuse": [
+                1,
+                1
+              ]
+            }
+          }
+        ]
+      },
+      "frontiers": [],
+      "label": "retained_context_reuse_by_id",
+      "note": "Second batch reuses the first batch's context id, so the context receipt repeats and no new context row is created."
+    },
+    {
+      "append_context": {
+        "actor_ref": "runtime:conformance",
+        "presented_witness_refs": [
+          "trusted:internal"
+        ],
+        "schema_version_set": "shepherd2-slice-a",
+        "trust_mode": "internal"
+      },
+      "batches": [
+        {
+          "append_intent_id": "intent:multi",
+          "groups": [
+            {
+              "causal_parents": [],
+              "fact_drafts": [
+                {
+                  "append_local_id": null,
+                  "caused_by_fact_ids": [],
+                  "caused_by_local_refs": [],
+                  "kind_label": "step",
+                  "mode": "capture",
+                  "payload": {
+                    "value": 5
+                  },
+                  "schema_ref": "shepherd2.conformance.step.v1"
+                }
+              ],
+              "retained_context": null,
+              "trace_owner_id": "owner:a"
+            },
+            {
+              "causal_parents": [],
+              "fact_drafts": [
+                {
+                  "append_local_id": null,
+                  "caused_by_fact_ids": [],
+                  "caused_by_local_refs": [],
+                  "kind_label": "step",
+                  "mode": "capture",
+                  "payload": {
+                    "value": 6
+                  },
+                  "schema_ref": "shepherd2.conformance.step.v1"
+                }
+              ],
+              "retained_context": null,
+              "trace_owner_id": "owner:b"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "frontier_ids": [],
+        "owner_paths": {
+          "_kind_labels": {
+            "sha256:160548ff3f2519492a9aa70576b5183b38a293277006ceeadbead5ff8356ad10": "witness",
+            "sha256:3d0cc0a04c30d837823f7aeae4df6313112710ea50d817ff6bfc25a61e0ea783": "step",
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777": "witness_root",
+            "sha256:7242a3a7291aae88b868d3019ae496b4373a11c7e2028209a678da2ca3023719": "step"
+          },
+          "kernel:witness": [
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777",
+            "sha256:160548ff3f2519492a9aa70576b5183b38a293277006ceeadbead5ff8356ad10"
+          ],
+          "owner:a": [
+            "sha256:3d0cc0a04c30d837823f7aeae4df6313112710ea50d817ff6bfc25a61e0ea783"
+          ],
+          "owner:b": [
+            "sha256:7242a3a7291aae88b868d3019ae496b4373a11c7e2028209a678da2ca3023719"
+          ]
+        },
+        "receipts": [
+          {
+            "append_intent_id": "intent:multi",
+            "causal_edges": [],
+            "commit_receipts": [
+              "commit:0",
+              "commit:1"
+            ],
+            "context_receipts": [
+              "context:b1f979614fa792dba692043532c9b9cb",
+              "context:18010257b0d54c7fd6e1be7c8b3b204b"
+            ],
+            "fact_ids": [
+              "sha256:3d0cc0a04c30d837823f7aeae4df6313112710ea50d817ff6bfc25a61e0ea783",
+              "sha256:7242a3a7291aae88b868d3019ae496b4373a11c7e2028209a678da2ca3023719"
+            ],
+            "owner_ordinal_ranges": {
+              "owner:a": [
+                0,
+                0
+              ],
+              "owner:b": [
+                0,
+                0
+              ]
+            }
+          }
+        ]
+      },
+      "frontiers": [],
+      "label": "multi_group_atomic_batch",
+      "note": "Two owners in one intent, so owner ordinals advance independently and both witnesses are deduped by record id where the contexts match."
+    },
+    {
+      "append_context": {
+        "actor_ref": "runtime:conformance",
+        "presented_witness_refs": [
+          "trusted:internal"
+        ],
+        "schema_version_set": "shepherd2-slice-a",
+        "trust_mode": "internal"
+      },
+      "batches": [
+        {
+          "append_intent_id": "intent:local",
+          "groups": [
+            {
+              "causal_parents": [],
+              "fact_drafts": [
+                {
+                  "append_local_id": "p1",
+                  "caused_by_fact_ids": [],
+                  "caused_by_local_refs": [],
+                  "kind_label": "parent",
+                  "mode": "capture",
+                  "payload": {
+                    "value": 7
+                  },
+                  "schema_ref": "shepherd2.conformance.parent.v1"
+                },
+                {
+                  "append_local_id": null,
+                  "caused_by_fact_ids": [],
+                  "caused_by_local_refs": [
+                    "p1"
+                  ],
+                  "kind_label": "child",
+                  "mode": "capture",
+                  "payload": {
+                    "value": 8
+                  },
+                  "schema_ref": "shepherd2.conformance.child.v1"
+                }
+              ],
+              "retained_context": null,
+              "trace_owner_id": "exec:local"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "frontier_ids": [],
+        "owner_paths": {
+          "_kind_labels": {
+            "sha256:160548ff3f2519492a9aa70576b5183b38a293277006ceeadbead5ff8356ad10": "witness",
+            "sha256:29be31f5da7e15d68ffff137c63604330f611d984ac99220aae085f18ffd59ee": "parent",
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777": "witness_root",
+            "sha256:a8314db5d64d57cb236d6da6210c00ea96b7ec0bef39f990e97fc0deef2377de": "child"
+          },
+          "exec:local": [
+            "sha256:29be31f5da7e15d68ffff137c63604330f611d984ac99220aae085f18ffd59ee",
+            "sha256:a8314db5d64d57cb236d6da6210c00ea96b7ec0bef39f990e97fc0deef2377de"
+          ],
+          "kernel:witness": [
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777",
+            "sha256:160548ff3f2519492a9aa70576b5183b38a293277006ceeadbead5ff8356ad10"
+          ]
+        },
+        "receipts": [
+          {
+            "append_intent_id": "intent:local",
+            "causal_edges": [
+              [
+                "sha256:29be31f5da7e15d68ffff137c63604330f611d984ac99220aae085f18ffd59ee",
+                "sha256:a8314db5d64d57cb236d6da6210c00ea96b7ec0bef39f990e97fc0deef2377de"
+              ]
+            ],
+            "commit_receipts": [
+              "commit:0",
+              "commit:1"
+            ],
+            "context_receipts": [
+              "context:fea60d6491e88ac92150bdab48c240fe"
+            ],
+            "fact_ids": [
+              "sha256:29be31f5da7e15d68ffff137c63604330f611d984ac99220aae085f18ffd59ee",
+              "sha256:a8314db5d64d57cb236d6da6210c00ea96b7ec0bef39f990e97fc0deef2377de"
+            ],
+            "owner_ordinal_ranges": {
+              "exec:local": [
+                0,
+                1
+              ]
+            }
+          }
+        ]
+      },
+      "frontiers": [],
+      "label": "local_ref_resolution",
+      "note": "caused_by_local_refs is resolved to the retained parent id before hashing, and the local ref never reaches the envelope."
+    },
+    {
+      "append_context": {
+        "actor_ref": "runtime:conformance",
+        "presented_witness_refs": [
+          "trusted:internal"
+        ],
+        "schema_version_set": "shepherd2-slice-a",
+        "trust_mode": "internal"
+      },
+      "batches": [
+        {
+          "append_intent_id": "intent:frontier",
+          "groups": [
+            {
+              "causal_parents": [],
+              "fact_drafts": [
+                {
+                  "append_local_id": null,
+                  "caused_by_fact_ids": [],
+                  "caused_by_local_refs": [],
+                  "kind_label": "step",
+                  "mode": "capture",
+                  "payload": {
+                    "value": 9
+                  },
+                  "schema_ref": "shepherd2.conformance.step.v1"
+                }
+              ],
+              "retained_context": null,
+              "trace_owner_id": "exec:frontier"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "frontier_ids": [
+          "frontier:one"
+        ],
+        "owner_paths": {
+          "_kind_labels": {
+            "sha256:160548ff3f2519492a9aa70576b5183b38a293277006ceeadbead5ff8356ad10": "witness",
+            "sha256:3efb4ad0e98f4f2940427967ccf5d18514dcadda06168e5a077d3601b7acca6d": "step",
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777": "witness_root",
+            "sha256:7a44a4fdd8e87b0dbb0bc229e27815be9201085f1a0d79cebe48fbe54b96f94a": "witness",
+            "sha256:ef057162a3c9624f21c1a038dc1adfe8f2cc975c59db56ed3280c8936448944e": "frontier_published"
+          },
+          "exec:frontier": [
+            "sha256:3efb4ad0e98f4f2940427967ccf5d18514dcadda06168e5a077d3601b7acca6d",
+            "sha256:ef057162a3c9624f21c1a038dc1adfe8f2cc975c59db56ed3280c8936448944e"
+          ],
+          "kernel:witness": [
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777",
+            "sha256:160548ff3f2519492a9aa70576b5183b38a293277006ceeadbead5ff8356ad10",
+            "sha256:7a44a4fdd8e87b0dbb0bc229e27815be9201085f1a0d79cebe48fbe54b96f94a"
+          ]
+        },
+        "receipts": [
+          {
+            "append_intent_id": "intent:frontier",
+            "causal_edges": [],
+            "commit_receipts": [
+              "commit:0"
+            ],
+            "context_receipts": [
+              "context:6bf865b83e4abcf424ccfd6b8336667c"
+            ],
+            "fact_ids": [
+              "sha256:3efb4ad0e98f4f2940427967ccf5d18514dcadda06168e5a077d3601b7acca6d"
+            ],
+            "owner_ordinal_ranges": {
+              "exec:frontier": [
+                0,
+                0
+              ]
+            }
+          }
+        ]
+      },
+      "frontiers": [
+        {
+          "after_batch": 0,
+          "frontier_id": "frontier:one",
+          "target_trace_owner_id": "exec:frontier",
+          "through_last_fact_of": 0
+        }
+      ],
+      "label": "frontier_publish",
+      "note": "Publishing a frontier appends a cutoff record of its own, so it consumes a commit sequence number and produces an extra record id."
+    },
+    {
+      "append_context": {
+        "actor_ref": "runtime:conformance",
+        "presented_witness_refs": [
+          "trusted:internal"
+        ],
+        "schema_version_set": "shepherd2-slice-a",
+        "trust_mode": "internal"
+      },
+      "batches": [
+        {
+          "append_intent_id": "intent:unicode",
+          "groups": [
+            {
+              "causal_parents": [],
+              "fact_drafts": [
+                {
+                  "append_local_id": null,
+                  "caused_by_fact_ids": [],
+                  "caused_by_local_refs": [],
+                  "kind_label": "step",
+                  "mode": "capture",
+                  "payload": {
+                    "html": "<a>&b",
+                    "text": "café 日本語 😀"
+                  },
+                  "schema_ref": "shepherd2.conformance.step.v1"
+                }
+              ],
+              "retained_context": {
+                "active_binding_refs": [
+                  "binding:café"
+                ],
+                "capability_witness_refs": [],
+                "containment": "contained",
+                "reuse_context_id": null,
+                "semantic_environment_refs": [
+                  "schema-set:é"
+                ],
+                "substrate_ref": "sqlite.local.v1",
+                "visibility_policy_refs": []
+              },
+              "trace_owner_id": "exec:unicode"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "frontier_ids": [],
+        "owner_paths": {
+          "_kind_labels": {
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777": "witness_root",
+            "sha256:510b54d1927b02c9014efd96e017e68562a212b0d1547a88832c7f36268d26e0": "step",
+            "sha256:896e9b29bc308f0dd4dfae009ffbf83e56454646ccd3989e7253095db9f22d82": "witness"
+          },
+          "exec:unicode": [
+            "sha256:510b54d1927b02c9014efd96e017e68562a212b0d1547a88832c7f36268d26e0"
+          ],
+          "kernel:witness": [
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777",
+            "sha256:896e9b29bc308f0dd4dfae009ffbf83e56454646ccd3989e7253095db9f22d82"
+          ]
+        },
+        "receipts": [
+          {
+            "append_intent_id": "intent:unicode",
+            "causal_edges": [],
+            "commit_receipts": [
+              "commit:0"
+            ],
+            "context_receipts": [
+              "context:bfd319ff6992b2a5bfd9760e9c4db4c1"
+            ],
+            "fact_ids": [
+              "sha256:510b54d1927b02c9014efd96e017e68562a212b0d1547a88832c7f36268d26e0"
+            ],
+            "owner_ordinal_ranges": {
+              "exec:unicode": [
+                0,
+                0
+              ]
+            }
+          }
+        ]
+      },
+      "frontiers": [],
+      "label": "non_ascii_payload",
+      "note": "Non-ASCII in the payload and in a retained-context ref, which is where the two encoders diverge: the payload goes through the ensure_ascii=False path and the context id through ensure_ascii=True."
+    },
+    {
+      "append_context": {
+        "actor_ref": "runtime:conformance",
+        "presented_witness_refs": [
+          "trusted:internal"
+        ],
+        "schema_version_set": "shepherd2-slice-a",
+        "trust_mode": "internal"
+      },
+      "batches": [
+        {
+          "append_intent_id": "intent:replay",
+          "groups": [
+            {
+              "causal_parents": [],
+              "fact_drafts": [
+                {
+                  "append_local_id": null,
+                  "caused_by_fact_ids": [],
+                  "caused_by_local_refs": [],
+                  "kind_label": "step",
+                  "mode": "capture",
+                  "payload": {
+                    "value": 10
+                  },
+                  "schema_ref": "shepherd2.conformance.step.v1"
+                }
+              ],
+              "retained_context": null,
+              "trace_owner_id": "exec:replay"
+            }
+          ]
+        },
+        {
+          "append_intent_id": "intent:replay",
+          "groups": [
+            {
+              "causal_parents": [],
+              "fact_drafts": [
+                {
+                  "append_local_id": null,
+                  "caused_by_fact_ids": [],
+                  "caused_by_local_refs": [],
+                  "kind_label": "step",
+                  "mode": "capture",
+                  "payload": {
+                    "value": 10
+                  },
+                  "schema_ref": "shepherd2.conformance.step.v1"
+                }
+              ],
+              "retained_context": null,
+              "trace_owner_id": "exec:replay"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "frontier_ids": [],
+        "owner_paths": {
+          "_kind_labels": {
+            "sha256:160548ff3f2519492a9aa70576b5183b38a293277006ceeadbead5ff8356ad10": "witness",
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777": "witness_root",
+            "sha256:8e8d09872af81dc397837c49b5240c4999c20798c6cf31b81a72c998f4edf3e7": "step"
+          },
+          "exec:replay": [
+            "sha256:8e8d09872af81dc397837c49b5240c4999c20798c6cf31b81a72c998f4edf3e7"
+          ],
+          "kernel:witness": [
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777",
+            "sha256:160548ff3f2519492a9aa70576b5183b38a293277006ceeadbead5ff8356ad10"
+          ]
+        },
+        "receipts": [
+          {
+            "append_intent_id": "intent:replay",
+            "causal_edges": [],
+            "commit_receipts": [
+              "commit:0"
+            ],
+            "context_receipts": [
+              "context:d342d9fc2281c4c9113ba125cbbfa8c5"
+            ],
+            "fact_ids": [
+              "sha256:8e8d09872af81dc397837c49b5240c4999c20798c6cf31b81a72c998f4edf3e7"
+            ],
+            "owner_ordinal_ranges": {
+              "exec:replay": [
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "append_intent_id": "intent:replay",
+            "causal_edges": [],
+            "commit_receipts": [
+              "commit:0"
+            ],
+            "context_receipts": [
+              "context:d342d9fc2281c4c9113ba125cbbfa8c5"
+            ],
+            "fact_ids": [
+              "sha256:8e8d09872af81dc397837c49b5240c4999c20798c6cf31b81a72c998f4edf3e7"
+            ],
+            "owner_ordinal_ranges": {
+              "exec:replay": [
+                0,
+                0
+              ]
+            }
+          }
+        ]
+      },
+      "frontiers": [],
+      "label": "intent_replay",
+      "note": "Replaying an identical intent returns the stored receipt and creates no new records."
+    },
+    {
+      "append_context": {
+        "actor_ref": "runtime:conformance",
+        "presented_witness_refs": [
+          "trusted:internal"
+        ],
+        "schema_version_set": "shepherd2-slice-a",
+        "trust_mode": "internal"
+      },
+      "batches": [
+        {
+          "append_intent_id": "intent:modes",
+          "groups": [
+            {
+              "causal_parents": [],
+              "fact_drafts": [
+                {
+                  "append_local_id": null,
+                  "caused_by_fact_ids": [],
+                  "caused_by_local_refs": [],
+                  "kind_label": "step",
+                  "mode": "capture",
+                  "payload": {
+                    "value": 11
+                  },
+                  "schema_ref": "shepherd2.conformance.step.v1"
+                },
+                {
+                  "append_local_id": null,
+                  "caused_by_fact_ids": [],
+                  "caused_by_local_refs": [],
+                  "kind_label": "step",
+                  "mode": "declaration",
+                  "payload": {
+                    "value": 11
+                  },
+                  "schema_ref": "shepherd2.conformance.step.v1"
+                }
+              ],
+              "retained_context": null,
+              "trace_owner_id": "exec:modes"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "frontier_ids": [],
+        "owner_paths": {
+          "_kind_labels": {
+            "sha256:160548ff3f2519492a9aa70576b5183b38a293277006ceeadbead5ff8356ad10": "witness",
+            "sha256:2cddfbb26a86ee193c11a6a786f261ebb16253a963294b15a6ca2c436b7859e5": "step",
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777": "witness_root",
+            "sha256:bb7c5a498a36905b6652834d9c08803642ff19452942cdaac9c143f98f9c29ee": "step"
+          },
+          "exec:modes": [
+            "sha256:2cddfbb26a86ee193c11a6a786f261ebb16253a963294b15a6ca2c436b7859e5",
+            "sha256:bb7c5a498a36905b6652834d9c08803642ff19452942cdaac9c143f98f9c29ee"
+          ],
+          "kernel:witness": [
+            "sha256:4826dd37b9ecc0c00121d77ccb9247d2e70b4f5386d6e3d464f2811fbc739777",
+            "sha256:160548ff3f2519492a9aa70576b5183b38a293277006ceeadbead5ff8356ad10"
+          ]
+        },
+        "receipts": [
+          {
+            "append_intent_id": "intent:modes",
+            "causal_edges": [],
+            "commit_receipts": [
+              "commit:0",
+              "commit:1"
+            ],
+            "context_receipts": [
+              "context:19b981a889d4056a3e3ade265fe1c77f"
+            ],
+            "fact_ids": [
+              "sha256:2cddfbb26a86ee193c11a6a786f261ebb16253a963294b15a6ca2c436b7859e5",
+              "sha256:bb7c5a498a36905b6652834d9c08803642ff19452942cdaac9c143f98f9c29ee"
+            ],
+            "owner_ordinal_ranges": {
+              "exec:modes": [
+                0,
+                1
+              ]
+            }
+          }
+        ]
+      },
+      "frontiers": [],
+      "label": "declaration_and_capture",
+      "note": "Mode is part of the record digest, so the same payload in two modes yields different ids."
+    }
+  ]
+}

@@ -129,63 +129,61 @@ Extend the **shared** file (`testdata/kernel_abi_v0.json` ≡
 
 ## 4. Store-level cross-language vectors
 
-> ### ⚠️ §4 measured, 2026-10-07: the store identities currently DIVERGE
+> ### ✅ §4 CLOSED: the store now allocates Python's identities
 >
-> The digest layer is now byte-identical to Python (§1), but **the store does not
-> construct the same inputs**, so record, witness and context IDs all differ. This
-> is the single most important open item in Phase 1.
->
-> Evidence: one fixture — `intent:a` / owner `exec:one` /
+> Measured again on the same fixture — `intent:a` / owner `exec:one` /
 > `draft(kind="step", mode=capture, schema_ref="shepherd2.conformance.step.v1",
-> payload={"value":1})` with the trusted internal append context — driven through
-> `SQLiteTraceStore.append` on both sides.
+> payload={"value":1})` with the trusted internal append context:
 >
-> | identity | Python | Go | |
-> |---|---|---|---|
-> | record id | `sha256:2dc99e3f6954d51b…` | `sha256:ef285c4c3e3f34ec…` | ❌ |
-> | witness ref | `sha256:160548ff3f251949…` | `sha256:7a44a4fdd8e87b0d…` | ❌ |
-> | context id | `context:445f12c02f7e458fd07811dc7df7fc47` | `ctx:df5e52a317598773236d8a76e38aadeee6dcbe1b25638f2c2888e01ccba0608f` | ❌ |
-> | commit receipt | `commit:0` | `commit:0` | ✅ |
-> | owner ordinal range | `(0, 0)` | `(0, 0)` | ✅ |
+> | identity | Python | Go |
+> |---|---|---|
+> | record id | `sha256:2dc99e3f6954d51b…` | `sha256:2dc99e3f6954d51b…` ✅ |
+> | witness ref | `sha256:160548ff3f251949…` | `sha256:160548ff3f251949…` ✅ |
+> | context id | `context:445f12c02f7e458fd07811dc7df7fc47` | `context:445f12c02f7e458fd07811dc7df7fc47` ✅ |
+> | commit receipt | `commit:0` | `commit:0` ✅ |
+> | owner ordinal range | `(0, 0)` | `(0, 0)` ✅ |
 >
-> Three distinct causes, established by reading both implementations:
+> `testdata/store_vectors_v0.json` now replays nine fixtures from the reference
+> store and asserts ID-for-ID equality, so this is verified rather than asserted.
+> The four causes were:
 >
-> 1. **Context-id algorithm differs outright.** Python is
+> 1. **The context id was a different algorithm.** Python is
 >    `f"context:{sha256(f'{intent}\\0{group_index}\\0{json}').hexdigest()[:32]}"`
->    over a NUL-joined *string* (`trace_store.py:_context_id`); Go hashes a JSON
->    *object* with keys `intent`/`group_index`/`payload` and prefixes `ctx:` with
->    all 64 hex characters. Different input shape, different prefix, different
->    length.
-> 2. **Two JSON encoders in the Python path, and the Go store uses one.**
->    Record and witness ids go through `canonical_json_bytes` (`ensure_ascii=False`,
->    raw UTF-8). But `_json_dumps` (`trace_store.py:1519-1520`) uses **default
->    `ensure_ascii=True`**, and *that* is what produces the context id, the batch
->    digest, stored `body_json`/`caused_by_json` and `receipt_json`. So the Go port
->    needs both flavours: raw UTF-8 for record digests, `\\uXXXX`-escaped for
->    context ids and batch digests. §1 fixed only the first.
-> 3. **The witness plan differs**, so the record id differs too — the witness
->    record id is an input to the record digest
->    (`canonical_record_input(..., witness=witness_plan.record_id)`). Compare
->    `ordinaryWitnessPlan` (`store.go`) against `_ordinary_witness_plan`
->    (`trace_store.py:1278-1302`) field by field: Python's body comes from
->    `WitnessBody.to_payload()` with exactly eight keys, `authority_refs` taken
->    from the *retained context's* `capability_witness_refs` (not the append
->    context's presented refs), and `provenance_policy_refs` always `[]`.
+>    over the context payload alone, encoded `ensure_ascii=True`. Go hashed a JSON
+>    object of `intent`/`group_index`/`payload` with `json.Marshal` and prefixed
+>    `ctx:` with all 64 hex characters — different input shape, prefix and length.
+>    All three had to change.
+> 2. **Two JSON encoders, and Go had one.** Record and witness ids use
+>    `canonical_json_bytes` (`ensure_ascii=False`), but `_json_dumps`
+>    (`trace_store.py:1519-1520`) omits that argument, so the context id, the batch
+>    digest, stored `body_json`/`caused_by_json` and `receipt_json` all use
+>    `ensure_ascii=True`. `canonicalJSONASCIIBytes` now implements the second
+>    flavour: non-ASCII as `\\uXXXX`, surrogate pairs above U+FFFF, DEL escaped, and
+>    — unlike `encoding/json` — no HTML escaping of `<`, `>` or `&`.
+> 3. **The witness plan took `authority_refs` from the wrong source.** Go used the
+>    append context's `presented_witness_refs`; Python uses the *retained context's*
+>    `capability_witness_refs`. That tied the witness id, and every record id citing
+>    it, to the caller's credentials — so identical content appended by a different
+>    trusted caller produced a different record id. The root witness's `kind_label`
+>    was also `root_witness` where Python has `witness_root`.
+> 4. **Witness insertion order was map-random.** Witness plans were collected by
+>    ranging a Go map, and that order is what assigns the witness records their
+>    owner ordinals. Python's `witness_plans` is an insertion-ordered dict
+>    (`trace_store.py:480-481`), root first, then each group's ordinary witness. Two
+>    identical appends could therefore allocate different ordinals, and the
+>    `kernel:witness` owner path read back in a different order each time. **The
+>    store-level vectors caught this one** — no digest-layer vector could have.
 >
-> Also note the **batch digest** is structurally different and must be aligned for
-> "same intent, different batch" rejection to agree cross-language: Python's
-> payload has `atomicity` and `schema_version_set` and spells group/draft keys in
-> snake_case; Go marshals `batch.Groups` as Go structs, so the JSON carries Go
-> field names and declaration order rather than sorted snake_case keys.
+> The batch digest was aligned in the same pass: it previously marshalled Go structs,
+> so the JSON carried Go field names and declaration order rather than Python's
+> sorted snake_case keys (`atomicity`, `schema_version_set`, snake_case group and
+> draft fields, `reuse_context_id`). Since the conflict check is part of the ABI, a
+> batch one store rejected as a conflicting reuse the other would have accepted.
 >
-> **Order of work:** (1) context id, (2) witness plan, (3) batch digest — then the
-> record id follows from (2). Do not start plan 02 until this is closed: schema
-> IDs are digests, and this is the same class of drift, one layer up.
->
-> A working transcript generator was prototyped during this measurement and is
-> worth rebuilding properly as `testdata/store_vectors_v0.json`'s producer. Note
-> the Python `RecordView` has no `context_ref` attribute (the generator hit that);
-> read the context id from the receipt and from the context table.
+> One residual difference, recorded here rather than hidden: Python's
+> `append_local_id` is `None` when unset while Go uses `""`, so `""` maps to JSON
+> `null`. An explicitly empty `append_local_id` would therefore differ, and no port
+> of a working caller can currently produce one.
 
 Digest-layer identity does not prove the *store* is identical — witness plan
 construction, retained-context hashing (`ctx:<sha256>`), frontier records, and
