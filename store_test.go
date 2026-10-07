@@ -78,6 +78,148 @@ func TestAppendThenReadOwnerPrefix(t *testing.T) {
 	}
 }
 
+// TestReadPathPrefixIsAnAliasForReadOwnerPrefix pins the protocol method against
+// the Python reference, where read_path_prefix is a pure delegation:
+//
+//	def read_path_prefix(self, read_context, trace_owner_id, through,
+//	                     mode_filter="both") -> TraceSlice:
+//	    return self.read_owner_prefix(read_context, trace_owner_id, through, mode_filter)
+//
+// It is not a distinct owner-agnostic read, which the plan originally assumed,
+// and it takes a trace owner id rather than a free-form path. Pinning the
+// equivalence stops the two from drifting, since a caller written against the
+// Python protocol may use either name.
+func TestReadPathPrefixIsAnAliasForReadOwnerPrefix(t *testing.T) {
+	store := newMemStore(t)
+	appendDrafts(t, store, "intent:a", "owner:a",
+		draft("step", Capture, map[string]any{"value": 1}))
+	appendDrafts(t, store, "intent:b", "owner:b",
+		draft("step", Capture, map[string]any{"value": 2}))
+
+	cases := []struct {
+		name       string
+		pathRef    string
+		through    int
+		modeFilter ModeFilter
+	}{
+		{"owner scoped", "owner:a", 99, ModeBoth},
+		{"other owner", "owner:b", 99, ModeBoth},
+		{"empty ref", "", 99, ModeBoth},
+		{"ordinal bounded", "owner:a", 0, ModeBoth},
+		{"captures only", "owner:a", 99, ModeCapturesOnly},
+		{"declarations only", "owner:a", 99, ModeDeclarationsOnly},
+		{"unknown ref", "owner:missing", 99, ModeBoth},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			want, err := store.ReadOwnerPrefix(reader, tc.pathRef, tc.through, tc.modeFilter)
+			if err != nil {
+				t.Fatalf("ReadOwnerPrefix: %v", err)
+			}
+			got, err := store.ReadPathPrefix(reader, tc.pathRef, tc.through, tc.modeFilter)
+			if err != nil {
+				t.Fatalf("ReadPathPrefix: %v", err)
+			}
+			if len(got.FactIDs()) != len(want.FactIDs()) {
+				t.Fatalf("ReadPathPrefix returned %d facts, ReadOwnerPrefix %d",
+					len(got.FactIDs()), len(want.FactIDs()))
+			}
+			for i := range want.FactIDs() {
+				if got.FactIDs()[i] != want.FactIDs()[i] {
+					t.Errorf("fact[%d] = %q, want %q", i, got.FactIDs()[i], want.FactIDs()[i])
+				}
+			}
+		})
+	}
+}
+
+// TestReadPathPrefixEmptyRefSpansOwners documents what the empty ref does. It is
+// ReadOwnerPrefix's existing all-paths query, not something read_path_prefix
+// adds — the plan described this as "owner-agnostic path addressing", which the
+// Python source does not support.
+func TestReadPathPrefixEmptyRefSpansOwners(t *testing.T) {
+	store := newMemStore(t)
+	appendDrafts(t, store, "intent:a", "owner:a",
+		draft("step", Capture, map[string]any{"value": 1}))
+	appendDrafts(t, store, "intent:b", "owner:b",
+		draft("step", Capture, map[string]any{"value": 2}))
+
+	all, err := store.ReadPathPrefix(reader, "", 99, ModeBoth)
+	if err != nil {
+		t.Fatalf("ReadPathPrefix: %v", err)
+	}
+
+	owners := map[string]bool{}
+	for _, fact := range all.FactsByID {
+		if rec, ok := fact.(Record); ok && rec.View != nil {
+			owners[rec.View.TraceOwnerID] = true
+		}
+	}
+	if !owners["owner:a"] || !owners["owner:b"] {
+		t.Errorf("empty ref should span both owners, saw %v", owners)
+	}
+}
+
+// TestSliceOutputOrderIsDeterministic pins that every map-backed field of a read
+// result comes out in a stable order.
+//
+// Python's TraceSlice holds owner_paths, external_anchors, context_anchors and
+// witness_anchors as dicts, so all four are insertion-ordered and deterministic.
+// Go's equivalents were plain map iterations, so two identical reads in the same
+// process could disagree with each other, and would necessarily disagree with
+// Python on cross-language comparison.
+//
+// This was found by the ReadPathPrefix alias test below, which failed on the
+// empty-ref case with the same fact IDs appearing in a different order on each
+// call. Reading repeatedly is the assertion that matters — any single read looks
+// correct, and only repetition exposes map iteration.
+func TestSliceOutputOrderIsDeterministic(t *testing.T) {
+	store := newMemStore(t)
+	appendDrafts(t, store, "intent:a", "owner:a",
+		draft("step", Capture, map[string]any{"value": 1}))
+	appendDrafts(t, store, "intent:b", "owner:b",
+		draft("step", Capture, map[string]any{"value": 2}))
+
+	first, err := store.ReadOwnerPrefix(reader, "", 99, ModeBoth)
+	if err != nil {
+		t.Fatalf("ReadOwnerPrefix: %v", err)
+	}
+	wantIDs := first.FactIDs()
+	wantOrder := append([]string(nil), first.OwnerPathOrder...)
+
+	if len(wantIDs) == 0 {
+		t.Fatal("expected facts across two owners")
+	}
+	if len(wantOrder) != len(first.OwnerPaths) {
+		t.Fatalf("OwnerPathOrder has %d entries for %d owner paths",
+			len(wantOrder), len(first.OwnerPaths))
+	}
+
+	for i := 0; i < 20; i++ {
+		got, err := store.ReadOwnerPrefix(reader, "", 99, ModeBoth)
+		if err != nil {
+			t.Fatalf("read %d: %v", i, err)
+		}
+
+		gotIDs := got.FactIDs()
+		if len(gotIDs) != len(wantIDs) {
+			t.Fatalf("read %d returned %d facts, first read %d", i, len(gotIDs), len(wantIDs))
+		}
+		for j := range wantIDs {
+			if gotIDs[j] != wantIDs[j] {
+				t.Fatalf("read %d FactIDs()[%d] = %q, first read %q: fact_ids order "+
+					"must not depend on Go map iteration", i, j, gotIDs[j], wantIDs[j])
+			}
+		}
+		for j := range wantOrder {
+			if got.OwnerPathOrder[j] != wantOrder[j] {
+				t.Fatalf("read %d OwnerPathOrder[%d] = %q, first read %q", i, j,
+					got.OwnerPathOrder[j], wantOrder[j])
+			}
+		}
+	}
+}
+
 func TestAppendIntentIdempotent(t *testing.T) {
 	store := newMemStore(t)
 	d := draft("execution_started", Capture, map[string]any{"execution_id": "exec:parent"})

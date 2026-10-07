@@ -1,5 +1,7 @@
 package shepherd
 
+import "sort"
+
 // RecordMode distinguishes observed facts from stated intentions.
 type RecordMode string
 
@@ -265,11 +267,17 @@ type Slice struct {
 	FactsByID         map[string]VisibleRecord
 	ContextsByID      map[string]RetainedContext
 	OwnerPaths        map[string][]string
-	CausalEdges       [][2]string
-	ExternalAnchors   []ExternalAnchor
-	ContextAnchors    []ContextAnchor
-	WitnessesByID     map[string]VisibleRecord
-	WitnessAnchors    []WitnessAnchor
+	// OwnerPathOrder lists the owner paths in the order they were first
+	// encountered while reading. FactIDs uses it so the flattened order is
+	// deterministic and matches Python, where owner_paths is a dict and
+	// TraceSlice.fact_ids() therefore flattens in insertion order. Without it,
+	// FactIDs would iterate Go's map and return a different order every call.
+	OwnerPathOrder  []string
+	CausalEdges     [][2]string
+	ExternalAnchors []ExternalAnchor
+	ContextAnchors  []ContextAnchor
+	WitnessesByID   map[string]VisibleRecord
+	WitnessAnchors  []WitnessAnchor
 }
 
 // ContextAnchor is a visible reference to a retained context hidden by visibility.
@@ -280,10 +288,25 @@ type ContextAnchor struct {
 }
 
 // FactIDs returns all fact IDs across all owner paths in the slice.
+//
+// Paths are visited in the order they were first encountered while reading,
+// matching Python's TraceSlice.fact_ids(), which flattens the insertion-ordered
+// owner_paths dict. The fallback sorts rather than ranging over the map: a
+// hand-built Slice should still produce a stable order, and ranging over a Go map
+// does not.
 func (s Slice) FactIDs() []string {
+	order := s.OwnerPathOrder
+	if len(order) != len(s.OwnerPaths) {
+		order = make([]string, 0, len(s.OwnerPaths))
+		for ref := range s.OwnerPaths {
+			order = append(order, ref)
+		}
+		sort.Strings(order)
+	}
+
 	var ids []string
-	for _, path := range s.OwnerPaths {
-		ids = append(ids, path...)
+	for _, ref := range order {
+		ids = append(ids, s.OwnerPaths[ref]...)
 	}
 	return ids
 }

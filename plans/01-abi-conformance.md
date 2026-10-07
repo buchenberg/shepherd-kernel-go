@@ -71,6 +71,46 @@ Two known divergence classes between Go `json.Marshal` and Python
   test asserting they are currently rejected/ignored consistently rather than
   silently trusted.
 
+### 2a. Status, corrected against the Python reference (2026-10-07)
+
+Three of the four items above were wrong when written. Verified by reading
+`../shepherd/shepherd2/src/shepherd2/kernel/facts.py` and `trace_store.py`:
+
+| Item | Verdict |
+|---|---|
+| `ReadPathPrefix` | **Real gap**, but the description was wrong. It *is* in the protocol (`facts.py:443`), however its body is a pure delegation — `return self.read_owner_prefix(read_context, trace_owner_id, through, mode_filter)` — and it takes a **trace owner id, not a free-form path**. There is no "owner-agnostic path addressing" distinct from `ReadOwnerPrefix`. Implemented as a documented alias. |
+| `ExternalAnchor.AnchorKind` | **Already fixed.** Populated at `store.go:1101` and `:1115` by the Phase 0 bug batch (`4203993`, shipped in `v0.4.1`) — the original note described the pre-fix state. |
+| `ReadOwnerCutoff` signature | **The premise is false.** Python's protocol member is `def read_owner_cutoff(self, frontier_id: FrontierId) -> OwnerCutoff`, taking **no context**. Go already matches Python. No change needed. |
+| `OpMaterialize` / `OpObserve` | Still open. |
+
+### 2b. Found while implementing: read-result ordering was nondeterministic
+
+Implementing the alias surfaced a genuine ABI divergence the plan did not
+anticipate.
+
+`Slice.FactIDs()` flattened `OwnerPaths` by ranging over a Go **map**, so the
+order changed on every call. Python's equivalent is deterministic:
+`TraceSlice.owner_paths` is a `dict[TraceOwnerId, tuple[FactId, ...]]` and
+`fact_ids()` flattens it — and dict order is insertion order. So Go disagreed with
+Python *and with itself*: the first run of the new alias test failed with the same
+fact IDs at different positions on two consecutive reads.
+
+The same defect applied to `ExternalAnchors`, `ContextAnchors` and
+`WitnessAnchors`, all built via `mapToSlice`, which ranged over a map. Python holds
+all three as dicts (`trace_store.py:646-649`) and converts to tuples in insertion
+order.
+
+Fixed by recording first-insertion order for each collection and emitting through
+`orderedValues`, with a sorted-key fallback so a missed insertion site degrades to
+a *different deterministic* order rather than to nondeterminism. `Slice` gains
+`OwnerPathOrder`. Pinned by `TestSliceOutputOrderIsDeterministic`, which asserts 20
+consecutive reads agree — a single read always looks correct, which is why this
+survived.
+
+**Worth generalising:** any Go field backed by a `map` and compared against Python
+is suspect, because Python's dicts are ordered and Go's maps are not. Where a
+Python structure is a dict or tuple, the Go port needs an explicit order.
+
 ## 3. Extended golden vectors (co-generated with Python)
 
 Extend the **shared** file (`testdata/kernel_abi_v0.json` ≡

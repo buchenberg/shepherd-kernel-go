@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -233,6 +234,20 @@ func (s *SQLiteTraceStore) ReadOwnerPrefix(ctx ReadContext, ownerID string, thro
 	}
 
 	return s.buildSlice(pathEntries, nil, opCtx.VisibilityProfile, modeFilter, true)
+}
+
+// ReadPathPrefix is the TraceStore protocol's path-addressed prefix read.
+//
+// In shepherd2 this is a pure alias for read_owner_prefix — the protocol declares
+// it (facts.py:443) but the reference implementation's body is
+// `return self.read_owner_prefix(read_context, trace_owner_id, through,
+// mode_filter)`. It takes a trace owner id, not a free-form path, and applies no
+// different addressing, so this delegates rather than reimplementing the query.
+//
+// It exists for protocol completeness: a caller written against the Python
+// protocol can call either name and get the same slice.
+func (s *SQLiteTraceStore) ReadPathPrefix(ctx ReadContext, pathRef string, through int, modeFilter ModeFilter) (Slice, error) {
+	return s.ReadOwnerPrefix(ctx, pathRef, through, modeFilter)
 }
 
 // ReadCausalClosure reads the causal closure for one or more root facts.
@@ -1009,20 +1024,35 @@ func (s *SQLiteTraceStore) buildSlice(
 		selected[l.entry.recordID] = true
 	}
 
+	// Owner paths and the three anchor collections are maps, but their order is
+	// part of the read result. Python's TraceSlice holds all four as dicts and
+	// emits them in insertion order — dict order is insertion order — so
+	// fact_ids() and the anchor tuples are deterministic there. Go's map
+	// iteration is randomised, so each map is paired with the order its keys were
+	// first inserted and emitted through orderedValues. Iterating these maps
+	// directly makes every read produce a different order: different from Python,
+	// and different from the previous call in the same process.
 	factsByID := make(map[string]VisibleRecord)
 	contextsByID := make(map[string]RetainedContext)
 	ownerPaths := make(map[string][]string)
+	var ownerPathOrder []string
 	var causalEdges [][2]string
 	externalAnchors := make(map[string]ExternalAnchor)
+	var externalAnchorOrder []string
 	contextAnchors := make(map[string]ContextAnchor)
+	var contextAnchorOrder []string
 	witnessesByID := make(map[string]VisibleRecord)
 	witnessAnchors := make(map[string]WitnessAnchor)
+	var witnessAnchorOrder []string
 
 	for _, l := range loaded {
 		factID := l.entry.recordID
 		visible := visibleFact(l.fact, visibility)
 		if visible != nil {
 			factsByID[factID] = visible
+		}
+		if _, seen := ownerPaths[l.entry.pathRef]; !seen {
+			ownerPathOrder = append(ownerPathOrder, l.entry.pathRef)
 		}
 		ownerPaths[l.entry.pathRef] = append(ownerPaths[l.entry.pathRef], factID)
 
@@ -1031,6 +1061,7 @@ func (s *SQLiteTraceStore) buildSlice(
 				causalEdges = append(causalEdges, [2]string{parent, factID})
 			} else if includeExternalAnchors {
 				if _, exists := externalAnchors[parent]; !exists {
+					externalAnchorOrder = append(externalAnchorOrder, parent)
 					externalAnchors[parent] = s.anchorForFact(parent, "outside_frontier")
 				}
 			}
@@ -1043,6 +1074,7 @@ func (s *SQLiteTraceStore) buildSlice(
 		if ctxID != "" {
 			if visibility == VisibilityShapeOnly {
 				if _, exists := contextAnchors[ctxID]; !exists {
+					contextAnchorOrder = append(contextAnchorOrder, ctxID)
 					contextAnchors[ctxID] = ContextAnchor{
 						ContextID:    ctxID,
 						VisibleShape: map[string]any{"context_id": ctxID},
@@ -1073,6 +1105,7 @@ func (s *SQLiteTraceStore) buildSlice(
 		visible := visibleFact(w, visibility)
 		if visibility == VisibilityShapeOnly {
 			if _, exists := witnessAnchors[wRef]; !exists {
+				witnessAnchorOrder = append(witnessAnchorOrder, wRef)
 				witnessAnchors[wRef] = witnessAnchor(w)
 			}
 		} else if visible != nil {
@@ -1087,11 +1120,12 @@ func (s *SQLiteTraceStore) buildSlice(
 		FactsByID:         factsByID,
 		ContextsByID:      contextsByID,
 		OwnerPaths:        ownerPaths,
+		OwnerPathOrder:    ownerPathOrder,
 		CausalEdges:       causalEdges,
-		ExternalAnchors:   mapToSlice(externalAnchors),
-		ContextAnchors:    mapToSlice(contextAnchors),
+		ExternalAnchors:   orderedValues(externalAnchors, externalAnchorOrder),
+		ContextAnchors:    orderedValues(contextAnchors, contextAnchorOrder),
 		WitnessesByID:     witnessesByID,
-		WitnessAnchors:    mapToSlice(witnessAnchors),
+		WitnessAnchors:    orderedValues(witnessAnchors, witnessAnchorOrder),
 	}, nil
 }
 
@@ -1822,10 +1856,29 @@ func nextCommitSeq(receipts []string) int {
 	return maxSeq
 }
 
-func mapToSlice[T any](m map[string]T) []T {
+// orderedValues returns a map's values in the given key order.
+//
+// It exists because every map-backed field of a read result has a defined order
+// in the Python reference — dicts are insertion-ordered — while Go's map
+// iteration is randomised. Callers pass the insertion order they recorded.
+//
+// The length check is a guard, not an expected path: if the supplied order does
+// not cover the map, this falls back to sorted keys rather than to map iteration,
+// so a missed insertion site degrades to a different deterministic order instead
+// of to nondeterminism.
+func orderedValues[T any](m map[string]T, order []string) []T {
+	if len(order) != len(m) {
+		order = make([]string, 0, len(m))
+		for k := range m {
+			order = append(order, k)
+		}
+		sort.Strings(order)
+	}
 	s := make([]T, 0, len(m))
-	for _, v := range m {
-		s = append(s, v)
+	for _, k := range order {
+		if v, ok := m[k]; ok {
+			s = append(s, v)
+		}
 	}
 	return s
 }
