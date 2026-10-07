@@ -376,8 +376,8 @@ change).
       are documented plan-02 dependencies, not ❌s.)*
 - [x] `-race` green on the 3-OS CI matrix (PRs #12–#18), and the golden-drift gate is active.
 - [x] CHANGELOG flags the digest-behavior fix — the Breaking section leads with the digest-behavior change, the duplicate-parent rejection and the witness-body validation, plus the yaah consumer note.
-- [ ] `v0.5.0` tagged. *(Post-merge step, deliberately unticked while it is being reviewed: tag the release merge, verify `git merge-base --is-ancestor <last-fix-commit> v0.5.0` before pushing — the v0.4.1 lesson — and confirm it resolves from a clean module. Ticked by the commit that follows the tag.)*
-
+- [x] `v0.5.0` tagged.
+      *(Done: annotated tag `v0.5.0` at `fb1c2a9` (the release merge), pushed after verifying `git merge-base --is-ancestor 0bf34f8 v0.5.0` — the last fix is in the tagged history — and confirmed `go get github.com/buchenberg/shepherd-kernel-go@v0.5.0` resolves from a clean module.)*
 **yaah coordination**: after v0.5.0, traces written by yaah on ≥v0.5.0 are
 cross-readable with Python; traces written by older Go versions with
 edge-case payloads are **not** digest-compatible — note in yaah release notes.
