@@ -339,8 +339,13 @@ IDs are digests — a canonical drift there is expensive to unwind).
       `canonical_corpus_v0.json` adds 200 seeded payloads including subnormals
       and both notation boundaries; every digest reproduces byte-for-byte.)*
 - [x] Shared golden file hash matches the Python repo's copy; CI fails on drift.
-      *(Done — the pinned-hash test fails the build on drift; the upstream
-      compare is a deliberate local check, see the T1.4 row in plan 00.)*
+      *(Done, both directions — the pinned-hash test fails the build if our
+      copy changes, and the `golden-drift` CI job clones
+      `shepherd-agents/shepherd` at the pinned `d34d5ca3` and fails the build
+      if the reference copy of the shared golden differs from ours. The
+      vendored files — edge vectors, corpus, store vectors — have no upstream
+      copy; they are guarded by their pinned hashes plus the generators'
+      verified byte-reproducibility.)*
 - [x] `store_vectors_v0.json` replay passes: all record/context/frontier IDs
       byte-identical to Python store output.
       *(Done — §4 is closed: the store allocates the reference identities,
