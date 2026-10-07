@@ -64,20 +64,21 @@ also be a bug-fix vehicle.
 | T0.6 | Bug batch (6 items) | ✅ | `4203993` touches `checkpoint.go`, `sandbox.go`, `sandbox_git.go`, `scope.go`, `store.go`, `supervisor.go`, `types.go` + both containerd files, with tests |
 | T0.7 | CI bootstrap | ✅ | `7281fe1` + `3cf961d` + `55b4daf`; `ci.yml` has the 3-OS matrix, `gofmt` fail-on-output, `go vet`, `go test -race`, `go build -trimpath`, and a linux containerd job |
 | T0.8 | **Cut `v0.4.1`** so a core release contains the Phase 0 bug batch | ✅ | Merged as `bee4ca5` (PR #10) and **both tags re-pointed there before publishing** — the first cut at `3315b3a` predated the review fixes. `v0.4.1` resolves from a clean module context and contains the bug batch (`git merge-base --is-ancestor 4203993 v0.4.1` succeeds). Core release is sound |
-| T0.8b | **Publish `sandbox/containerd/v0.1.2`** carrying the `v0.4.1` requirement, so the released nested module is not pinned to pre-fix core | tag + `CHANGELOG.md` | 0.25d | PR #11 merged |
-
-**T0.8 is only half done, and the plan said otherwise until review caught it.**
-Repinning `sandbox/containerd/go.mod` (PR #11) and *releasing* the nested module
-are different acts. Because the tags were pushed before PR #11 existed, the
-published `sandbox/containerd/v0.1.1` still requires `v0.4.0`, and it **cannot be
-corrected in place** — Go module versions are immutable once the proxy and
-`sum.golang.org` have recorded them. Hence T0.8b: a new version, not a retag.
+| T0.8b | **Publish `sandbox/containerd/v0.1.2`** carrying the `v0.4.1` requirement, so the released nested module is not pinned to pre-fix core | ✅ | Tagged at `df47ec9` — the merge commit that carries the repin — and published. Verified end-to-end from a clean module: `go get …/sandbox/containerd@v0.1.2` pulls core `v0.4.1`. `v0.1.1` stays permanently wrong; see the T0.8b note below |
 | T0.9 | **Hold a containerd lease for the sandbox's lifetime** so its snapshots cannot be garbage-collected | ✅ | `8e9b867`. Created in `Create`/`Apply` via `ensureLease`, injected into every snapshotter call by `namespaceSnapshotter` (atomic `leaseRef`, so the hot path takes no lock), released in `Destroy`, labelled `shepherd.lease=sandbox` so an orphan from a crashed process is findable. **Accept met: 12/12 consecutive green soak runs** (was 3/5 failing). Ten daemon-free tests in `lease_test.go` pin the bookkeeping; `TestLive_LeaseHoldsSnapshots` proves the lease lists the sandbox's own snapshot keys, and `TestLive_DestroyReleasesTheLease` proves it is dropped |
 
-**Phase 0 is complete except T0.8b.** T0.5 passed, T0.9 proved out the fix, T0.8
-published the core release, and the live suite is deterministic at 12/12. What
-remains is publishing the nested module version that carries the core repin — see
-the T0.8b note above, and note that it is a release act, not a code change.
+**Phase 0 is complete.** T0.5 passed, T0.9 proved out the fix, T0.8 published the
+core release, and T0.8b published the nested release that carries the repin. The
+live suite is deterministic at 12/12, and both module paths resolve to fixed code
+from a clean consumer.
+
+**T0.8 was recorded as fully done while only half of it was, and review caught
+it — worth keeping as a shape to watch for.** Repinning `sandbox/containerd/go.mod`
+(PR #11) and *releasing* the nested module are different acts: the tags were
+pushed before PR #11 existed, so `v0.1.1` shipped requiring the pre-fix core, and
+it **cannot be corrected in place** because Go module versions are immutable once
+the proxy and `sum.golang.org` record them. Hence T0.8b: a new version, not a
+retag. The exit criterion is now split into two boxes rather than one.
 
 **The stop-gate did its job, and how it did so is worth recording.** T0.5 was
 written as a de-risking step so a fatal containerd problem would surface before
@@ -97,15 +98,16 @@ and moving the tag was preferable to publishing a release whose own notes descri
 a defect that is fixed in the same unreleased state. If the tag had been pushed,
 the correct move would instead have been a `v0.4.2`.
 
-**Where this stands (2026-10-07, evening): the core release is done; the nested
-release is not.** PR #10 merged as `bee4ca5`, and both tags were re-pointed there
+**Where this stands (2026-10-07): both releases are done and verified.** PR #10
+merged as `bee4ca5`, and both tags were re-pointed there
 before publication — the first cut pointed at `3315b3a`, which predated the review
-fixes, so publishing it would have shipped a `v0.4.1` without them. Both tags are
-now **published**, and resolution is verified from a clean module context:
+fixes, so publishing it would have shipped a `v0.4.1` without them. Both core and
+nested tags are now **published at fixed content**, verified from a clean module
+context:
 
 ```
-github.com/buchenberg/shepherd-kernel-go                    v0.4.1
-github.com/buchenberg/shepherd-kernel-go/sandbox/containerd v0.1.1
+github.com/buchenberg/shepherd-kernel-go                     v0.4.1
+github.com/buchenberg/shepherd-kernel-go/sandbox/containerd  v0.1.2
 ```
 
 **One caveat worth remembering:** the tags are only as good as the check that they
@@ -113,32 +115,35 @@ point at merged, reviewed history. Publishing a stale tag is easy to do and
 invisible until a consumer compiles against it — so the check is
 `git merge-base --is-ancestor <last-fix-commit> <tag>` before every push.
 
-**⚠️ The nested release does NOT carry the repin — T0.8b.** Publishing the tags
-and repinning the module were two separate acts, and only the first is complete.
-The tags were pushed **before** PR #11 merged, so the published nested tag's own
-`go.mod` still requires the pre-fix core:
+**✅ T0.8b is done — the nested release now carries the repin.** Publishing the tags
+and repinning the module were two separate acts, and review caught that only the
+first had been completed. The tags were pushed **before** PR #11 merged, so
+`sandbox/containerd/v0.1.1` shipped requiring the pre-fix core. That version
+**cannot be repaired in place** — Go module versions are immutable once fetched
+through the proxy and recorded in `sum.golang.org` — so it took a new version:
 
 | Ref | Requires core | Published? |
 |---|---|---|
-| `sandbox/containerd/v0.1.0` | `v0.4.0` | yes |
-| `sandbox/containerd/v0.1.1` | `v0.4.0` | yes — **and this is the problem** |
-| `parity/p0-t8-repin` (PR #11) | `v0.4.1` | **no** |
+| `sandbox/containerd/v0.1.0` | `v0.4.0` | yes (historical) |
+| `sandbox/containerd/v0.1.1` | `v0.4.0` | yes — **permanently wrong; do not use** |
+| `sandbox/containerd/v0.1.2` | **`v0.4.1`** | ✅ **yes — use this one** |
 
-So a consumer installing `sandbox/containerd@v0.1.1` today still compiles against
-a core release that predates the Phase 0 bug batch. **Merging PR #11 does not fix
-this**: the repin would land on `main`, while the tag keeps pointing at the old
-tree. And `v0.1.1` **cannot be repaired in place** — Go module versions are
-immutable once fetched through the proxy and recorded in `sum.golang.org`, so the
-same version can never be republished with different content.
+Verified end-to-end from a clean module, not inferred from the tag list:
 
-**The fix is a new nested release, `sandbox/containerd/v0.1.2`,** cut from `main`
-*after* PR #11 merges. Tracked as **T0.8b** below. The core release is unaffected:
-`v0.4.1` is correct and contains the bug batch (verified).
+```
+$ go get github.com/buchenberg/shepherd-kernel-go/sandbox/containerd@v0.1.2
+go: added github.com/buchenberg/shepherd-kernel-go v0.4.1
+$ go list -m all | grep shepherd
+github.com/buchenberg/shepherd-kernel-go                    v0.4.1
+github.com/buchenberg/shepherd-kernel-go/sandbox/containerd  v0.1.2
+```
 
-This is currently inert rather than urgent — nothing imports the nested module yet
-(`yaah`'s sandbox construction is its own step 5, unimplemented) — but it must be
-fixed **before the first consumer**, or that consumer silently builds against
-pre-fix core code.
+The core release was never affected: `v0.4.1` is correct and contains the bug
+batch. **Consumers must require `v0.1.2`, not `v0.1.1`** — `v0.1.1` still resolves
+fine and silently compiles against pre-fix core, which is the failure mode worth
+naming. Nothing imports the nested module yet (`yaah`'s sandbox construction is
+its own step 5), so this cost nothing in practice; it would have been silent for
+the first consumer.
 
 ### Phase 1 — ABI trust (v0.5.0)
 
@@ -218,7 +223,7 @@ in §14's convention is applied inline below. Keep it in sync at each phase exit
 
 | Milestone | Tag | Phase | Contents | Target (weeks from start) |
 |---|---|---|---|---|
-| M0 | **v0.4.1** (patch; supersedes the mis-placed `v0.4.0`) + nested `sandbox/containerd/v0.1.1` | 0 | Sandbox substrate shipped, tagged, consumable; bug batch; CI bootstrap; **daemon path verified by a 12/12 soak** | W1 |
+| M0 | **v0.4.1** (patch; supersedes the mis-placed `v0.4.0`) + nested `sandbox/containerd/v0.1.2` | 0 | Sandbox substrate shipped, tagged, consumable; bug batch; CI bootstrap; **daemon path verified by a 12/12 soak** | W1 |
 | M1 | **v0.5.0** | 1 | Canonical byte-identity proven; conformance suite; store vectors; `ReadPathPrefix` | W2–3 |
 | M2 | **v0.6.0** | 2a | Execution/relation/history schemas, projections, runtime handles | W4–6 |
 | M3 | **v0.7.0** | 2b | Substrates, materialize dispatch + ledger, `WorkspaceSubstrate` | W5–7 (overlaps 2a) |
@@ -322,13 +327,13 @@ Linux spot-check (WSL/CI).
       at least one core release contains the bug batch (§0 finding).
       *(Done for the core module: `v0.4.1` published at `bee4ca5` after being
       re-pointed from the pre-review `3315b3a`, and it contains the bug batch.)*
-- [ ] The **nested** module's released version requires the fixed core. The
-      published `sandbox/containerd/v0.1.1` requires `v0.4.0`, and cannot be
-      corrected in place — Go module versions are immutable once recorded. This
-      needs `sandbox/containerd/v0.1.2` cut from `main` after PR #11 merges.
-      *(T0.8b. Left unticked deliberately: the originally-written criterion
-      bundled the core tag and the repin into one box, which is how the gap went
-      unnoticed — they are two different releases.)*
+- [x] The **nested** module's released version requires the fixed core.
+      `sandbox/containerd/v0.1.2` is published at `df47ec9` and requires
+      `v0.4.1`; `go get …/sandbox/containerd@v0.1.2` pulls core `v0.4.1` in a
+      clean module. `v0.1.1` remains permanently wrong and must not be used.
+      *(T0.8b done. Note the criterion was deliberately split into two boxes:
+      the original bundled "tag the core release" and "repin the nested module"
+      into one, which is exactly how the gap went unnoticed.)*
 
 **yaah coordination**: v0.4.0 is API-compatible with what yaah's
 `feat/containerd`-era code already expects; publish the tag so yaah can pin it.
