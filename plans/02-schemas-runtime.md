@@ -191,9 +191,63 @@ Design notes:
 
 ## 7. Acceptance criteria
 
-- [ ] Execution/relation/history projections pass Python-generated vectors.
-- [ ] `StartTaskSync` record trace is ID-identical to Python `@task` run for
+- [x] Execution/relation/history projections pass Python-generated vectors.
+      *(History included after review: the vectors gained a `history_sequence` group — a spawn/abandon/adopt tree run through the real Python handles — whose owner path and effective history `TestHistoryVectorTreeReplay` reproduces through the Go facade.)*
+- [x] `StartTaskSync` record trace is ID-identical to Python `@task` run for
       the same fixture task (vector-pinned).
-- [ ] Terminal-frontier law + projection purity enforced with negative tests.
-- [ ] `go test ./... -count=1` green; no new dependencies in go.mod.
-- [ ] README gains a "Executions & handles" section (short, links to godoc).
+- [x] Terminal-frontier law + projection purity enforced with negative tests.
+- [x] `go test ./... -count=1` green; no new dependencies in go.mod.
+- [x] README gains a "Executions & handles" section (short, links to godoc).
+
+> ### ✅ §7 CLOSED — 2026-10-07, all five criteria
+>
+> - Vectors: `testdata/execution_vectors_v0.json` (generation, ID derivations,
+>   run/fail sequences — the run and the effective-history tree through the
+>   real `@task` handles, the fail sequence through the `schemas` batch
+>   builders — relation sequence and history tree: every replayed id
+>   identical; hash-pinned in `golden_provenance_test.go`.
+> - `StartTaskSync` ID-identity:
+>   `TestStartTaskSyncMatchesPythonVector` reproduces the vector run's owner
+>   path fact-for-fact through the facade, not by replaying batches by hand.
+> - Negative tests: `TestTerminalFrontierLawRejectsNonTerminal`,
+>   `TestProjectExecutionRequiresBothModes` (closes the plan-01 law 21/23
+>   gaps), `TestRelationUnknownKindRejected`,
+>   `TestRelationFromFactRejectsForeignSchema`.
+> - `go.mod` untouched — the phase added zero dependencies.
+> - README section added before "Golden Vectors".
+>
+> Deliberate API deviations from the sketches, recorded here: the batch
+> builders and projections carry the sketch's exported names, but
+> `ExecutionIDFor`/`RelationIDFor` drop the sketch's error return (the
+> derivation cannot fail), and the task facade's `Spawn` takes the
+> `*Registry` explicitly since Go has no class objects to carry the body.
+> Python's error format "{type}: {msg}" becomes `err.Error()` (panics record
+> "panic: <value>") — record shapes identical, error-text provenance
+> differs, documented in handles.go.
+
+> ### Review hardening (PR #20 review, 2026-10-07)
+>
+> The review found three failure modes worth recording, all fixed:
+>
+> 1. **Every `ReadOwnerCutoff` error was retried as "not published yet."**
+>    The store now distinguishes the condition with `ErrUnknownFrontier`
+>    (errors.Is-able); `Run.waitForCutoff` retries only that, returns real
+>    faults immediately, and a failed async body surfaces through Wait via
+>    the run's done channel instead of hanging.
+> 2. **Task lookup ran after the create was retained**, leaving a
+>    permanently running execution for an unregistered task. Lookup now
+>    runs inside the body phase — Python's `try: task_cls(**inputs)` — so an
+>    unresolvable task records a failed execution and a publishable frontier.
+> 3. **`Snapshot` was `Wait`**, so an in-flight run could never be inspected.
+>    Snapshot now folds the current owner prefix — running is observable
+>    mid-flight (`TestStartTaskSnapshotMidFlight`), pending stays
+>    unobservable for the fold's own reasons, recorded above.
+>
+> Also: `Adopt` validates the frontier and its target before appending;
+> `Abandon` reads the child cutoff once (no background polling); the
+> `Registry` is mutex-guarded for `StartTask`'s goroutines; nil
+> inputs/outputs normalize to `{}` so a nil map cannot change the digest
+> (`nonNilMap`); an empty owner path synthesizes its cutoff with ordinal -1;
+> `EnsureProjectionCompatible` enforces `RequiresPayload` against shape-only
+> slices; and the vectors gained a `history_sequence` group so the history
+> criterion is backed by Python-generated evidence.

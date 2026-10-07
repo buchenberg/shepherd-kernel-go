@@ -65,6 +65,17 @@ var vectorFiles = []vectorFile{
 		wantSHA256:  "74a24de3b15318725f469099dccfa4d8e7b7a72e084c98424787b4a0bbc9a69f",
 		generatedBy: "shepherd2@d34d5ca334871dfcb5a3dc76dd78045829fa4e56 (CPython 3.13.13, seed 20261007)",
 	},
+	{
+		// T2a.6 execution vectors: the execution/relation identity derivations
+		// and the full record sequences (create, publish, complete/fail,
+		// terminal frontier) the Python runtime allocates, replayed
+		// ID-for-ID by execution_test.go. The derivation is NOT canonical
+		// JSON — sha256 over "<intent>\0<local_ref>" — and these vectors
+		// exist partly so nobody "fixes" that.
+		path:        "testdata/execution_vectors_v0.json",
+		wantSHA256:  "02f596e7eaec5215868ec3fc1ec0e911c2395b64d0e5cd27793129eca8666f69",
+		generatedBy: "shepherd2@d34d5ca334871dfcb5a3dc76dd78045829fa4e56 (CPython 3.13.13)",
+	},
 }
 
 // normalizeEOL returns data with CRLF replaced by LF.

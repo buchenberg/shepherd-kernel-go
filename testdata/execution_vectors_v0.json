@@ -1,0 +1,354 @@
+{
+  "execution_ids": [
+    {
+      "append_intent_id": "vector:run:one:create",
+      "execution_id": "exec:19e8d00f0268daa708016e026b6c3486",
+      "local_ref": "execution"
+    },
+    {
+      "append_intent_id": "vector:run:one:child:1:create",
+      "execution_id": "exec:e4015bbc9b746b8742c94406b0543f9c",
+      "local_ref": "execution"
+    },
+    {
+      "append_intent_id": "vector:run:two:create",
+      "execution_id": "exec:3bbb02bfeefd9400e2e697ee550cab42",
+      "local_ref": "execution"
+    },
+    {
+      "append_intent_id": "intent:with-unicode:ün:create",
+      "execution_id": "exec:b7e613650d4413c45d7ad11b0efbc6e4",
+      "local_ref": "execution"
+    },
+    {
+      "append_intent_id": "vector:run:one:create",
+      "execution_id": "exec:0d228cc954e5cafa95b9b260518f2203",
+      "local_ref": "custom-local-ref"
+    }
+  ],
+  "fail_sequence": {
+    "cutoff": {
+      "created_by_fact_id": "sha256:d595d181db3ab5554a54e74573c6bc9520412de200892e3c3d55bc4863d97f8f",
+      "frontier_id": "frontier:vector:run:fail:terminal",
+      "publisher_trace_owner_id": "exec:35117787ed0a56093292e5e713188ec0",
+      "target_trace_owner_id": "exec:35117787ed0a56093292e5e713188ec0",
+      "through_fact_id": "sha256:7b77992c3f5f721a7ba95c680b2406c4720197245d02017b2ad11828f1375172",
+      "through_owner_ordinal": 2
+    },
+    "execution_id": "exec:35117787ed0a56093292e5e713188ec0",
+    "frontier_id": "frontier:vector:run:fail:terminal",
+    "inputs": {
+      "boom": true
+    },
+    "owner_path": [
+      {
+        "fact_id": "sha256:9f846bd6553dc7e0bcebae7562678fd0b89827913baddd092da2efd109ae5108",
+        "kind_label": "execution_created",
+        "mode": "declaration",
+        "schema_ref": "shepherd2.execution.created.v1"
+      },
+      {
+        "fact_id": "sha256:203d98bef1ceedc101dca4bfd7706aa848976cee50b0b3db5ce91facfbd01f36",
+        "kind_label": "execution_started",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution.started.v1"
+      },
+      {
+        "fact_id": "sha256:7b77992c3f5f721a7ba95c680b2406c4720197245d02017b2ad11828f1375172",
+        "kind_label": "execution_failed",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution.failed.v1"
+      },
+      {
+        "fact_id": "sha256:d595d181db3ab5554a54e74573c6bc9520412de200892e3c3d55bc4863d97f8f",
+        "kind_label": "frontier_published",
+        "mode": "capture",
+        "schema_ref": "shepherd2.frontier.owner_cutoff.v1"
+      }
+    ],
+    "run_id": "vector:run:fail",
+    "steps": [
+      {
+        "append_intent_id": "vector:run:fail:create",
+        "caused_by": [],
+        "fact_ids": [
+          "sha256:9f846bd6553dc7e0bcebae7562678fd0b89827913baddd092da2efd109ae5108",
+          "sha256:203d98bef1ceedc101dca4bfd7706aa848976cee50b0b3db5ce91facfbd01f36"
+        ],
+        "kind": "create"
+      },
+      {
+        "append_intent_id": "vector:run:fail:fail",
+        "caused_by": [
+          "sha256:203d98bef1ceedc101dca4bfd7706aa848976cee50b0b3db5ce91facfbd01f36"
+        ],
+        "error": "ValueError: boom",
+        "fact_ids": [
+          "sha256:7b77992c3f5f721a7ba95c680b2406c4720197245d02017b2ad11828f1375172"
+        ],
+        "kind": "fail"
+      },
+      {
+        "caused_by": [],
+        "frontier_id": "frontier:vector:run:fail:terminal",
+        "kind": "frontier",
+        "publisher": null,
+        "through_fact_id": "sha256:7b77992c3f5f721a7ba95c680b2406c4720197245d02017b2ad11828f1375172"
+      }
+    ],
+    "task_ref": "VectorTask"
+  },
+  "generator": "testdata/generate_execution_vectors.py",
+  "history_sequence": {
+    "children": [
+      {
+        "execution_id": "exec:86f48f012110cb6be3316d496eec91fc",
+        "frontier_id": "frontier:vector:tree:child:1:terminal",
+        "kind": "spawned",
+        "relation_id": "rel:723ae51a96706297362d93e09a0f3ece",
+        "status": "succeeded",
+        "task_ref": "__main__.TreeChildTask"
+      },
+      {
+        "execution_id": "exec:24d4db0cdc25580d1f294c4d4926a4b6",
+        "frontier_id": "frontier:vector:tree:external:terminal",
+        "kind": "adopted",
+        "relation_id": "rel:18971f642a5b23da1656821fb0a13613",
+        "status": "succeeded",
+        "task_ref": "__main__.TreeChildTask"
+      }
+    ],
+    "execution_id": "exec:8b370a9788a5109eb5e57621bd1c00f4",
+    "frontier_id": "frontier:vector:tree:terminal",
+    "parent_owner_path": [
+      {
+        "fact_id": "sha256:540dc83ba7d86752f7d768dfa7355d8634ede330625c2cb379efab1d7e0180b0",
+        "kind_label": "execution_created",
+        "mode": "declaration",
+        "schema_ref": "shepherd2.execution.created.v1"
+      },
+      {
+        "fact_id": "sha256:d47798ca8e30e0c57f7d4226c050570301606a05d3c713b60e5726e3926ad33a",
+        "kind_label": "execution_started",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution.started.v1"
+      },
+      {
+        "fact_id": "sha256:08eafae804230150526c34d3c36b388b1bad44d141028ec58a8fe9084abcd7ef",
+        "kind_label": "fact_published",
+        "mode": "capture",
+        "schema_ref": "shepherd2.runtime.published_fact.v1"
+      },
+      {
+        "fact_id": "sha256:defd709278da96fdab28dec8ae718286fb85e102f20512914d8bc38f3529f4a7",
+        "kind_label": "relation_created",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution_relation.created.v1"
+      },
+      {
+        "fact_id": "sha256:d4953a021410bcaed67facbe405f6d9dd4e71f592899ea21e36f641031b175d9",
+        "kind_label": "frontier_published",
+        "mode": "capture",
+        "schema_ref": "shepherd2.frontier.owner_cutoff.v1"
+      },
+      {
+        "fact_id": "sha256:9e07c1cb438093a3f6864dec0ef2277df4adea20e3ee1321a19ee1a88b46af99",
+        "kind_label": "relation_created",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution_relation.created.v1"
+      },
+      {
+        "fact_id": "sha256:8cf2b3738ee349417596bf4f3e930696540be893dcddd1fd25dd09c7d1c5f22d",
+        "kind_label": "frontier_published",
+        "mode": "capture",
+        "schema_ref": "shepherd2.frontier.owner_cutoff.v1"
+      },
+      {
+        "fact_id": "sha256:c65ae736baf49a2bcd73f2e85d220a1ad3414ba4ef3f9e35fc6bb006ff8d8331",
+        "kind_label": "relation_created",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution_relation.created.v1"
+      },
+      {
+        "fact_id": "sha256:3fa1e1ff5c45c7eadbff6d95b6e407b7de1f56b4322c82f7da4c135ae136111e",
+        "kind_label": "relation_created",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution_relation.created.v1"
+      },
+      {
+        "fact_id": "sha256:cf2311b3fcb387308067f90f87972d2fa22e20c9e6fefbc297d10aef83c7ee72",
+        "kind_label": "fact_published",
+        "mode": "capture",
+        "schema_ref": "shepherd2.runtime.published_fact.v1"
+      },
+      {
+        "fact_id": "sha256:f2a08238729a78d83d4e47533994d70bdc396c38974816eb2c9383c516f36f9c",
+        "kind_label": "execution_completed",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution.completed.v1"
+      },
+      {
+        "fact_id": "sha256:a8aac0ee155ddbd6dc1050f05c0ec83987ee6c2afae4783db9e165331a8460de",
+        "kind_label": "frontier_published",
+        "mode": "capture",
+        "schema_ref": "shepherd2.frontier.owner_cutoff.v1"
+      }
+    ],
+    "published": [
+      "phase",
+      "phase"
+    ],
+    "root_status": "succeeded",
+    "root_task_ref": "__main__.TreeParentTask",
+    "run_id": "vector:tree",
+    "task_refs": {
+      "child": "__main__.TreeChildTask",
+      "parent": "__main__.TreeParentTask"
+    }
+  },
+  "published_fact": {
+    "kind_label": "fact_published",
+    "mode": "capture",
+    "payload": {
+      "data": {
+        "msg": "hello <>&",
+        "n": 1.5
+      },
+      "kind": "note"
+    },
+    "schema_ref": "shepherd2.runtime.published_fact.v1"
+  },
+  "python_version": "3.13.13",
+  "relation_ids": [
+    {
+      "append_intent_id": "vector:run:one:child:1:relation:spawned",
+      "local_ref": "relation",
+      "relation_id": "rel:76656484ee25caf5844b6cf0e132266f"
+    },
+    {
+      "append_intent_id": "vector:run:one:relation:adopted:1",
+      "local_ref": "relation",
+      "relation_id": "rel:9463b549b384a65dc942adab3ba76f93"
+    },
+    {
+      "append_intent_id": "vector:run:one:relation:abandoned:1",
+      "local_ref": "relation",
+      "relation_id": "rel:3acb4e3797bda676acd73987e78fdd30"
+    },
+    {
+      "append_intent_id": "vector:run:one:child:1:relation:spawned",
+      "local_ref": "custom-local-ref",
+      "relation_id": "rel:2a0a29e6a12a51a2dc44b08588f6b1ce"
+    }
+  ],
+  "relation_sequence": {
+    "child_complete_intent": "vector:parent:child:1:complete",
+    "child_create_intent": "vector:parent:child:1:create",
+    "child_execution_id": "exec:8449153a39f381a38fa4aa867a878ab2",
+    "child_frontier_id": "frontier:vector:parent:child:1:terminal",
+    "child_inputs": {
+      "which": "first"
+    },
+    "child_outputs": {
+      "order": "child"
+    },
+    "child_run_id": "vector:parent:child:1",
+    "child_task_ref": "ChildTask",
+    "parent_create_intent": "vector:parent:create",
+    "parent_execution_id": "exec:4dc65439880055ef485cd468c796acb0",
+    "parent_run_id": "vector:parent",
+    "parent_task_ref": "ParentTask",
+    "relation_fact_id": "sha256:4324f646efc2194883b88d8a684f0325a43aa3570effb3afb8d6751155cc44a2",
+    "relation_id": "rel:dc97b57bb55805328d0f2b5e9f00228b",
+    "relation_intent": "vector:parent:child:1:relation:spawned"
+  },
+  "run_sequence": {
+    "cutoff": {
+      "created_by_fact_id": "sha256:e1ea15e626affca36913b3119ef9cebd8c0d7ec4e2bdf2efc2127ce60053c300",
+      "frontier_id": "frontier:vector:run:one:terminal",
+      "publisher_trace_owner_id": "exec:19e8d00f0268daa708016e026b6c3486",
+      "target_trace_owner_id": "exec:19e8d00f0268daa708016e026b6c3486",
+      "through_fact_id": "sha256:ada34ca8f18fe2ba9673fe81320e073f59d6d677c7eb5f6e0aef57094bac20f6",
+      "through_owner_ordinal": 3
+    },
+    "execution_id": "exec:19e8d00f0268daa708016e026b6c3486",
+    "frontier_id": "frontier:vector:run:one:terminal",
+    "inputs": {
+      "answer": 42,
+      "label": "ok"
+    },
+    "owner_path": [
+      {
+        "fact_id": "sha256:5f841b27b6add85cc475a923a73c2a3501683d23aaaae0e57e9d573a8da8e3f9",
+        "kind_label": "execution_created",
+        "mode": "declaration",
+        "schema_ref": "shepherd2.execution.created.v1"
+      },
+      {
+        "fact_id": "sha256:7935c4c83fd18ae56b55c1a01d22b800fa0a8ff87eb5d94b3db054b66e3d8ed7",
+        "kind_label": "execution_started",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution.started.v1"
+      },
+      {
+        "fact_id": "sha256:16c67e0d536ff5ff7111c79b72d3d1f28f3321836daa6821940617fe1d12c850",
+        "kind_label": "fact_published",
+        "mode": "capture",
+        "schema_ref": "shepherd2.runtime.published_fact.v1"
+      },
+      {
+        "fact_id": "sha256:ada34ca8f18fe2ba9673fe81320e073f59d6d677c7eb5f6e0aef57094bac20f6",
+        "kind_label": "execution_completed",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution.completed.v1"
+      },
+      {
+        "fact_id": "sha256:e1ea15e626affca36913b3119ef9cebd8c0d7ec4e2bdf2efc2127ce60053c300",
+        "kind_label": "frontier_published",
+        "mode": "capture",
+        "schema_ref": "shepherd2.frontier.owner_cutoff.v1"
+      }
+    ],
+    "run_id": "vector:run:one",
+    "steps": [
+      {
+        "append_intent_id": "vector:run:one:create",
+        "caused_by": [],
+        "kind": "create"
+      },
+      {
+        "append_intent_id": "vector:run:one:publish:1",
+        "caused_by": "@prev:created+started",
+        "kind": "publish",
+        "kind_label": "fact_published",
+        "payload": {
+          "data": {
+            "msg": "hello <>&",
+            "n": 1.5
+          },
+          "kind": "note"
+        },
+        "schema_ref": "shepherd2.runtime.published_fact.v1"
+      },
+      {
+        "append_intent_id": "vector:run:one:complete",
+        "caused_by": "@prev:published",
+        "kind": "complete",
+        "outputs": {
+          "answer": 42,
+          "label": "ok"
+        }
+      },
+      {
+        "caused_by": [],
+        "frontier_id": "frontier:vector:run:one:terminal",
+        "kind": "frontier",
+        "publisher": null,
+        "through": "@terminal"
+      }
+    ],
+    "task_ref": "__main__.VectorTask"
+  },
+  "source_commit": "d34d5ca334871dfcb5a3dc76dd78045829fa4e56",
+  "source_repo": "../shepherd"
+}
