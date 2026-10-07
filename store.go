@@ -519,7 +519,7 @@ func (s *SQLiteTraceStore) appendInTx(tx *sql.Tx, ctx OperationContext, batch Ap
 		batch.AppendIntentID,
 	).Scan(&existingDigest, &existingReceiptJSON)
 	if err == nil {
-		if existingDigest != batchDigest {
+		if existingDigest != batchDigest && existingDigest != legacyBatchDigest(batch, ctx) {
 			return AppendReceipt{}, false, &AppendIntentConflictError{
 				fmt.Sprintf("append intent %q was already committed with different content", batch.AppendIntentID),
 			}
@@ -617,6 +617,20 @@ func (s *SQLiteTraceStore) prepareAppend(tx *sql.Tx, batch AppendBatch, ctx Oper
 	var contextReceipts []string
 	ownerRanges := make(map[string][2]int)
 	witnessPlanMap := make(map[string]witnessPlan)
+	var witnessPlanOrder []string
+
+	// addWitnessPlan registers a plan, keeping first-seen order. Ranging over the
+	// map to build the insert list, as this did, made the witness records' owner
+	// ordinals depend on Go map iteration — so two identical appends could allocate
+	// different ordinals, and the witness owner path read back in a different order
+	// every time. Python's dict is insertion-ordered, so it never does.
+	addWitnessPlan := func(plan witnessPlan) {
+		if _, ok := witnessPlanMap[plan.recordID]; !ok {
+			witnessPlanOrder = append(witnessPlanOrder, plan.recordID)
+		}
+		witnessPlanMap[plan.recordID] = plan
+	}
+
 	nextCommit, err := s.nextCommitSeqTx(tx)
 	if err != nil {
 		return nil, nil, nil, AppendReceipt{}, err
@@ -639,13 +653,20 @@ func (s *SQLiteTraceStore) prepareAppend(tx *sql.Tx, batch AppendBatch, ctx Oper
 		}
 		contextReceipts = append(contextReceipts, retCtx.ContextID)
 
-		// Resolve witness
-		wp := ordinaryWitnessPlan(retCtx, ctx)
-		rootID := RootWitnessRecordIDMust()
-		if _, ok := witnessPlanMap[rootID]; !ok {
-			witnessPlanMap[rootID] = rootWitnessPlan()
+		// Resolve witness.
+		//
+		// The root witness is registered before this group's ordinary one, and both
+		// keep first-seen order below. Python holds these in a dict and uses
+		// setdefault in that same order (trace_store.py:480-481), and the order is
+		// load-bearing: witnesses are inserted in it and that assignment is what
+		// gives them their owner ordinals.
+		addWitnessPlan(rootWitnessPlan())
+
+		wp, err := ordinaryWitnessPlan(retCtx, ctx)
+		if err != nil {
+			return nil, nil, nil, AppendReceipt{}, err
 		}
-		witnessPlanMap[wp.recordID] = wp
+		addWitnessPlan(wp)
 
 		start := stagedNext[owner]
 		ordinal := start
@@ -715,9 +736,12 @@ func (s *SQLiteTraceStore) prepareAppend(tx *sql.Tx, batch AppendBatch, ctx Oper
 		}
 	}
 
-	// Collect witness plans
-	for _, wp := range witnessPlanMap {
-		witnessPlans = append(witnessPlans, wp)
+	// Collect witness plans in first-seen order, which becomes their insertion
+	// order and therefore their owner ordinals.
+	for _, id := range witnessPlanOrder {
+		if wp, ok := witnessPlanMap[id]; ok {
+			witnessPlans = append(witnessPlans, wp)
+		}
 	}
 
 	receipt = AppendReceipt{
@@ -747,7 +771,10 @@ func (s *SQLiteTraceStore) previewFactIDs(batch AppendBatch, ctx OperationContex
 		if err != nil {
 			return nil, err
 		}
-		wp := ordinaryWitnessPlan(retCtx, ctx)
+		wp, err := ordinaryWitnessPlan(retCtx, ctx)
+		if err != nil {
+			return nil, err
+		}
 
 		for _, draft := range drafts {
 			causedBy, err := resolvedCauses(group, draft, localFactIDs)
@@ -1349,7 +1376,10 @@ func (s *SQLiteTraceStore) resolveGroupContext(
 	}
 
 	payload := contextPayload(draft, ctx)
-	contextID := contextIDFor(appendIntentID, groupIndex, payload)
+	contextID, err := contextIDFor(appendIntentID, groupIndex, payload)
+	if err != nil {
+		return RetainedContext{}, err
+	}
 
 	newCtx := RetainedContext{
 		ContextID:               contextID,
@@ -1580,7 +1610,11 @@ func scanRecord(row *sql.Row) (Record, error) {
 	}
 
 	r.Envelope.CausedByIDs = jsonToStrings(causedByJSON)
-	r.Body = bodyFromJSON(bodyJSON)
+	body, err := bodyFromJSON(bodyJSON)
+	if err != nil {
+		return Record{}, fmt.Errorf("record %s: %w", r.Envelope.RecordID, err)
+	}
+	r.Body = body
 	r.View = &RecordView{
 		TraceOwnerID: traceOwnerID,
 		OwnerOrdinal: ownerOrdinal,
@@ -1707,21 +1741,41 @@ func contextPayload(draft RetainedContext, ctx OperationContext) RetainedContext
 	}
 }
 
-func contextIDFor(appendIntentID string, groupIndex int, payload RetainedContext) string {
-	data := map[string]any{
-		"intent":      appendIntentID,
-		"group_index": groupIndex,
-		"payload": map[string]any{
-			"active_binding_refs":       payload.ActiveBindingRefs,
-			"capability_witness_refs":   payload.CapabilityWitnessRefs,
-			"semantic_environment_refs": payload.SemanticEnvironmentRefs,
-			"visibility_policy_refs":    payload.VisibilityPolicyRefs,
-			"substrate_ref":             payload.SubstrateRef,
-			"containment":               string(payload.Containment),
-		},
+// contextIDFor derives a retained context id the way shepherd2's `_context_id`
+// does:
+//
+//	digest = sha256(f"{intent}\0{group_index}\0{json}").hexdigest()
+//	return f"context:{digest[:32]}"
+//
+// where `json` is the context payload on its own — not wrapped in an object — and
+// is encoded with ensure_ascii=True. All three details were wrong before:
+//
+//   - the input is a NUL-joined *string*, not a JSON object of intent/group/payload;
+//   - the result is the first 32 hex characters with a "context:" prefix, not all
+//     64 with "ctx:";
+//   - the encoder is the ASCII flavour, because `_json_dumps` omits ensure_ascii.
+//
+// With an ASCII-only payload the last point is invisible, which is why this
+// survived: the ids were simply always different, and nothing compared them.
+func contextIDFor(appendIntentID string, groupIndex int, payload RetainedContext) (string, error) {
+	body, err := canonicalJSONASCIIBytes(map[string]any{
+		"active_binding_refs":       payload.ActiveBindingRefs,
+		"capability_witness_refs":   payload.CapabilityWitnessRefs,
+		"semantic_environment_refs": payload.SemanticEnvironmentRefs,
+		"visibility_policy_refs":    payload.VisibilityPolicyRefs,
+		"substrate_ref":             payload.SubstrateRef,
+		"containment":               string(payload.Containment),
+	})
+	if err != nil {
+		return "", fmt.Errorf("containerd context id: %w", err)
 	}
-	b, _ := json.Marshal(data)
-	return fmt.Sprintf("ctx:%x", sha256Sum(b))
+	joined := append([]byte(appendIntentID), 0)
+	joined = strconv.AppendInt(joined, int64(groupIndex), 10)
+	joined = append(joined, 0)
+	joined = append(joined, body...)
+
+	digest := fmt.Sprintf("%x", sha256Sum(joined))
+	return "context:" + digest[:32], nil
 }
 
 func contextEqual(a, b RetainedContext) bool {
@@ -1730,35 +1784,60 @@ func contextEqual(a, b RetainedContext) bool {
 	return string(aJSON) == string(bJSON)
 }
 
-func ordinaryWitnessPlan(ctx RetainedContext, opCtx OperationContext) witnessPlan {
+// ordinaryWitnessPlan builds the witness a group's records cite.
+//
+// authority_refs comes from the *retained context's* capability_witness_refs, not
+// from the append context's presented refs. Python does the same
+// (trace_store.py `_ordinary_witness_plan`), and getting it wrong ties the witness
+// id — and therefore every record id that cites it — to the caller's credentials:
+// the same content appended by a different trusted caller produced a different
+// record id, which Python does not do.
+func ordinaryWitnessPlan(ctx RetainedContext, opCtx OperationContext) (witnessPlan, error) {
 	body := map[string]any{
 		"actor_ref":                 opCtx.ActorRef,
-		"authority_refs":            opCtx.PresentedAuthorityRefs,
-		"active_binding_refs":       ctx.ActiveBindingRefs,
-		"semantic_environment_refs": ctx.SemanticEnvironmentRefs,
-		"visibility_policy_refs":    ctx.VisibilityPolicyRefs,
+		"authority_refs":            nonNilStrings(ctx.CapabilityWitnessRefs),
+		"active_binding_refs":       nonNilStrings(ctx.ActiveBindingRefs),
+		"semantic_environment_refs": nonNilStrings(ctx.SemanticEnvironmentRefs),
+		"visibility_policy_refs":    nonNilStrings(ctx.VisibilityPolicyRefs),
 		"provenance_policy_refs":    []string{},
 		"substrate_ref":             ctx.SubstrateRef,
 		"containment":               string(ctx.Containment),
 	}
 	rootID := RootWitnessRecordIDMust()
-	recordID, _ := RecordDigest(WitnessSchemaRef, Capture, body, nil, rootID)
+	recordID, err := RecordDigest(WitnessSchemaRef, Capture, body, nil, rootID)
+	if err != nil {
+		return witnessPlan{}, fmt.Errorf("ordinary witness digest: %w", err)
+	}
 	return witnessPlan{
 		recordID:   recordID,
 		schemaRef:  WitnessSchemaRef,
 		kindLabel:  "witness",
 		body:       body,
 		witnessRef: rootID,
+	}, nil
+}
+
+// nonNilStrings returns an empty (non-nil) slice for nil input.
+//
+// The canonical writer emits null for a nil slice and [] for an empty one, and
+// Python serialises an empty tuple as []. Without this a Go zero value would
+// canonicalise differently from the Python it is supposed to match.
+func nonNilStrings(ss []string) []string {
+	if ss == nil {
+		return []string{}
 	}
+	return ss
 }
 
 func rootWitnessPlan() witnessPlan {
 	body := RootWitnessBody()
 	recordID := RootWitnessRecordIDMust()
 	return witnessPlan{
-		recordID:   recordID,
-		schemaRef:  RootWitnessSchemaRef,
-		kindLabel:  "root_witness",
+		recordID:  recordID,
+		schemaRef: RootWitnessSchemaRef,
+		// Python uses "witness_root" (trace_store.py `_root_witness_plan`); this
+		// said "root_witness", which is retained metadata a read would expose.
+		kindLabel:  "witness_root",
 		body:       body,
 		witnessRef: RootWitnessRef,
 	}
@@ -1827,7 +1906,20 @@ func modeMatches(fact Record, modeFilter ModeFilter) bool {
 	}
 }
 
-func batchDigest(batch AppendBatch, ctx OperationContext) (string, error) {
+// legacyBatchDigest reproduces the pre-correction digest algorithm, which
+// marshalled Go structs with encoding/json.
+//
+// It exists only to read rows written before the algorithm was aligned with
+// Python, and is never stored. Without it, a database created by an earlier
+// release would see every retry of an already-committed intent as a *different*
+// batch — because the stored digest cannot be recomputed — and return
+// AppendIntentConflictError instead of the stored receipt. That would break
+// idempotent retry, which is the property the check exists to provide.
+//
+// It is safe to keep: accepting either digest means an old row can be read, while
+// a row written now can only match the corrected value. Retire it when no
+// supported database predates the correction.
+func legacyBatchDigest(batch AppendBatch, ctx OperationContext) string {
 	data := map[string]any{
 		"append_intent_id": batch.AppendIntentID,
 		"groups":           batch.Groups,
@@ -1837,6 +1929,103 @@ func batchDigest(batch AppendBatch, ctx OperationContext) (string, error) {
 		"trust_mode":       ctx.TrustMode,
 	}
 	b, err := json.Marshal(data)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256Sum(b))
+}
+
+// nullableString renders an unset Go string as JSON null, which is what Python's
+// Optional fields serialise to. Go has no separate "unset" for a string field.
+func nullableString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// contextDraftJSON renders a group's retained-context reference the way Python's
+// `_context_draft_to_json` does, including `RetainedContextDraft`'s defaults.
+//
+// Python distinguishes three cases in `_context_draft_for_group` — an explicit
+// draft, a reuse reference by context id, or nothing at all — and the "nothing"
+// case still carries the defaults (substrate_ref "sqlite.local.v1", containment
+// "contained"). Go represents all three with one pointer, so which one it is has to
+// be inferred the same way the rest of the store infers it: an id with no substrate
+// ref is a reuse reference.
+func contextDraftJSON(rc *RetainedContext) map[string]any {
+	defaults := defaultContextDraft()
+	draft := map[string]any{
+		"active_binding_refs":       []string{},
+		"capability_witness_refs":   []string{},
+		"semantic_environment_refs": []string{},
+		"visibility_policy_refs":    []string{},
+		"substrate_ref":             defaults.SubstrateRef,
+		"containment":               string(defaults.Containment),
+		"reuse_context_id":          nil,
+	}
+	if rc == nil {
+		return draft
+	}
+	if rc.ContextID != "" && rc.SubstrateRef == "" {
+		draft["reuse_context_id"] = rc.ContextID
+		return draft
+	}
+	draft["active_binding_refs"] = nonNilStrings(rc.ActiveBindingRefs)
+	draft["capability_witness_refs"] = nonNilStrings(rc.CapabilityWitnessRefs)
+	draft["semantic_environment_refs"] = nonNilStrings(rc.SemanticEnvironmentRefs)
+	draft["visibility_policy_refs"] = nonNilStrings(rc.VisibilityPolicyRefs)
+	draft["substrate_ref"] = rc.SubstrateRef
+	draft["containment"] = string(rc.Containment)
+	return draft
+}
+
+// batchDigest fingerprints an append batch for "same intent, different content"
+// detection, matching shepherd2's `_batch_digest` field for field.
+//
+// It previously marshalled Go structs directly, so the JSON carried Go field names
+// and declaration order rather than the sorted snake_case keys Python hashes. The
+// two could never agree, and that matters beyond bookkeeping: the conflict check is
+// part of the ABI, so a batch one store rejects as a conflicting reuse the other
+// would accept.
+func batchDigest(batch AppendBatch, ctx OperationContext) (string, error) {
+	groups := make([]any, 0, len(batch.Groups))
+	for _, g := range batch.Groups {
+		drafts := make([]any, 0, len(g.FactDrafts))
+		for _, d := range g.FactDrafts {
+			schemaRef, err := resolveSchemaRef(d, ctx)
+			if err != nil {
+				return "", err
+			}
+			drafts = append(drafts, map[string]any{
+				"append_local_id":      nullableString(d.AppendLocalID),
+				"kind_label":           d.KindLabel,
+				"mode":                 string(d.Mode),
+				"schema_ref":           schemaRef,
+				"payload":              d.Payload,
+				"caused_by_fact_ids":   nonNilStrings(d.CausedByFactIDs),
+				"caused_by_local_refs": nonNilStrings(d.CausedByLocalRefs),
+			})
+		}
+		groups = append(groups, map[string]any{
+			"trace_owner_id":   g.TraceOwnerID,
+			"retained_context": contextDraftJSON(g.RetainedContext),
+			"causal_parents":   nonNilStrings(g.CausalParents),
+			"fact_drafts":      drafts,
+		})
+	}
+
+	payload := map[string]any{
+		"append_intent_id": batch.AppendIntentID,
+		// Python's AppendBatch carries an atomicity field defaulting to "atomic";
+		// the Go type only supports atomic batches, so it is fixed here.
+		"atomicity":          "atomic",
+		"actor_ref":          ctx.ActorRef,
+		"schema_version_set": ctx.SchemaEnvironmentRef,
+		"groups":             groups,
+	}
+
+	b, err := canonicalJSONASCIIBytes(payload)
 	if err != nil {
 		return "", err
 	}
@@ -1870,14 +2059,17 @@ func bodyToJSON(body RecordBody) string {
 // every number becomes float64, so a retained body that said `1` would
 // re-canonicalise as `1.0` and the record could no longer reproduce its own id —
 // which is exactly what happened before this was fixed.
-func bodyFromJSON(s string) RecordBody {
+func bodyFromJSON(s string) (RecordBody, error) {
 	var payload map[string]any
 	dec := json.NewDecoder(strings.NewReader(s))
 	dec.UseNumber()
 	if err := dec.Decode(&payload); err != nil {
-		return RecordBody{}
+		// Reported rather than swallowed. An empty body would still be returned to
+		// the caller looking like a valid record whose payload happened to be
+		// empty, and any digest computed from it would be a plausible wrong answer.
+		return RecordBody{}, fmt.Errorf("decode retained body: %w", err)
 	}
-	return RecordBody{Payload: payload}
+	return RecordBody{Payload: payload}, nil
 }
 
 func stringToJSON(ss []string) string {
@@ -1980,7 +2172,10 @@ func (s *SQLiteTraceStore) resolveGroupContextTx(
 	}
 
 	payload := contextPayload(draft, ctx)
-	contextID := contextIDFor(appendIntentID, groupIndex, payload)
+	contextID, err := contextIDFor(appendIntentID, groupIndex, payload)
+	if err != nil {
+		return RetainedContext{}, err
+	}
 
 	newCtx := RetainedContext{
 		ContextID:               contextID,
