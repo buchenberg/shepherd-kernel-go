@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -12,11 +13,14 @@ import (
 
 	shepherd "github.com/buchenberg/shepherd-kernel-go"
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/leases"
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/containerd/v2/core/snapshots"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
+	"github.com/containerd/errdefs"
+	"github.com/opencontainers/image-spec/identity"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -31,8 +35,27 @@ const sandboxLabel = "shepherd.sandbox"
 // rather than assumed.
 const defaultSnapshotter = "overlayfs"
 
+// ErrStdinUnsupported is returned by Exec when ExecRequest.Stdin is non-empty.
+// Callers can test for it with errors.Is to fall back to another transport.
+//
+// This is a containerd constraint, not a missing feature. The runc-v2 shim's
+// execProcess.openStdin opens the exec's stdin FIFO O_WRONLY and keeps it in
+// e.closers for the process's whole lifetime, so the FIFO always has a writer
+// and an in-container reader never observes EOF. Failing immediately beats the
+// alternative: a process blocked on stdin does not error, it hangs until the
+// context expires, which for a caller-supplied timeout can be minutes.
+var ErrStdinUnsupported = errors.New("containerd sandbox: exec stdin is unsupported")
+
 // execSeq numbers exec IDs within the process.
 var execSeq atomic.Uint64
+
+// namespaceOrDefault resolves the namespace this backend operates in.
+func namespaceOrDefault(cfg Config) string {
+	if cfg.Namespace == "" {
+		return "default"
+	}
+	return cfg.Namespace
+}
 
 // connect establishes a containerd client and wires the real backend.
 //
@@ -41,20 +64,15 @@ var execSeq atomic.Uint64
 // Config.Namespace. That wrapping is what keeps the lifecycle in sandbox.go
 // namespace-agnostic.
 //
-// NOTE: this adapter is compiled but has never been executed. It requires a Linux
-// host with a running containerd daemon and root or user namespaces. Verify the
-// container/spec construction and the exec round-trip against a live daemon
-// before relying on it.
+// The same wrapper injects the sandbox's lease, which is what stops the daemon's
+// garbage collector reclaiming a snapshot mid-lifecycle. See ensureLease.
 func (s *ContainerdSandbox) connect(ctx context.Context) error {
 	c, err := containerd.New(s.cfg.Address)
 	if err != nil {
 		return fmt.Errorf("containerd sandbox: connect to daemon: %w", err)
 	}
 
-	ns := s.cfg.Namespace
-	if ns == "" {
-		ns = "default"
-	}
+	ns := namespaceOrDefault(s.cfg)
 	snapshotterName := s.cfg.Snapshotter
 	if snapshotterName == "" {
 		snapshotterName = defaultSnapshotter
@@ -63,23 +81,135 @@ func (s *ContainerdSandbox) connect(ctx context.Context) error {
 	images := &containerdImages{client: c, ns: ns, snapshotter: snapshotterName}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.snap = namespaceSnapshotter{Snapshotter: c.SnapshotService(snapshotterName), ns: ns}
+	s.snap = namespaceSnapshotter{
+		Snapshotter: c.SnapshotService(snapshotterName),
+		ns:          ns,
+		lease:       &s.lease,
+	}
+	s.leases = c.LeasesService()
 	s.images = images
 	s.tasks = &containerdTasks{client: c, ns: ns, cfg: s.cfg, images: images}
 	_ = ctx
 	return nil
 }
 
-// namespaceSnapshotter injects the containerd namespace into every call the
-// sandbox makes. Only the methods sandbox.go uses are overridden; the rest are
-// inherited from the embedded interface.
+// leaseManager returns the daemon's lease manager, or nil when the collaborators
+// were substituted (tests).
+//
+// Lock ordering, where both are held: leaseMu then mu. Nothing takes mu and then
+// calls into the lease lifecycle, so the two cannot deadlock.
+func (s *ContainerdSandbox) leaseManager() leases.Manager {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.leases
+}
+
+// ensureLease creates the sandbox's containerd lease if it does not hold one.
+//
+// A lease is what keeps this sandbox's snapshots alive. Without one, a snapshot
+// is referenced only by the container currently rooted at it — and Capture stops
+// that container before preparing its successor, so in that window the
+// just-committed layer is unreferenced and containerd's GC may reclaim it:
+//
+//	prepare successor snapshot: parent snapshot shepherd/<id>/committed/1 does
+//	not exist
+//
+// That was observed on 3 of 5 consecutive live runs, a different test failing
+// each time. Registering the sandbox's snapshots under a lease makes them GC
+// roots for as long as the lease exists, which is the sandbox's own lifetime.
+//
+// containerd associates a snapshot with a lease only when the lease id is in the
+// context of the call that creates it, which is why the id lives behind a
+// pointer the snapshotter wrapper reads (see namespaceSnapshotter.ctx) rather
+// than being captured once here.
+//
+// A nil manager means the collaborators were substituted (tests). There is no
+// daemon and no GC, so there is nothing to lease and no error.
+func (s *ContainerdSandbox) ensureLease(ctx context.Context) error {
+	mgr := s.leaseManager()
+	if mgr == nil {
+		return nil
+	}
+	// The check and the create are one critical section. ContainerdSandbox is
+	// documented safe for concurrent use, and without this two concurrent
+	// Create/Apply calls both observe an empty reference, both create a lease,
+	// and the overwritten one is never released — pinning this sandbox's
+	// snapshots against the GC for good, which is the failure the lease exists to
+	// prevent.
+	s.leaseMu.Lock()
+	defer s.leaseMu.Unlock()
+	if s.lease.get() != "" {
+		return nil
+	}
+
+	lctx := namespaces.WithNamespace(ctx, namespaceOrDefault(s.cfg))
+	l, err := mgr.Create(lctx,
+		leases.WithID("shepherd-"+newSandboxID()),
+		leases.WithLabels(map[string]string{sandboxLeaseLabel: "sandbox"}),
+	)
+	if err != nil {
+		return fmt.Errorf("containerd sandbox: create lease: %w", err)
+	}
+	s.lease.set(l.ID)
+	return nil
+}
+
+// releaseLease deletes the sandbox's lease, letting containerd reclaim whatever
+// it was holding.
+//
+// Idempotent: an already-deleted lease is not an error, so Destroy stays safe to
+// retry.
+func (s *ContainerdSandbox) releaseLease(ctx context.Context) error {
+	s.leaseMu.Lock()
+	defer s.leaseMu.Unlock()
+
+	id := s.lease.get()
+	mgr := s.leaseManager()
+	if id == "" || mgr == nil {
+		return nil
+	}
+
+	// Clear before the delete so no snapshot call in flight re-registers under a
+	// lease that is going away: addSnapshotLease fails the whole Prepare/Commit
+	// when the lease named in the context does not exist.
+	s.lease.set("")
+
+	lctx := namespaces.WithNamespace(ctx, namespaceOrDefault(s.cfg))
+	if err := mgr.Delete(lctx, leases.Lease{ID: id}); err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil
+		}
+		// Put the id back so a later Destroy retries the delete rather than
+		// reporting success while the orphaned lease keeps this sandbox's
+		// snapshots pinned forever. The outcome is genuinely ambiguous — the RPC
+		// may have applied with the response lost — but retrying is harmless
+		// either way, because a Delete that finds nothing is success above.
+		s.lease.set(id)
+		return fmt.Errorf("containerd sandbox: delete lease %s: %w", id, err)
+	}
+	return nil
+}
+
+// namespaceSnapshotter injects the containerd namespace — and the sandbox's
+// lease, when it holds one — into every call the sandbox makes. Only the methods
+// sandbox.go uses are overridden; the rest are inherited from the embedded
+// interface.
 type namespaceSnapshotter struct {
 	snapshots.Snapshotter
 	ns string
+	// lease is read per call rather than captured, because the sandbox acquires
+	// its lease after this wrapper is built and drops it on Destroy.
+	lease *leaseRef
 }
 
 func (n namespaceSnapshotter) ctx(ctx context.Context) context.Context {
-	return namespaces.WithNamespace(ctx, n.ns)
+	ctx = namespaces.WithNamespace(ctx, n.ns)
+	if n.lease != nil {
+		if id := n.lease.get(); id != "" {
+			ctx = leases.WithLease(ctx, id)
+		}
+	}
+	return ctx
 }
 
 func (n namespaceSnapshotter) Stat(ctx context.Context, key string) (snapshots.Info, error) {
@@ -105,9 +235,15 @@ func (n namespaceSnapshotter) Mounts(ctx context.Context, key string) ([]mount.M
 // containerdImages resolves an image reference to the snapshot key holding its
 // unpacked rootfs.
 //
-// containerd unpacks an image's layers into the snapshotter keyed by the image
-// target digest, so that digest is the parent key for a container's first
-// writable snapshot.
+// containerd's unpacker commits each layer under its chainID — see
+// core/unpack/unpacker.go, which computes identity.ChainIDs(diffIDs) and
+// commits layer i as chainIDs[i].String(). The top layer's chainID is therefore
+// the parent key for a container's first writable snapshot.
+//
+// The image's target digest is NOT that key: it identifies the manifest, which
+// the snapshotter has never heard of. Passing it to Prepare fails with "parent
+// snapshot sha256:... does not exist". This was found by the live daemon test;
+// the fakes seed their rootfs key directly and so cannot catch it.
 type containerdImages struct {
 	client      *containerd.Client
 	ns          string
@@ -123,11 +259,14 @@ func (i *containerdImages) RootfsSnapshot(ctx context.Context, ref string) (stri
 	if err != nil {
 		return "", err
 	}
-	key := img.Target().Digest.String()
-	if key == "" {
-		return "", fmt.Errorf("containerd sandbox: image %s has no target digest to use as a rootfs snapshot", ref)
+	diffIDs, err := img.RootFS(ctx)
+	if err != nil {
+		return "", fmt.Errorf("containerd sandbox: image %s: read rootfs diff ids: %w", ref, err)
 	}
-	return key, nil
+	if len(diffIDs) == 0 {
+		return "", fmt.Errorf("containerd sandbox: image %s has no layers to derive a rootfs snapshot from", ref)
+	}
+	return identity.ChainID(diffIDs).String(), nil
 }
 
 // image returns the image, pulling and unpacking it when it is not present
@@ -208,7 +347,16 @@ func (t *containerdTasks) StartTask(ctx context.Context, id, snapshotKey string)
 	if err != nil {
 		return fmt.Errorf("containerd sandbox: create container %s: %w", containerID, err)
 	}
-	task, err := ctr.NewTask(ctx, cio.NewCreator(cio.WithStdio))
+	// The init process's stdio is never consumed — Exec carries the real I/O.
+	// cio.WithStdio would be actively wrong here: it ties the container's stdin
+	// to the *client's* os.Stdin and starts a copier, so an interactive host
+	// would have its own input consumed by a background container. Discard both
+	// directions instead. A reader is still supplied for stdin because copyIO
+	// passes it to io.CopyBuffer without a nil check.
+	task, err := ctr.NewTask(ctx, cio.NewCreator(
+		cio.WithFIFODir(t.cfg.FIFODir),
+		cio.WithStreams(bytes.NewReader(nil), io.Discard, io.Discard),
+	))
 	if err != nil {
 		// The container is useless without a task; drop it. The snapshot is left
 		// alone — the sandbox owns snapshot lifetime.
@@ -239,7 +387,13 @@ func (t *containerdTasks) StopTask(ctx context.Context, id string) error {
 	var errs []error
 	for _, ctr := range ctrs {
 		if task, err := ctr.Task(ctx, nil); err == nil {
-			if err := task.Kill(ctx, syscall.SIGKILL); err != nil {
+			// WithKillAll is required, not redundant. A plain Kill signals only the
+			// init process; once init is gone, task.Delete's own WithProcessKill
+			// short-circuits on Pid() == 0 (see its containerd#10441 guard) and
+			// never signals the exec'd processes. Killing init alone therefore
+			// orphans every in-flight exec — observed live as `cat` processes and
+			// their shims outliving Destroy after a timed-out WriteFile.
+			if err := task.Kill(ctx, syscall.SIGKILL, containerd.WithKillAll); err != nil {
 				errs = append(errs, fmt.Errorf("kill task %s: %w", ctr.ID(), err))
 			}
 			if _, err := task.Delete(ctx, containerd.WithProcessKill); err != nil {
@@ -273,6 +427,15 @@ func (t *containerdTasks) Running(ctx context.Context, id string) (bool, error) 
 
 // Exec runs a command in the sandbox's current container generation.
 func (t *containerdTasks) Exec(ctx context.Context, id string, req shepherd.ExecRequest) (shepherd.ExecResult, error) {
+	// Rejected before any RPC: the process would start, block on a stdin that can
+	// never reach EOF, and cost the caller its whole context budget to find out.
+	if len(req.Stdin) > 0 {
+		return shepherd.ExecResult{}, fmt.Errorf("%w: %s would block until the context "+
+			"expires because the runc-v2 shim keeps a write end on the exec's stdin FIFO; "+
+			"pass data through arguments instead, as WriteFile does",
+			ErrStdinUnsupported, req.Command)
+	}
+
 	ctx = t.ctx(ctx)
 	start := time.Now()
 
@@ -292,7 +455,19 @@ func (t *containerdTasks) Exec(ctx context.Context, id string, req shepherd.Exec
 	}
 
 	execID := fmt.Sprintf("exec-%d", execSeq.Add(1))
-	ioCreator := cio.NewCreator(cio.WithStreams(bytes.NewReader(req.Stdin), &stdout, &stderr))
+
+	// req.Stdin is rejected at the top of this method (see ErrStdinUnsupported),
+	// so stdin is always empty here. A reader is still supplied because copyIO
+	// passes it to io.CopyBuffer without a nil check and a nil interface reader
+	// panics; an empty bytes.Reader reaches EOF at once.
+	//
+	// FIFODir comes from Config: containerd's default is root-owned, and the
+	// client creates these FIFOs itself, so an unprivileged caller needs a
+	// writable directory of its own.
+	ioCreator := cio.NewCreator(
+		cio.WithFIFODir(t.cfg.FIFODir),
+		cio.WithStreams(bytes.NewReader(nil), &stdout, &stderr),
+	)
 	proc, err := task.Exec(ctx, execID, spec, ioCreator)
 	if err != nil {
 		return shepherd.ExecResult{}, fmt.Errorf("containerd sandbox: exec %s: %w", req.Command, err)
@@ -305,6 +480,21 @@ func (t *containerdTasks) Exec(ctx context.Context, id string, req shepherd.Exec
 		_, _ = proc.Delete(context.WithoutCancel(ctx))
 		return shepherd.ExecResult{}, fmt.Errorf("containerd sandbox: wait for %s: %w", req.Command, err)
 	}
+
+	// task.Exec only *creates* the process in the shim; Start is what runs it.
+	// Wait is registered first so a command that exits immediately cannot miss
+	// its own exit event.
+	//
+	// Omitting Start does not fail loudly: the process sits created, the shim
+	// never opens its end of the stdout/stderr FIFOs, the client's read-side
+	// opens block in openat forever, and the Wait channel never receives — so
+	// every Exec hangs until the context expires. StartTask calls task.Start,
+	// which is why Create works while Exec does not.
+	if err := proc.Start(ctx); err != nil {
+		_, _ = proc.Delete(context.WithoutCancel(ctx))
+		return shepherd.ExecResult{}, fmt.Errorf("containerd sandbox: start %s: %w", req.Command, err)
+	}
+
 	var status containerd.ExitStatus
 	select {
 	case status = <-statusCh:
@@ -313,8 +503,27 @@ func (t *containerdTasks) Exec(ctx context.Context, id string, req shepherd.Exec
 		_, _ = proc.Delete(context.WithoutCancel(ctx))
 		return shepherd.ExecResult{}, fmt.Errorf("containerd sandbox: exec %s: %w", req.Command, ctx.Err())
 	}
+
+	// A cancelled context makes both branches ready at once: process.Wait
+	// delivers ExitStatus{code: UnknownExitStatus, err: <rpc error>} when its own
+	// Wait RPC is cancelled, so the select above can take the status branch on a
+	// timeout. status.Error() is the only way to tell the two apart. Without this
+	// a deadline reports as a genuine exit 255 with a nil error, and callers
+	// cannot distinguish "the command failed" from "we gave up waiting" — which
+	// is how the stdin hang presented itself.
+	if statusErr := status.Error(); statusErr != nil {
+		_ = proc.Kill(context.WithoutCancel(ctx), syscall.SIGKILL)
+		_, _ = proc.Delete(context.WithoutCancel(ctx))
+		// Prefer the context's own error: "context deadline exceeded" says more
+		// than the transport-level cancellation wrapped inside the status.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return shepherd.ExecResult{}, fmt.Errorf("containerd sandbox: exec %s: %w", req.Command, ctxErr)
+		}
+		return shepherd.ExecResult{}, fmt.Errorf("containerd sandbox: exec %s: %w", req.Command, statusErr)
+	}
+
 	// Always release the process, even when the command failed.
-	if _, delErr := proc.Delete(context.WithoutCancel(ctx)); delErr != nil && status.Error() == nil {
+	if _, delErr := proc.Delete(context.WithoutCancel(ctx)); delErr != nil {
 		return shepherd.ExecResult{}, fmt.Errorf("containerd sandbox: release exec %s: %w", req.Command, delErr)
 	}
 

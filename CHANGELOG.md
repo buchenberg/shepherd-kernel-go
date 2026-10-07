@@ -4,6 +4,61 @@ Notable changes to `shepherd-kernel-go`. This project follows
 [Semantic Versioning](https://semver.org/); while pre-1.0, minor releases may
 contain breaking changes, which are called out below.
 
+## [v0.4.1] - 2026-10-07
+
+Patch release. **`v0.4.0` does not contain these fixes**: it was tagged at the
+`feat/containerd` merge (`0c62788`) before the Phase 0 bug batch landed, so the
+pre-fix code was the only thing a `go get` could resolve. `v0.4.1` supersedes it.
+
+### Fixed
+- `HighErrorRateRule` denominator computed over the wrong population.
+- `ExternalAnchor.AnchorKind` left unpopulated by an argument-position bug.
+- Scope-event intent IDs now use an atomic sequence, so concurrent scope events
+  cannot collide.
+- `ExecResult.Duration` is populated by the containerd `Exec` path.
+- Sub-agents no longer open a second trace store; middleware built on the
+  session-shared store no longer closes it.
+- Stale `TreeState`/`DiffSince` comments removed.
+
+### Added
+- `sandbox/containerd/live_test.go`: an env-gated live harness
+  (`SHEPHERD_CONTAINERD_ADDR`, `_IMAGE`, `_NAMESPACE`, `_SNAPSHOTTER`,
+  `_WORKDIR`, `_TIMEOUT`) covering full lifecycle, namespace isolation, destroy
+  keeping the image rootfs, diff preserving pre-staged changes, and stdin
+  rejection. Skips cleanly without a daemon.
+- `Config.FIFODir` and `Config.WriteChunkBytes` on the containerd sandbox, so an
+  unprivileged caller can drive the backend without root-owned defaults.
+
+### Fixed (containerd, found by first live-daemon exercise)
+- `RootfsSnapshot` used the image's manifest digest as the snapshot parent key.
+  containerd's unpacker commits each layer under its chainID, so `Prepare` failed
+  with "parent snapshot ... does not exist".
+- `Exec` never called `proc.Start`, so the process stayed created and every exec
+  blocked until the context expired.
+- `StartTask` used `cio.WithStdio`, tying the container's stdin to the client's.
+- `StopTask` killed only the init process, orphaning exec'd processes.
+- A cancelled context surfaced as exit 255 with a nil error.
+- `Diff` mutated the caller's git index, silently dropping pre-staged work.
+- `Exec` now rejects `ExecRequest.Stdin` explicitly (`ErrStdinUnsupported`): the
+  runc-v2 shim holds a write end on the exec's stdin FIFO, so a reader never sees
+  EOF and a stdin-reading command hangs rather than erroring.
+- **The containerd sandbox now holds a lease for its lifetime.** Without one a
+  snapshot is referenced only by the container rooted at it, and `Capture` stops
+  that container before preparing its successor — leaving the just-committed
+  layer unreferenced for the daemon's garbage collector to reclaim. That made the
+  live suite flaky, failing **3 runs in 5** with a different test each time. The
+  sandbox now acquires a labelled lease in `Create`/`Apply` and releases it in
+  `Destroy`. Verified by **12 consecutive green runs** and by a live assertion
+  that the lease lists the sandbox's own snapshot keys as resources.
+
+### Verified
+The containerd backend's daemon path is exercised, not merely compiled. The live
+harness (`sandbox/containerd/live_test.go`) covers full lifecycle, namespace
+isolation, destroy keeping the image rootfs, diff preserving pre-staged changes,
+stdin rejection, lease-held snapshots, and lease release on destroy. It still
+needs a Linux host with a running containerd daemon — a stock image and the
+overlayfs snapshotter are enough, no root-owned FIFO directory required.
+
 ## [v0.4.0] - 2026-09-16
 
 ### Added

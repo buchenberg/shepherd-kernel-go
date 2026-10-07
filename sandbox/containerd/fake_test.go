@@ -238,10 +238,17 @@ type fakeTasks struct {
 	runErr    map[string]error // command -> error
 	lastReq   shepherd.ExecRequest
 	lastStdin []byte
+	// allReqs records every Exec in order, so a multi-exec operation such as a
+	// chunked WriteFile can be asserted on as a sequence rather than only by its
+	// last call.
+	allReqs []shepherd.ExecRequest
 	// current is the layer the running task is rooted at, "" when stopped.
 	current string
 	started int
 	stopped int
+	// diffStdout, when set, overrides the canned response for the diff script so
+	// a test can exercise malformed staging output.
+	diffStdout string
 }
 
 func newFakeTasks(log *opLog, snap *fakeSnapshotter) *fakeTasks {
@@ -290,6 +297,7 @@ func (f *fakeTasks) Exec(_ context.Context, id string, req shepherd.ExecRequest)
 	}
 	f.lastReq = req
 	f.lastStdin = req.Stdin
+	f.allReqs = append(f.allReqs, req)
 
 	if err, ok := f.runErr[req.Command]; ok {
 		return shepherd.ExecResult{ExitCode: 1, Stderr: err.Error()}, nil
@@ -308,6 +316,22 @@ func (f *fakeTasks) Exec(_ context.Context, id string, req shepherd.ExecRequest)
 		}
 		return shepherd.ExecResult{ExitCode: 0}, nil
 	case "sh":
+		// Dispatch on the script rather than answering every shell call with one
+		// canned string: Diff's scratch-index script and the ReadFile/WriteFile
+		// file scripts need different output.
+		script := ""
+		if len(req.Args) >= 2 {
+			script = req.Args[1]
+		}
+		if strings.Contains(script, "git diff --cached") {
+			if f.diffStdout != "" {
+				return shepherd.ExecResult{ExitCode: 0, Stdout: f.diffStdout}, nil
+			}
+			// Diff stages once and gets both sections back from that one exec, so
+			// the fake answers in the same shape: names, the marker, then the diff.
+			return shepherd.ExecResult{ExitCode: 0,
+				Stdout: "f\n\n" + diffNamesMarker + "\ndiff --git a/f b/f\n+change\n"}, nil
+		}
 		return shepherd.ExecResult{ExitCode: 0, Stdout: "file-contents"}, nil
 	default:
 		return shepherd.ExecResult{ExitCode: 0}, nil
