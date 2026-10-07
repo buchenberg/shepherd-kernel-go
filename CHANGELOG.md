@@ -4,6 +4,84 @@ Notable changes to `shepherd-kernel-go`. This project follows
 [Semantic Versioning](https://semver.org/); while pre-1.0, minor releases may
 contain breaking changes, which are called out below.
 
+## [v0.5.0] - 2026-10-07
+
+Phase 1 (ABI trust): the canonical digest layer is now byte-identical to
+CPython, proven by Python-generated vectors rather than assertion, and the
+store allocates the same identities the Python reference store does. **This
+release contains a digest-behavior change** — read on before upgrading.
+
+### Breaking: digest behavior and rejected inputs
+- The canonical writer is hand-rolled to match CPython's
+  `json.dumps(sort_keys=True, separators=(",",":"), ensure_ascii=False,
+  allow_nan=False)` exactly. Two classes of payload now hash **differently —
+  and correctly — than in v0.4.1**:
+  - payloads containing `<`, `>`, `&`: `encoding/json` HTML-escaped them
+    (`\u003c`, `\u003e`, `\u0026`), Python does not;
+  - non-integer floats: CPython repr semantics — `0.0` and `-0.0` keep their
+    decimal point, shortest round-trip digits, fixed notation inside
+    `1e-4 ≤ |x| < 1e16`, scientific outside (`1e+16`, `1e-05`), `NaN`/`±Inf`
+    rejected. The old writer rendered integral floats as integers, so `1.0`
+    digested as `1`.
+  Old traces remain readable — retained records are looked up by id, not
+  re-derived. Only newly appended records hash differently. Traces written by
+  **≥ v0.5.0 are digest-compatible with Python `shepherd2`**; traces written by
+  older Go versions with these payload classes are not (consumers pinned to
+  cross-language identity — e.g. `yaah` — should note this in their release
+  notes).
+- A causal parent cited at both the group and the draft level is now
+  **rejected** (`duplicate causal parent`), not silently deduplicated. The
+  dedupe changed the parent tuple a record digests over, so identical caller
+  input could produce a different record id depending on which level the
+  caller used. Python rejects it; so does this.
+- A group context with an empty `substrate_ref` or an unknown `containment`
+  is now **rejected on append and on preview** (`ValidateWitnessBody` runs
+  before the witness digest), instead of being retained as a witness whose
+  body the kernel's own schema rejects.
+- Payloads decoded from JSON must be decoded with `json.Decoder.UseNumber()`
+  (or into `json.Number`): the JSON `1` vs `1.0` distinction is now
+  load-bearing in digests. `CanonicalJSONBytes` documents the contract.
+
+### Fixed (store identity — found by replaying Python store vectors)
+- The retained-context id now uses Python's algorithm and shape
+  (`context:` + 32 hex over the context payload, `ensure_ascii=True`), the
+  batch digest uses Python's sorted snake_case key order, the ordinary witness
+  plan takes `authority_refs` from the **retained context's**
+  `capability_witness_refs` rather than the caller's presented witness refs,
+  the root witness carries Python's `witness_root` kind label, and witness
+  plans insert in Python's order (root first) rather than map-random order.
+  Without these, identical appends produced different record/context/frontier
+  ids than the reference store.
+- Read results are deterministic: `Slice` flattens owner paths and anchors in
+  first-insertion order (`OwnerPathOrder`), and causal-closure reads keep the
+  SQL sort instead of ranging over a Go map, which had randomized the order on
+  every process run — a single run always looked correct.
+
+### Added
+- `ReadPathPrefix`: the last missing `TraceStore` protocol member, a
+  documented alias of `ReadOwnerPrefix` (it is one in Python too).
+- `OpMaterialize`/`OpObserve` documented as reserved until plan 03, with a
+  test pinning that they are unreachable rather than silently trusted.
+- Test infrastructure, all oracles Python-generated and hash-pinned
+  (`golden_provenance_test.go`):
+  - `conformance_test.go` — `runConformance`, the backend-agnostic port of
+    `test_trace_store_conformance.py` (10 cases 1:1; 8 run-output descriptor
+    cases deferred to plan 04 with the schema they exercise);
+  - `laws_test.go` + `docs/law-coverage.md` — all 25 ABI laws mapped, 20 with
+    dedicated tests;
+  - `testdata/canonical_edge_vectors_v0.json` (42 edge vectors) and
+    `testdata/canonical_corpus_v0.json` (200 seeded-random payloads including
+    subnormals and both float-notation boundaries) — the canonical writer
+    reproduces every byte and digest;
+  - `testdata/store_vectors_v0.json` — store fixtures replayed ID-for-ID.
+
+### Verified
+Every parity claim in this release is measured against a Python-generated
+fixture: 42 edge vectors, 200 corpus payloads and 9 store fixtures all
+reproduce byte-for-byte, from the reference at `shepherd2@d34d5ca3`. The
+conformance suite and the 25-law map gate the store protocol; `-race` is
+green across the 3-OS CI matrix.
+
 ## [v0.4.1] - 2026-10-07
 
 Patch release. **`v0.4.0` does not contain these fixes**: it was tagged at the

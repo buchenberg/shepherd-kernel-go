@@ -147,8 +147,8 @@ the first consumer.
 
 ### Phase 1 — ABI trust (v0.5.0)
 
-**In flight — re-verified against the tree, 2026-10-07.** The canonical and
-store-identity work merged as PRs #12–#14; rows re-checked against git history
+**Complete — all nine tasks done, verified against the tree 2026-10-07.** The canonical and
+store-identity work merged as PRs #12–#14; the conformance suite, law coverage and corpus as PRs #15–#16, both hardened by review (PR #15's review caught a vacuous restart case and a too-narrow receipt assertion; PR #16's caught a corpus advertising subnormals and the 1e16 boundary while containing neither). Rows re-checked against git history
 and file presence:
 
 | ID | Task | Status | Evidence |
@@ -375,7 +375,11 @@ change).
       *(PR #15: `conformance_test.go` ports 10 cases, documents 8 N/A pending
       plan 04; `docs/law-coverage.md` maps all 25 laws — the only open rows
       are documented plan-02 dependencies, not ❌s.)*
-- [ ] `-race` green; v0.5.0 tagged; CHANGELOG flags the digest-behavior fix.
+- [x] `-race` green; v0.5.0 tagged; CHANGELOG flags the digest-behavior fix.
+      *(`-race` green on the 3-OS CI matrix across PRs #12–#16. `v0.5.0`
+      tagged at this release merge. The CHANGELOG's Breaking section leads
+      with the digest-behavior change, the duplicate-parent rejection and the
+      witness-body validation, plus the yaah consumer note.)*
 
 **yaah coordination**: after v0.5.0, traces written by yaah on ≥v0.5.0 are
 cross-readable with Python; traces written by older Go versions with

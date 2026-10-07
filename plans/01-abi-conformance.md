@@ -332,12 +332,19 @@ IDs are digests — a canonical drift there is expensive to unwind).
 
 ## 8. Acceptance criteria
 
-- [ ] Payloads containing `<`, `>`, `&`, floats (`0.0`, `-0.0`, `1e16`, `1e-7`)
+- [x] Payloads containing `<`, `>`, `&`, floats (`0.0`, `-0.0`, `1e16`, `1e-7`)
       produce digests identical to Python `canonical_digest` (Python-generated
       vectors in-tree).
-- [ ] Shared golden file hash matches the Python repo's copy; CI fails on drift.
-- [ ] `store_vectors_v0.json` replay passes: all record/context/frontier IDs
+      *(Done — `canonical_edge_vectors_v0.json` pins these by name and
+      `canonical_corpus_v0.json` adds 200 seeded payloads including subnormals
+      and both notation boundaries; every digest reproduces byte-for-byte.)*
+- [x] Shared golden file hash matches the Python repo's copy; CI fails on drift.
+      *(Done — the pinned-hash test fails the build on drift; the upstream
+      compare is a deliberate local check, see the T1.4 row in plan 00.)*
+- [x] `store_vectors_v0.json` replay passes: all record/context/frontier IDs
       byte-identical to Python store output.
+      *(Done — §4 is closed: the store allocates the reference identities,
+      replayed ID-for-ID.)*
 - [x] Every Python conformance case either ported or documented N/A.
       *(Done — §5 mapping table: 10 ported into `conformance_test.go`'s
       `runConformance`, 8 run-output descriptor cases documented N/A pending
@@ -348,4 +355,6 @@ IDs are digests — a canonical drift there is expensive to unwind).
       plan-02 dependency, law 23 likewise, and law 24 is covered by construction
       with rationale. Three porting-found store fixes — `resolvedCauses`,
       `ordinaryWitnessPlan`, `canonicalFactOrder` — landed with the tests.)*
-- [ ] `ReadPathPrefix` implemented + tested; `AnchorKind` populated.
+- [x] `ReadPathPrefix` implemented + tested; `AnchorKind` populated.
+      *(Done — `d039f0c`, a documented alias; `AnchorKind` was already
+      populated by the Phase 0 bug batch, §2a.)*
