@@ -73,7 +73,7 @@ var vectorFiles = []vectorFile{
 		// JSON — sha256 over "<intent>\0<local_ref>" — and these vectors
 		// exist partly so nobody "fixes" that.
 		path:        "testdata/execution_vectors_v0.json",
-		wantSHA256:  "dc3fb1f1c294339f1edb5aa316ef2478c1fd0f2bc41cdb518e4696cac2e6b3d0",
+		wantSHA256:  "02f596e7eaec5215868ec3fc1ec0e911c2395b64d0e5cd27793129eca8666f69",
 		generatedBy: "shepherd2@d34d5ca334871dfcb5a3dc76dd78045829fa4e56 (CPython 3.13.13)",
 	},
 }

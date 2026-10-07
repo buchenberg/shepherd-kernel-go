@@ -145,7 +145,11 @@ func ExecutionRelationFromFact(fact Record) (ExecutionRelation, error) {
 
 // relationFromPayload rebuilds a relation from its retained payload. An
 // unknown kind fails loudly: spawn/adopt/abandon is the whole vocabulary, so
-// anything else means a payload the schema never produced.
+// anything else means a payload the schema never produced. The identifier
+// fields, by contrast, coerce missing or non-string values to "" — exactly
+// as Python's str(payload.get(..., "")) does; a missing parent id therefore
+// drops the relation in the projection on both sides of the port, which is
+// parity, not an accident.
 func relationFromPayload(factID string, payload map[string]any) (ExecutionRelation, error) {
 	kind := payloadString(payload, "relation_kind")
 	switch RelationKind(kind) {

@@ -3,6 +3,7 @@ package shepherd
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -12,6 +13,21 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+// ErrUnknownFrontier is the expected "no retained cutoff for this frontier id"
+// condition, distinguished from real read faults so callers can retry it
+// deliberately instead of spinning on every error.
+var ErrUnknownFrontier = errors.New("unknown frontier")
+
+// unknownFrontierError keeps the store's message shape while matching the
+// sentinel through errors.Is.
+type unknownFrontierError struct{ frontierID string }
+
+func (e *unknownFrontierError) Error() string {
+	return fmt.Sprintf("unknown frontier id: %q", e.frontierID)
+}
+
+func (e *unknownFrontierError) Is(target error) bool { return target == ErrUnknownFrontier }
 
 // TraceStoreError is the base error for trace store law violations.
 type TraceStoreError struct {
@@ -943,7 +959,7 @@ func (s *SQLiteTraceStore) readOwnerCutoff(frontierID string) (Frontier, error) 
 	err := row.Scan(&f.FrontierID, &f.TargetTraceOwnerID, &f.ThroughFactID,
 		&f.ThroughOwnerOrdinal, &publisherID, &f.CreatedByFactID, &appendIntentID)
 	if err == sql.ErrNoRows {
-		return Frontier{}, &TraceStoreError{fmt.Sprintf("unknown frontier id: %q", frontierID)}
+		return Frontier{}, &unknownFrontierError{frontierID: frontierID}
 	}
 	if err != nil {
 		return Frontier{}, fmt.Errorf("scan frontier: %w", err)
@@ -2228,7 +2244,7 @@ func (s *SQLiteTraceStore) readOwnerCutoffTx(tx *sql.Tx, frontierID string) (Fro
 	err := row.Scan(&f.FrontierID, &f.TargetTraceOwnerID, &f.ThroughFactID,
 		&f.ThroughOwnerOrdinal, &publisherID, &f.CreatedByFactID, &appendIntentID)
 	if err == sql.ErrNoRows {
-		return Frontier{}, &TraceStoreError{fmt.Sprintf("unknown frontier id: %q", frontierID)}
+		return Frontier{}, &unknownFrontierError{frontierID: frontierID}
 	}
 	if err != nil {
 		return Frontier{}, fmt.Errorf("scan frontier: %w", err)

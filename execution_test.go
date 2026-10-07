@@ -104,6 +104,7 @@ type executionVectorDoc struct {
 	RunSequence      executionVectorRun      `json:"run_sequence"`
 	FailSequence     executionVectorRun      `json:"fail_sequence"`
 	RelationSequence executionVectorRelation `json:"relation_sequence"`
+	HistorySequence  executionVectorHistory  `json:"history_sequence"`
 }
 
 func loadExecutionVectors(t *testing.T) executionVectorDoc {
@@ -470,4 +471,25 @@ func TestProjectExecutionRequiresBothModes(t *testing.T) {
 	if !errors.Is(err, ErrProjectionMode) {
 		t.Fatalf("captures_only slice fed to the fold: got %v, want ErrProjectionMode", err)
 	}
+}
+
+type historyVectorChild struct {
+	ExecutionID string `json:"execution_id"`
+	TaskRef     string `json:"task_ref"`
+	Status      string `json:"status"`
+	Kind        string `json:"kind"`
+	RelationID  string `json:"relation_id"`
+	FrontierID  string `json:"frontier_id"`
+}
+
+type executionVectorHistory struct {
+	RunID           string                `json:"run_id"`
+	ExecutionID     string                `json:"execution_id"`
+	FrontierID      string                `json:"frontier_id"`
+	TaskRefs        map[string]string     `json:"task_refs"`
+	ParentOwnerPath []executionVectorFact `json:"parent_owner_path"`
+	RootStatus      string                `json:"root_status"`
+	RootTaskRef     string                `json:"root_task_ref"`
+	Children        []historyVectorChild  `json:"children"`
+	Published       []string              `json:"published"`
 }

@@ -58,11 +58,12 @@ func (l *StaticSchemaLibrary) ProjectionSpecs() []ProjectionSpec { return l.Spec
 // matched with errors.Is.
 var ErrProjectionMode = errors.New("shepherd: projection mode incompatible")
 
-// ShepherdSchemas is the default schema library: the execution, relation and
-// runtime-published-fact rings with their projection specs. It is the
-// single registry a caller needs to hand to anything asking "is this schema
-// known, and what does its projection require" — plan 04's settlement
-// projections will extend it rather than replace it.
+// ShepherdSchemas is the default schema library. It registers the
+// execution and relation rings WITH their projection specs, plus the
+// runtime-published-fact ref as a known schema — the reference defines no
+// ProjectionSpec for published facts (they are folded by the history
+// projection, which carries the specs), so none is claimed here either.
+// Plan 04's settlement projections will extend this library, not replace it.
 func ShepherdSchemas() *StaticSchemaLibrary {
 	return &StaticSchemaLibrary{
 		LibraryName: "shepherd2",
@@ -77,9 +78,16 @@ func ShepherdSchemas() *StaticSchemaLibrary {
 }
 
 // EnsureProjectionCompatible validates that a slice satisfies a projection's
-// declared kernel requirements. It returns an error wrapping
-// ErrProjectionMode when the mode filter disagrees.
+// declared kernel requirements: a payload-requiring projection rejects a
+// shape_only slice — which would otherwise fold an empty owner path into a
+// plausible pending execution — and a mode disagreement wraps
+// ErrProjectionMode. AcceptsAnchors is descriptive today (the folds' own
+// payload-visible checks enforce it in practice); it is carried for parity
+// with Python's ProjectionSpec.
 func EnsureProjectionCompatible(slice Slice, spec ProjectionSpec) error {
+	if spec.RequiresPayload && slice.VisibilityProfile == VisibilityShapeOnly {
+		return fmt.Errorf("projection %q requires payload visibility; got a shape_only slice", spec.Name)
+	}
 	if spec.ModeRequirement == ProjectionAcceptsAny {
 		return nil
 	}

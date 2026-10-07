@@ -63,6 +63,18 @@ func ProjectEffectiveHistory(rootSlice Slice, rootTraceOwnerID string, childSlic
 		if !ok {
 			continue
 		}
+		// The slice was selected by frontier id but the projection keys on
+		// the child execution id; a disagreement would fold an empty owner
+		// path and fabricate a pending child, so it is a loud error. Adopt
+		// validates this pairing at record time; this guards every other
+		// path that could write a relation.
+		if childSlice.Frontier == nil {
+			return nil, fmt.Errorf("effective history: child slice for %s carries no frontier", relation.ChildFrontierID)
+		}
+		if childSlice.Frontier.TargetTraceOwnerID != relation.ChildExecutionID {
+			return nil, fmt.Errorf("effective history: frontier %s targets %s, not the relation's child %s",
+				relation.ChildFrontierID, childSlice.Frontier.TargetTraceOwnerID, relation.ChildExecutionID)
+		}
 		child, err := ProjectExecution(childSlice, relation.ChildExecutionID, nil)
 		if err != nil {
 			return nil, err

@@ -22,7 +22,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -43,7 +45,12 @@ type TaskFunc func(control *TaskControl) (map[string]any, error)
 // Python derives it from the class's module and qualname; Go has no
 // equivalent, so the registry key IS the task ref, recorded in the created
 // fact verbatim.
+//
+// The map is mutex-guarded because StartTask runs lookups on task
+// goroutines; registering while a task is in flight would otherwise be a
+// fatal concurrent map access.
 type Registry struct {
+	mu    sync.RWMutex
 	funcs map[string]TaskFunc
 }
 
@@ -52,10 +59,14 @@ func NewRegistry() *Registry {
 }
 
 func (r *Registry) Register(taskRef string, fn TaskFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.funcs[taskRef] = fn
 }
 
 func (r *Registry) lookup(taskRef string) (TaskFunc, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	fn, ok := r.funcs[taskRef]
 	if !ok {
 		return nil, fmt.Errorf("no task registered under ref %q", taskRef)
@@ -63,21 +74,25 @@ func (r *Registry) lookup(taskRef string) (TaskFunc, error) {
 	return fn, nil
 }
 
-// Run is the live handle for one root execution.
+// Run is the live handle for one root execution. For a StartTask run it
+// carries the body's completion channel, so a failed body surfaces through
+// Wait instead of polling forever for a frontier that will never exist.
 type Run struct {
 	store       *SQLiteTraceStore
 	executionID string
 	frontierID  string
+	done        <-chan error // nil for StartTaskSync runs
 }
 
 func (r *Run) ExecutionID() string { return r.executionID }
 func (r *Run) FrontierID() string  { return r.frontierID }
 
 // Wait returns the terminal projected execution. For a StartTask run the
-// terminal frontier may not exist yet; Wait polls for it until the context
-// is cancelled.
+// terminal frontier may not exist yet: the not-published condition is
+// retried, real store errors return immediately, and a failed body returns
+// its error rather than a hang.
 func (r *Run) Wait(ctx context.Context) (*Execution, error) {
-	cutoff, err := waitCutoff(ctx, r.store, r.frontierID)
+	cutoff, err := r.waitForCutoff(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -88,20 +103,55 @@ func (r *Run) Wait(ctx context.Context) (*Execution, error) {
 	return ProjectExecution(slice, cutoff.TargetTraceOwnerID, &cutoff)
 }
 
-// Snapshot returns the current projected execution. Python documents that
-// its runtime executes synchronously so snapshot and wait resolve the same
-// retained cutoff; the same holds for StartTaskSync, and for StartTask the
-// distinction is not observable through the store until the frontier exists.
+// Snapshot returns the CURRENT projected execution — pending, running or
+// terminal — without waiting for anything: it folds the owner prefix as it
+// stands. Unlike Wait it never blocks on the frontier.
 func (r *Run) Snapshot(ctx context.Context) (*Execution, error) {
-	return r.Wait(ctx)
+	_ = ctx // accepted for symmetry with Wait; no waiting happens here
+	slice, err := r.store.ReadOwnerPrefix(trustedHandlesReadContext, r.executionID, 99, ModeBoth)
+	if err != nil {
+		return nil, err
+	}
+	return ProjectExecution(slice, r.executionID, nil)
 }
 
 // Cutoff returns the durable terminal read receipt for this run.
 func (r *Run) Cutoff(ctx context.Context) (Frontier, error) {
-	return waitCutoff(ctx, r.store, r.frontierID)
+	return r.waitForCutoff(ctx)
+}
+
+// waitForCutoff polls only for the not-published condition
+// (ErrUnknownFrontier); every other error — a closed store, a corrupt
+// frontier, a resolver disagreement — returns immediately instead of
+// spinning as "not yet". A failed body that left no frontier surfaces
+// through the done channel.
+func (r *Run) waitForCutoff(ctx context.Context) (Frontier, error) {
+	for {
+		cutoff, err := r.store.ReadOwnerCutoff(r.frontierID)
+		if err == nil {
+			return cutoff, nil
+		}
+		if !errors.Is(err, ErrUnknownFrontier) {
+			return Frontier{}, err
+		}
+		select {
+		case runErr, ok := <-r.done:
+			if ok && runErr != nil {
+				return Frontier{}, fmt.Errorf("task run failed: %w", runErr)
+			}
+		case <-ctx.Done():
+			return Frontier{}, fmt.Errorf("waiting for frontier %s: %w", r.frontierID, ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 // ChildHandle is the live handle for a child execution related to a parent.
+// A child handle only exists once the child is terminal — Spawn runs the
+// child synchronously, and Adopt validates the frontier before recording
+// the relation — so Wait never waits: it reads the retained cutoff once,
+// exactly like Python's handle, whose cutoff property would raise on a
+// missing frontier.
 type ChildHandle struct {
 	store       *SQLiteTraceStore
 	executionID string
@@ -116,7 +166,8 @@ func (h *ChildHandle) RelationID() string          { return h.relationID }
 func (h *ChildHandle) Relation() ExecutionRelation { return h.relation }
 
 func (h *ChildHandle) Wait(ctx context.Context) (*Execution, error) {
-	cutoff, err := waitCutoff(ctx, h.store, h.frontierID)
+	_ = ctx // kept for symmetry with Run.Wait; children are terminal already
+	cutoff, err := h.store.ReadOwnerCutoff(h.frontierID)
 	if err != nil {
 		return nil, err
 	}
@@ -127,29 +178,15 @@ func (h *ChildHandle) Wait(ctx context.Context) (*Execution, error) {
 	return ProjectExecution(slice, cutoff.TargetTraceOwnerID, &cutoff)
 }
 
+// Snapshot returns the child's current projection from its retained
+// frontier. A spawned child is terminal by the time its handle exists.
 func (h *ChildHandle) Snapshot(ctx context.Context) (*Execution, error) {
 	return h.Wait(ctx)
 }
 
 func (h *ChildHandle) Cutoff(ctx context.Context) (Frontier, error) {
-	return waitCutoff(ctx, h.store, h.frontierID)
-}
-
-// waitCutoff reads a terminal cutoff, polling while it does not exist yet —
-// the one piece of waiting Python never needs, because its runtime is
-// synchronous and a Run only exists after the frontier is published.
-func waitCutoff(ctx context.Context, store *SQLiteTraceStore, frontierID string) (Frontier, error) {
-	for {
-		cutoff, err := store.ReadOwnerCutoff(frontierID)
-		if err == nil {
-			return cutoff, nil
-		}
-		select {
-		case <-ctx.Done():
-			return Frontier{}, fmt.Errorf("waiting for frontier %s: %w", frontierID, ctx.Err())
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
+	_ = ctx
+	return h.store.ReadOwnerCutoff(h.frontierID)
 }
 
 // TaskControl is the parent-owned control surface available while a task
@@ -180,7 +217,8 @@ func (c *TaskControl) CausalTail() string { return c.causalTail }
 
 // Publish appends a parent-owned fact into the current execution trace and
 // advances the causal tail to it. Python returns the Fact; Go returns the
-// retained Record.
+// retained Record. A nil data map publishes {}, never JSON null — Python's
+// dict(data or {}) normalizes the same way.
 func (c *TaskControl) Publish(kind string, data map[string]any) (Record, error) {
 	c.publishIndex++
 	receipt, err := c.store.Append(TrustedAppendContext, AppendBatch{
@@ -192,7 +230,7 @@ func (c *TaskControl) Publish(kind string, data map[string]any) (Record, error) 
 				Mode:      Capture,
 				SchemaRef: SchemaRuntimePublishedFact,
 				KindLabel: "fact_published",
-				Payload:   map[string]any{"kind": kind, "data": data},
+				Payload:   map[string]any{"kind": kind, "data": nonNilMap(data)},
 			}},
 		}},
 	})
@@ -214,6 +252,12 @@ func (c *TaskControl) Publish(kind string, data map[string]any) (Record, error) 
 // Spawn runs a child task synchronously and returns its handle, recording a
 // spawned relation on this execution's owner path. The child's run id is
 // "<parent run id>:child:<n>".
+//
+// The relation is recorded before the child runs — the cross-language
+// contract, since the child's create batch is caused-by the relation fact.
+// A child that cannot run records its own failure and still publishes a
+// terminal frontier, so the relation's child_frontier_id resolves unless
+// the store itself failed mid-spawn.
 func (c *TaskControl) Spawn(taskRef string, inputs map[string]any, reg *Registry) (*ChildHandle, error) {
 	c.childIndex++
 	childRunID := fmt.Sprintf("%s:child:%d", c.runID, c.childIndex)
@@ -258,8 +302,9 @@ func (c *TaskControl) Spawn(taskRef string, inputs map[string]any, reg *Registry
 // execution. It also advances this control's causal tail to the child's
 // terminal frontier record, matching the reference.
 func (c *TaskControl) AwaitTerminal(ctx context.Context, handle *ChildHandle) (*Execution, error) {
+	_ = ctx // kept for the plan's API; children are terminal already
 	c.frontiersByExecution[handle.executionID] = handle.frontierID
-	cutoff, err := handle.Cutoff(ctx)
+	cutoff, err := handle.Cutoff(context.Background())
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +312,7 @@ func (c *TaskControl) AwaitTerminal(ctx context.Context, handle *ChildHandle) (*
 	if c.causalTail == "" {
 		c.causalTail = cutoff.ThroughFactID
 	}
-	return handle.Wait(ctx)
+	return handle.Wait(context.Background())
 }
 
 // ReadExecution reads a known child execution from its retained frontier.
@@ -288,8 +333,20 @@ func (c *TaskControl) ReadExecution(executionID string) (*Execution, error) {
 }
 
 // Adopt records a parent-owned adopted relation to an existing execution.
-// An empty relationID derives one from the adopt intent.
+// The frontier must exist and target the named execution — a dangling
+// relation would make the parent's effective history unresolvable, so both
+// are checked before anything is appended. An empty relationID derives one
+// from the adopt intent.
 func (c *TaskControl) Adopt(executionID, frontierID, relationID string) (*ChildHandle, error) {
+	cutoff, err := c.store.ReadOwnerCutoff(frontierID)
+	if err != nil {
+		return nil, fmt.Errorf("adopt: frontier %s: %w", frontierID, err)
+	}
+	if cutoff.TargetTraceOwnerID != executionID {
+		return nil, fmt.Errorf("adopt: frontier %s targets %s, not %s",
+			frontierID, cutoff.TargetTraceOwnerID, executionID)
+	}
+
 	c.relationIndex++
 	relationIntent := fmt.Sprintf("%s:relation:adopted:%d", c.runID, c.relationIndex)
 	if relationID == "" {
@@ -320,13 +377,16 @@ func (c *TaskControl) Adopt(executionID, frontierID, relationID string) (*ChildH
 
 // Abandon records that a related child is no longer effective for this
 // parent, keyed by the child handle's relation id so the latest-wins fold
-// drops it from effective history.
+// drops it from effective history. The child's terminal cutoff is read once,
+// without polling: Python's abandon reads handle.cutoff as a property, which
+// raises on a missing frontier — a child without a terminal cutoff cannot
+// be abandoned, it can only be left alone.
 func (c *TaskControl) Abandon(handle *ChildHandle) (ExecutionRelation, error) {
-	c.relationIndex++
-	cutoff, err := handle.Cutoff(context.Background())
+	cutoff, err := c.store.ReadOwnerCutoff(handle.frontierID)
 	if err != nil {
-		return ExecutionRelation{}, err
+		return ExecutionRelation{}, fmt.Errorf("abandon: child has no terminal cutoff: %w", err)
 	}
+	c.relationIndex++
 	// Python dedupes (causal_tail, created_by or through) preserving order;
 	// the pair is at most two entries.
 	causedBy := []string{c.causalTail}
@@ -382,7 +442,7 @@ func (c *TaskControl) advanceToTerminalFact(frontierID string) {
 
 // StartTaskSync runs a task synchronously — the faithful port of Python's
 // @task start. An empty runID generates one ("run:<32 hex>", the shape of
-// Python's uuid4).hex). The returned Run is terminal by the time it exists.
+// Python's uuid4().hex). The returned Run is terminal by the time it exists.
 func StartTaskSync(store *SQLiteTraceStore, reg *Registry, taskRef, runID string, inputs map[string]any) (*Run, error) {
 	if runID == "" {
 		var err error
@@ -395,9 +455,11 @@ func StartTaskSync(store *SQLiteTraceStore, reg *Registry, taskRef, runID string
 }
 
 // StartTask runs a task in a goroutine and returns immediately with a live
-// Run; Wait blocks until the body has recorded its terminal frontier. This
-// is the Go-idiom addition documented in the file header.
+// Run; Wait blocks until the body has recorded its terminal frontier, and a
+// failed body surfaces through Wait as an error rather than a hang. This is
+// the Go-idiom addition documented in the file header.
 func StartTask(ctx context.Context, store *SQLiteTraceStore, reg *Registry, taskRef, runID string, inputs map[string]any) (*Run, error) {
+	_ = ctx
 	if runID == "" {
 		var err error
 		runID, err = generateRunID()
@@ -405,11 +467,15 @@ func StartTask(ctx context.Context, store *SQLiteTraceStore, reg *Registry, task
 			return nil, err
 		}
 	}
-	// The run's identity is fully derived from the run id, so the handle can
-	// exist before the body finishes.
-	run := &Run{store: store, executionID: ExecutionIDFor(runID+":create", "execution"), frontierID: "frontier:" + runID + ":terminal"}
+	done := make(chan error, 1)
+	run := &Run{
+		store:       store,
+		executionID: ExecutionIDFor(runID+":create", "execution"),
+		frontierID:  "frontier:" + runID + ":terminal",
+		done:        done,
+	}
 	go func() {
-		_, _ = runTaskSync(store, reg, taskRef, runID, inputs, "", nil, "", nil)
+		done <- runTaskSyncError(store, reg, taskRef, runID, inputs, "", nil, "", nil)
 	}()
 	return run, nil
 }
@@ -428,35 +494,55 @@ func generateRunID() (string, error) {
 func runTaskSync(store *SQLiteTraceStore, reg *Registry, taskRef, runID string, inputs map[string]any,
 	parentExecutionID string, createCausedBy []string,
 	frontierPublisherExecutionID string, frontierCausedBy []string) (*Run, error) {
+	if err := runTaskSyncError(store, reg, taskRef, runID, inputs,
+		parentExecutionID, createCausedBy, frontierPublisherExecutionID, frontierCausedBy); err != nil {
+		return nil, err
+	}
+	return &Run{
+		store:       store,
+		executionID: ExecutionIDFor(runID+":create", "execution"),
+		frontierID:  "frontier:" + runID + ":terminal",
+	}, nil
+}
+
+func runTaskSyncError(store *SQLiteTraceStore, reg *Registry, taskRef, runID string, inputs map[string]any,
+	parentExecutionID string, createCausedBy []string,
+	frontierPublisherExecutionID string, frontierCausedBy []string) error {
 	createIntent := runID + ":create"
 	completeIntent := runID + ":complete"
 	failIntent := runID + ":fail"
 	frontierID := "frontier:" + runID + ":terminal"
 	executionID := ExecutionIDFor(createIntent, "execution")
 
-	// Idempotency: a rerun of the same run id against a durable store returns
-	// the retained run without appending.
-	if _, err := store.ReadOwnerCutoff(frontierID); err == nil {
-		return &Run{store: store, executionID: executionID, frontierID: frontierID}, nil
+	// Idempotency: a rerun of the same run id against a store that already
+	// holds the terminal frontier returns the retained run without appending
+	// — and without re-invoking the body, whose external side effects are not
+	// idempotent. Only the not-published condition counts as "run it"; any
+	// other read error is real and returns.
+	cutoff, err := store.ReadOwnerCutoff(frontierID)
+	if err == nil {
+		_ = cutoff
+		return nil
+	}
+	if !errors.Is(err, ErrUnknownFrontier) {
+		return err
 	}
 
 	createReceipt, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
 		createIntent, executionID, taskRef, inputs, parentExecutionID, createCausedBy,
 	))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	control := newTaskControl(store, executionID, runID, createReceipt.FactIDs[len(createReceipt.FactIDs)-1])
 
-	fn, err := reg.lookup(taskRef)
-	if err != nil {
-		// Python raises before the try block, so a missing task never reaches
-		// the fail path; mirror that — the create is already retained.
-		return nil, err
-	}
+	// The body phase — lookup included — runs inside the failure boundary, as
+	// Python's `try: instance = task_cls(**inputs)` does: a task that cannot
+	// be constructed (or, here, resolved) records a failed execution rather
+	// than leaving a permanently running one.
+	outputs, runErr := runTaskBody(reg, taskRef, control)
 
 	var terminalReceipt AppendReceipt
-	outputs, runErr := runTaskBody(fn, control)
 	if runErr == nil {
 		terminalReceipt, err = store.Append(TrustedAppendContext, CompleteExecutionBatch(
 			completeIntent, executionID, outputs, []string{control.causalTail},
@@ -467,25 +553,29 @@ func runTaskSync(store *SQLiteTraceStore, reg *Registry, taskRef, runID string, 
 		))
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	if _, err := PublishExecutionFrontier(store, TrustedAppendContext,
+	_, err = PublishExecutionFrontier(store, TrustedAppendContext,
 		frontierID, executionID, terminalReceipt.FactIDs[len(terminalReceipt.FactIDs)-1],
-		frontierPublisherExecutionID, "", frontierCausedBy); err != nil {
-		return nil, err
-	}
-	return &Run{store: store, executionID: executionID, frontierID: frontierID}, nil
+		frontierPublisherExecutionID, "", frontierCausedBy)
+	return err
 }
 
-// runTaskBody runs one task body, converting a panic into the error the fail
-// path records — the Go equivalent of Python's `except Exception`.
-func runTaskBody(fn TaskFunc, control *TaskControl) (outputs map[string]any, runErr error) {
+// runTaskBody runs one task body, resolving the task first: a lookup failure
+// is a body failure and records through the fail path, and a panic is
+// recovered into the error the fail path records — the Go equivalent of
+// Python's `except Exception`.
+func runTaskBody(reg *Registry, taskRef string, control *TaskControl) (outputs map[string]any, runErr error) {
 	defer func() {
 		if r := recover(); r != nil {
 			outputs = nil
 			runErr = fmt.Errorf("panic: %v", r)
 		}
 	}()
+	fn, err := reg.lookup(taskRef)
+	if err != nil {
+		return nil, err
+	}
 	return fn(control)
 }

@@ -169,8 +169,8 @@ and file presence:
 
 **Phase 2a is implemented and under review** (branch `parity/p2a-execution-schema`, PR pending):
 execution/relations/history schemas and folds, the runtime handles, and the T2a.6 vectors all landed —
-measured by `testdata/execution_vectors_v0.json`, whose run and fail sequences were
-recorded from a real Python `@task` run and reproduce ID-for-ID through the Go facade.
+measured by `testdata/execution_vectors_v0.json`: the run sequence, the relation sequence and the
+effective-history tree were recorded through the real Python handles (the fail sequence through the `schemas` batch builders), and all of them reproduce ID-for-ID through the Go facade.
 Plan 02 §7 is closed. Phases 3 and 4 remain ⬜.
 
 **Phase 2b's harness exists, has been exercised, and its blocker is cleared**

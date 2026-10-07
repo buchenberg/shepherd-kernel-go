@@ -98,7 +98,7 @@ func ExecutionCreatedDraft(executionID, taskRef string, inputs map[string]any, p
 		Payload: map[string]any{
 			"execution_id":        executionID,
 			"task_ref":            taskRef,
-			"inputs":              inputs,
+			"inputs":              nonNilMap(inputs),
 			"parent_execution_id": nullableString(parentExecutionID),
 		},
 	}
@@ -122,7 +122,7 @@ func ExecutionCompletedDraft(executionID string, outputs map[string]any) RecordD
 		KindLabel: "execution_completed",
 		Payload: map[string]any{
 			"execution_id": executionID,
-			"outputs":      outputs,
+			"outputs":      nonNilMap(outputs),
 		},
 	}
 }
@@ -285,7 +285,7 @@ func executionCutoffFrom(traceSlice Slice, targetTraceOwnerID string) Frontier {
 	}
 	ids := traceSlice.OwnerPaths[targetTraceOwnerID]
 	if len(ids) == 0 {
-		return Frontier{TargetTraceOwnerID: targetTraceOwnerID}
+		return Frontier{TargetTraceOwnerID: targetTraceOwnerID, ThroughOwnerOrdinal: -1}
 	}
 	through := ids[len(ids)-1]
 	ordinal := -1
@@ -326,4 +326,15 @@ func payloadMap(payload map[string]any, key string) map[string]any {
 		return m
 	}
 	return map[string]any{}
+}
+
+// nonNilMap normalizes a nil map to an empty one: the canonical writer
+// renders a nil map as JSON null and an empty map as {}, and the reference
+// always carries dicts — so a nil here would silently change the record
+// digest, and therefore the record id, for the same logical run.
+func nonNilMap(m map[string]any) map[string]any {
+	if m == nil {
+		return map[string]any{}
+	}
+	return m
 }

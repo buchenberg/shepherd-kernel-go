@@ -65,6 +65,7 @@ from shepherd2.schemas.execution import (  # noqa: E402
     fail_execution_batch,
     publish_execution_frontier,
 )
+from shepherd2.schemas.history import project_effective_history_from_store  # noqa: E402
 from shepherd2.schemas.relations import (  # noqa: E402
     create_execution_relation_batch,
     relation_id_for,
@@ -120,6 +121,7 @@ RUN_ID = "vector:run:one"
 FAIL_RUN_ID = "vector:run:fail"
 PARENT_RUN_ID = "vector:parent"
 CHILD_RUN_ID = "vector:parent:child:1"
+TREE_RUN_ID = "vector:tree"
 
 PUBLISH_SCHEMA = "shepherd2.runtime.published_fact.v1"
 
@@ -347,6 +349,52 @@ def build_relation_sequence(store) -> dict:
     }
 
 
+
+@task
+class TreeChildTask:
+    def execute(self):
+        return {"leaf": True}
+
+@task
+class TreeParentTask:
+    def execute(self, control):
+        control.publish("phase", {"at": "start"})
+        kept = control.spawn(TreeChildTask)
+        dropped = control.spawn(TreeChildTask)
+        control.abandon(dropped)
+        external = TreeChildTask.start(store=control.store, run_id=f"{TREE_RUN_ID}:external")
+        control.adopt(execution_id=external.execution_id, frontier_id=external.frontier_id)
+        control.publish("phase", {"at": "end"})
+        return {"leaves": 2}
+
+def build_history_sequence(store) -> dict:
+    """A run tree through the real Python handles -- spawn, spawn-then-abandon,
+    adopt of an externally created execution, two published facts -- with the
+    effective history the reference projects from the run frontier."""
+    run = TreeParentTask.start(store=store, run_id=TREE_RUN_ID)
+    history = project_effective_history_from_store(store, TRUSTED_READ_CONTEXT, run.cutoff)
+    return {
+        "run_id": TREE_RUN_ID,
+        "execution_id": run.execution_id,
+        "frontier_id": run.frontier_id,
+        "task_refs": {"parent": "__main__.TreeParentTask", "child": "__main__.TreeChildTask"},
+        "parent_owner_path": owner_path_facts(store, run.execution_id),
+        "root_status": history.root.status,
+        "root_task_ref": history.root.task_ref,
+        "children": [
+            {
+                "execution_id": child.execution.execution_id,
+                "task_ref": child.execution.task_ref,
+                "status": child.execution.status,
+                "kind": child.relation.relation_kind,
+                "relation_id": child.relation.relation_id,
+                "frontier_id": child.relation.child_frontier_id,
+            }
+            for child in history.children
+        ],
+        "published": [fact.kind for fact in history.published_facts],
+    }
+
 def main():
     if len(sys.argv) != 2:
         print(__doc__)
@@ -382,6 +430,7 @@ def main():
         "run_sequence": build_run_sequence(SQLiteTraceStore()),
         "fail_sequence": build_fail_sequence(SQLiteTraceStore()),
         "relation_sequence": build_relation_sequence(SQLiteTraceStore()),
+        "history_sequence": build_history_sequence(SQLiteTraceStore()),
     }
 
     dest = sys.argv[1]

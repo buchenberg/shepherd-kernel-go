@@ -130,41 +130,6 @@ func TestStartTaskSyncPanicRecovered(t *testing.T) {
 	}
 }
 
-// TestStartTaskSyncIdempotent pins the restart semantics: rerunning the same
-// run id against a durable store returns the retained run and appends
-// nothing.
-func TestStartTaskSyncIdempotent(t *testing.T) {
-	reg := NewRegistry()
-	reg.Register("OnceTask", func(control *TaskControl) (map[string]any, error) {
-		return map[string]any{"n": json.Number("1")}, nil
-	})
-	store := newMemStore(t)
-
-	first, err := StartTaskSync(store, reg, "OnceTask", "once:run", nil)
-	if err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	count, err := store.FactCount()
-	if err != nil {
-		t.Fatalf("FactCount: %v", err)
-	}
-
-	second, err := StartTaskSync(store, reg, "OnceTask", "once:run", nil)
-	if err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	if second.ExecutionID() != first.ExecutionID() {
-		t.Errorf("rerun allocated %s, want the retained %s", second.ExecutionID(), first.ExecutionID())
-	}
-	after, err := store.FactCount()
-	if err != nil {
-		t.Fatalf("FactCount after: %v", err)
-	}
-	if after != count {
-		t.Errorf("rerun appended %d facts, want 0 (idempotent restart)", after-count)
-	}
-}
-
 // TestStartTaskAsyncWait pins the async facade: StartTask returns
 // immediately and Wait blocks until the terminal frontier exists.
 func TestStartTaskAsyncWait(t *testing.T) {

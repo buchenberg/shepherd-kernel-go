@@ -99,6 +99,113 @@
     "task_ref": "VectorTask"
   },
   "generator": "testdata/generate_execution_vectors.py",
+  "history_sequence": {
+    "children": [
+      {
+        "execution_id": "exec:86f48f012110cb6be3316d496eec91fc",
+        "frontier_id": "frontier:vector:tree:child:1:terminal",
+        "kind": "spawned",
+        "relation_id": "rel:723ae51a96706297362d93e09a0f3ece",
+        "status": "succeeded",
+        "task_ref": "__main__.TreeChildTask"
+      },
+      {
+        "execution_id": "exec:24d4db0cdc25580d1f294c4d4926a4b6",
+        "frontier_id": "frontier:vector:tree:external:terminal",
+        "kind": "adopted",
+        "relation_id": "rel:18971f642a5b23da1656821fb0a13613",
+        "status": "succeeded",
+        "task_ref": "__main__.TreeChildTask"
+      }
+    ],
+    "execution_id": "exec:8b370a9788a5109eb5e57621bd1c00f4",
+    "frontier_id": "frontier:vector:tree:terminal",
+    "parent_owner_path": [
+      {
+        "fact_id": "sha256:540dc83ba7d86752f7d768dfa7355d8634ede330625c2cb379efab1d7e0180b0",
+        "kind_label": "execution_created",
+        "mode": "declaration",
+        "schema_ref": "shepherd2.execution.created.v1"
+      },
+      {
+        "fact_id": "sha256:d47798ca8e30e0c57f7d4226c050570301606a05d3c713b60e5726e3926ad33a",
+        "kind_label": "execution_started",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution.started.v1"
+      },
+      {
+        "fact_id": "sha256:08eafae804230150526c34d3c36b388b1bad44d141028ec58a8fe9084abcd7ef",
+        "kind_label": "fact_published",
+        "mode": "capture",
+        "schema_ref": "shepherd2.runtime.published_fact.v1"
+      },
+      {
+        "fact_id": "sha256:defd709278da96fdab28dec8ae718286fb85e102f20512914d8bc38f3529f4a7",
+        "kind_label": "relation_created",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution_relation.created.v1"
+      },
+      {
+        "fact_id": "sha256:d4953a021410bcaed67facbe405f6d9dd4e71f592899ea21e36f641031b175d9",
+        "kind_label": "frontier_published",
+        "mode": "capture",
+        "schema_ref": "shepherd2.frontier.owner_cutoff.v1"
+      },
+      {
+        "fact_id": "sha256:9e07c1cb438093a3f6864dec0ef2277df4adea20e3ee1321a19ee1a88b46af99",
+        "kind_label": "relation_created",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution_relation.created.v1"
+      },
+      {
+        "fact_id": "sha256:8cf2b3738ee349417596bf4f3e930696540be893dcddd1fd25dd09c7d1c5f22d",
+        "kind_label": "frontier_published",
+        "mode": "capture",
+        "schema_ref": "shepherd2.frontier.owner_cutoff.v1"
+      },
+      {
+        "fact_id": "sha256:c65ae736baf49a2bcd73f2e85d220a1ad3414ba4ef3f9e35fc6bb006ff8d8331",
+        "kind_label": "relation_created",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution_relation.created.v1"
+      },
+      {
+        "fact_id": "sha256:3fa1e1ff5c45c7eadbff6d95b6e407b7de1f56b4322c82f7da4c135ae136111e",
+        "kind_label": "relation_created",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution_relation.created.v1"
+      },
+      {
+        "fact_id": "sha256:cf2311b3fcb387308067f90f87972d2fa22e20c9e6fefbc297d10aef83c7ee72",
+        "kind_label": "fact_published",
+        "mode": "capture",
+        "schema_ref": "shepherd2.runtime.published_fact.v1"
+      },
+      {
+        "fact_id": "sha256:f2a08238729a78d83d4e47533994d70bdc396c38974816eb2c9383c516f36f9c",
+        "kind_label": "execution_completed",
+        "mode": "capture",
+        "schema_ref": "shepherd2.execution.completed.v1"
+      },
+      {
+        "fact_id": "sha256:a8aac0ee155ddbd6dc1050f05c0ec83987ee6c2afae4783db9e165331a8460de",
+        "kind_label": "frontier_published",
+        "mode": "capture",
+        "schema_ref": "shepherd2.frontier.owner_cutoff.v1"
+      }
+    ],
+    "published": [
+      "phase",
+      "phase"
+    ],
+    "root_status": "succeeded",
+    "root_task_ref": "__main__.TreeParentTask",
+    "run_id": "vector:tree",
+    "task_refs": {
+      "child": "__main__.TreeChildTask",
+      "parent": "__main__.TreeParentTask"
+    }
+  },
   "published_fact": {
     "kind_label": "fact_published",
     "mode": "capture",
