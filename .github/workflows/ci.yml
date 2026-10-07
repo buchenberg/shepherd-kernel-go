@@ -74,3 +74,35 @@ jobs:
 
       - name: go test
         run: go test -count=1 ./...
+
+  golden-drift:
+    name: golden drift (vs pinned Python reference)
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      # The pinned-hash test in golden_provenance_test.go catches edits to OUR
+      # copy; this job catches the OTHER side moving -- the Python reference
+      # regenerating the shared golden without this repo tracking it. The pin is
+      # the same commit the vendored vector files record in their provenance
+      # (shepherd2@d34d5ca3); update it together with a deliberate vector
+      # regeneration.
+      - name: clone the pinned Python reference
+        run: |
+          git clone --quiet https://github.com/shepherd-agents/shepherd /tmp/shepherd
+          git -C /tmp/shepherd checkout --quiet d34d5ca334871dfcb5a3dc76dd78045829fa4e56
+
+      # Hashed in LF form so the result does not depend on either checkout's
+      # line-ending configuration -- the same normalization the pinned-hash
+      # test applies.
+      - name: compare the shared golden file
+        run: |
+          ours=$(tr -d '\r' < testdata/kernel_abi_v0.json | sha256sum | cut -d' ' -f1)
+          theirs=$(tr -d '\r' < /tmp/shepherd/shepherd2/tests/golden/kernel_abi_v0.json | sha256sum | cut -d' ' -f1)
+          echo "ours:   $ours"
+          echo "theirs: $theirs"
+          if [ "$ours" != "$theirs" ]; then
+            echo "::error::testdata/kernel_abi_v0.json differs from the reference copy at shepherd2@d34d5ca3. If the reference moved on purpose, reconcile the golden in the same commit and update the pinned hash in golden_provenance_test.go."
+            exit 1
+          fi
