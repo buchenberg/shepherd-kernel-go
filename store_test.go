@@ -220,6 +220,54 @@ func TestSliceOutputOrderIsDeterministic(t *testing.T) {
 	}
 }
 
+// TestReservedOperationKindsAreUnreachable pins the current status of
+// OpMaterialize and OpObserve, which plan 03 reserves for substrate
+// materialization.
+//
+// Plan 01 §2 expected these to be "rejected or ignored consistently rather than
+// silently trusted". Verified instead: they cannot be supplied at all through the
+// exported API — the entry points take AppendContext or ReadContext, whose
+// ToOperationContext helpers set the operation themselves — and
+// OperationContext.Operation is never read anywhere in the package (no
+// occurrence of `.Operation` selects a code path).
+//
+// So there is nothing to reject today, and the hazard the plan described does not
+// exist: a caller cannot make an append present itself as a materialization.
+// What this test does is make the two supporting facts deliberate, and leave a
+// tripwire for the moment plan 03 makes Operation load-bearing.
+func TestReservedOperationKindsAreUnreachable(t *testing.T) {
+	// A reserved kind must not collide with an enforced one, or declaring it
+	// would silently change the meaning of an existing operation.
+	enforced := []OperationKind{OpAppend, OpRead, OpPublishCut}
+	for _, reserved := range []OperationKind{OpMaterialize, OpObserve} {
+		for _, e := range enforced {
+			if reserved == e {
+				t.Fatalf("reserved operation %q is the same as enforced %q", reserved, e)
+			}
+		}
+	}
+
+	// The exported entry points derive their own operation, which is what makes
+	// the reserved kinds unreachable rather than merely unused.
+	if got := trustedAppend.ToOperationContext(OpAppend).Operation; got != OpAppend {
+		t.Errorf("AppendContext.ToOperationContext(OpAppend).Operation = %q, want %q", got, OpAppend)
+	}
+	if got := reader.ToOperationContext().Operation; got != OpRead {
+		t.Errorf("ReadContext.ToOperationContext().Operation = %q, want %q", got, OpRead)
+	}
+
+	// The documented gap, asserted so it stays deliberate. The authorization
+	// helpers do not consult Operation, so routing a reserved kind through one of
+	// them today would be accepted. This assertion is expected to be *inverted*
+	// into a rejection check when plan 03 wires materialization; if it starts
+	// failing before then, someone has added the check and this test should be
+	// updated to pin the rejection instead.
+	if err := ensureAppendAuthorized(trustedAppend.ToOperationContext(OpMaterialize)); err != nil {
+		t.Fatalf("ensureAppendAuthorized now rejects a reserved operation (%v): good — "+
+			"invert this assertion to pin the rejection rather than the gap", err)
+	}
+}
+
 func TestAppendIntentIdempotent(t *testing.T) {
 	store := newMemStore(t)
 	d := draft("execution_started", Capture, map[string]any{"execution_id": "exec:parent"})

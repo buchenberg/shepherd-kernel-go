@@ -42,9 +42,20 @@ const (
 type OperationKind string
 
 const (
-	OpAppend      OperationKind = "append"
-	OpRead        OperationKind = "read"
-	OpPublishCut  OperationKind = "publish_cut"
+	OpAppend     OperationKind = "append"
+	OpRead       OperationKind = "read"
+	OpPublishCut OperationKind = "publish_cut"
+
+	// OpMaterialize and OpObserve are reserved for plan 03 (substrate
+	// materialization) and are not reachable today: no exported entry point
+	// accepts an OperationContext, and the exported AppendContext/ReadContext
+	// helpers set the operation themselves. They are declared so the vocabulary
+	// is fixed before the callers exist.
+	//
+	// Note that OperationContext.Operation is carried but not yet consulted by any
+	// authorization check. Do not rely on it to gate anything until plan 03 wires
+	// it; see TestReservedOperationKindsAreUnreachable, which asserts both facts
+	// so the gap is deliberate rather than assumed.
 	OpMaterialize OperationKind = "materialize"
 	OpObserve     OperationKind = "observe"
 )
@@ -160,6 +171,12 @@ type AppendReceipt struct {
 }
 
 // OperationContext is the trace-facing operation context for kernel operations.
+//
+// Operation records which operation the context was built for, but no
+// authorization check consults it yet: ensureAppendAuthorized and
+// ensureReadAuthorized look only at the trust mode, authority refs and
+// visibility profile. Treat it as descriptive, not enforcing, until plan 03 adds
+// materialization and the checks that go with it.
 type OperationContext struct {
 	ActorRef               string
 	Operation              OperationKind
