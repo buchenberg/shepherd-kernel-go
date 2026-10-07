@@ -1339,20 +1339,23 @@ func (s *SQLiteTraceStore) canonicalFactOrder(factIDs map[string]bool) []pathEnt
 	}
 	defer rows.Close()
 
-	entriesByRecord := make(map[string]pathEntry)
+	// The entries are collected in the query's ORDER BY order, not through a
+	// map: ranging a map discards the sort and randomizes the slice on every
+	// call, which is what happened before this was pinned — a closure read
+	// returned its facts in a different order on each process run, while a
+	// single run always looked correct. A record reachable on several paths
+	// keeps its first row, which the SQL order makes deterministic too.
+	seen := make(map[string]bool)
+	result := make([]pathEntry, 0, len(ids))
 	for rows.Next() {
 		var pe pathEntry
 		if err := rows.Scan(&pe.recordID, &pe.pathRef, &pe.pathOrdinal); err != nil {
 			continue
 		}
-		if _, exists := entriesByRecord[pe.recordID]; !exists {
-			entriesByRecord[pe.recordID] = pe
+		if !seen[pe.recordID] {
+			seen[pe.recordID] = true
+			result = append(result, pe)
 		}
-	}
-
-	result := make([]pathEntry, 0, len(entriesByRecord))
-	for _, pe := range entriesByRecord {
-		result = append(result, pe)
 	}
 	return result
 }
@@ -1676,25 +1679,34 @@ func resolvedCauses(group AppendGroup, draft RecordDraft, localFactIDs map[strin
 		local = append(local, factID)
 	}
 
-	// Deduplicate
+	// Duplicates across the merged parent list are rejected, not deduplicated:
+	// the same parent cited at both the group and the draft level is a caller
+	// error, and deduping it would change the parent tuple that the record
+	// digest — and therefore the record id — is taken over. Python rejects it
+	// with ValueError("duplicate causal parent"); so does this.
 	seen := make(map[string]bool)
 	var result []string
+	addParent := func(id string) error {
+		if seen[id] {
+			return fmt.Errorf("duplicate causal parent: %s", id)
+		}
+		seen[id] = true
+		result = append(result, id)
+		return nil
+	}
 	for _, id := range group.CausalParents {
-		if !seen[id] {
-			seen[id] = true
-			result = append(result, id)
+		if err := addParent(id); err != nil {
+			return nil, err
 		}
 	}
 	for _, id := range draft.CausedByFactIDs {
-		if !seen[id] {
-			seen[id] = true
-			result = append(result, id)
+		if err := addParent(id); err != nil {
+			return nil, err
 		}
 	}
 	for _, id := range local {
-		if !seen[id] {
-			seen[id] = true
-			result = append(result, id)
+		if err := addParent(id); err != nil {
+			return nil, err
 		}
 	}
 	return result, nil
@@ -1802,6 +1814,15 @@ func ordinaryWitnessPlan(ctx RetainedContext, opCtx OperationContext) (witnessPl
 		"provenance_policy_refs":    []string{},
 		"substrate_ref":             ctx.SubstrateRef,
 		"containment":               string(ctx.Containment),
+	}
+	// The witness body is validated before it is digested, so a group context
+	// with an empty substrate_ref or an unknown containment fails the append —
+	// and the preview, which builds the same plan. Python validates in
+	// _ordinary_witness_plan; without this the store would retain a witness
+	// whose body fails validate_witness_body, and the record citing it would
+	// digest over an input the kernel's own schema rejects.
+	if err := ValidateWitnessBody(WitnessSchemaRef, body); err != nil {
+		return witnessPlan{}, err
 	}
 	rootID := RootWitnessRecordIDMust()
 	recordID, err := RecordDigest(WitnessSchemaRef, Capture, body, nil, rootID)
