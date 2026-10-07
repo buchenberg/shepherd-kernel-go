@@ -30,9 +30,9 @@ type vectorFile struct {
 var vectorFiles = []vectorFile{
 	{
 		// The shared ABI golden, byte-identical to shepherd2's copy. Verified
-		// identical (6559 bytes, same SHA-256) on 2026-10-07.
+		// identical (6559 bytes, same SHA-256 in LF form) on 2026-10-07.
 		path:       "testdata/kernel_abi_v0.json",
-		wantSHA256: "88a5222d272ecfc422f9f10dc14271d74c34411d76a55695bae2f20520f00639",
+		wantSHA256: "eed2b48ecd72326490e49c7693ab1d1e1d08c897ff590fc341811979b7d2df88",
 		reference:  "../shepherd/shepherd2/tests/golden/kernel_abi_v0.json",
 	},
 	{
@@ -44,6 +44,18 @@ var vectorFiles = []vectorFile{
 		wantSHA256:  "9a8df49c36abcd7bdca1e883f7273c1070efba671d8bcf225d75557acbb91587",
 		generatedBy: "shepherd2@d34d5ca334871dfcb5a3dc76dd78045829fa4e56 (CPython 3.13.13)",
 	},
+}
+
+// normalizeEOL returns data with CRLF replaced by LF.
+//
+// The canonical content of a vector file is its LF form: that is what git stores,
+// what the Python reference holds, and what CI checks out. A Windows working copy
+// with core.autocrlf=true rewrites line endings on disk, so hashing raw bytes
+// would make these assertions depend on the developer's git configuration — and
+// they did. The first version of this test pinned a CRLF hash and failed on every
+// CI runner while passing locally, which is the worst way for a test to be wrong.
+func normalizeEOL(data []byte) []byte {
+	return bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
 }
 
 // TestVectorFilesMatchTheirPinnedHashes catches drift in the oracles themselves.
@@ -58,7 +70,7 @@ func TestVectorFilesMatchTheirPinnedHashes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read %s: %v", vf.path, err)
 			}
-			sum := sha256.Sum256(data)
+			sum := sha256.Sum256(normalizeEOL(data))
 			got := hex.EncodeToString(sum[:])
 			if got != vf.wantSHA256 {
 				t.Errorf("content hash changed\n got: %s\nwant: %s\n"+
@@ -95,16 +107,19 @@ func TestVectorFilesMatchThePythonReference(t *testing.T) {
 					"including in CI): %v", vf.reference, err)
 			}
 
-			if !bytes.Equal(ours, theirs) {
-				ourSum := sha256.Sum256(ours)
-				theirSum := sha256.Sum256(theirs)
+			// Compared in LF form so the result does not depend on either
+			// checkout's line-ending configuration.
+			oursLF, theirsLF := normalizeEOL(ours), normalizeEOL(theirs)
+			if !bytes.Equal(oursLF, theirsLF) {
+				ourSum := sha256.Sum256(oursLF)
+				theirSum := sha256.Sum256(theirsLF)
 				t.Errorf("%s diverged from %s\n ours: %s (%d bytes)\n"+
 					"theirs: %s (%d bytes)\n"+
 					"The two copies are meant to be byte-identical; regenerate one from the "+
 					"other rather than editing either by hand.",
 					vf.path, vf.reference,
-					hex.EncodeToString(ourSum[:]), len(ours),
-					hex.EncodeToString(theirSum[:]), len(theirs))
+					hex.EncodeToString(ourSum[:]), len(oursLF),
+					hex.EncodeToString(theirSum[:]), len(theirsLF))
 			}
 		})
 	}
