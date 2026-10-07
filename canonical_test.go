@@ -1,19 +1,30 @@
 package shepherd
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"testing"
 )
 
+// loadGolden reads the shared golden vectors.
+//
+// It decodes with UseNumber so JSON integers stay integers. These vectors were
+// produced by Python's json.dumps, where `1` is an int and `1.0` is a float that
+// canonicalise differently ("1" versus "1.0"). Without UseNumber every number
+// arrives as float64 and the comparison would be against bytes Python never
+// produced — which is precisely the divergence the old integral-float rewrite
+// was hiding.
 func loadGolden(t *testing.T) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile("testdata/kernel_abi_v0.json")
 	if err != nil {
 		t.Fatalf("failed to load golden vectors: %v", err)
 	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
 	var golden map[string]any
-	if err := json.Unmarshal(data, &golden); err != nil {
+	if err := dec.Decode(&golden); err != nil {
 		t.Fatalf("failed to parse golden vectors: %v", err)
 	}
 	return golden

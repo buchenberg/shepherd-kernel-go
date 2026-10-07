@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -24,30 +26,158 @@ func sha256Sum(b []byte) []byte {
 	return h[:]
 }
 
-// CanonicalJSONBytes returns byte-stable canonical JSON for digest input.
-// Keys are sorted at every nesting level. Separators are compact (no spaces).
+// CanonicalJSONBytes returns byte-stable canonical JSON for digest input: keys
+// sorted at every level, compact separators, raw UTF-8, and CPython's number and
+// string formatting.
 //
-// Note: This function uses encoding/json.Marshal which sorts map keys by
-// default but may not match Python's json.dumps exactly for edge cases
-// (float formatting, unicode escaping). For cross-implementation compatible
-// digests, use canonicalJSONOrdered instead.
+// It is byte-identical to Python's
+//
+//	json.dumps(value, sort_keys=True, separators=(",", ":"),
+//	           ensure_ascii=False, allow_nan=False).encode("utf-8")
+//
+// which is what `canonical_json_bytes` does in shepherd2. That identity is the
+// point: digests over these bytes are compared across implementations.
+//
+// Two things Go's encoding/json gets wrong here, both of which produce a
+// different digest silently rather than failing:
+//
+//   - it escapes <, > and & as \u003c, \u003e, \u0026, which CPython emits raw,
+//     so any payload with a shell `&&` or a `<placeholder>` diverges;
+//   - it has no float formatting that matches CPython's repr.
+//
+// Hence the hand-written writer below. Do not simplify it back to json.Marshal.
+//
+// One contract this imposes on callers: a payload decoded from JSON must be
+// decoded with json.Decoder.UseNumber() (or into json.Number fields). Go's
+// default interface{} decoding turns every number into float64, which erases
+// Python's int/float distinction — JSON `1` and `1.0` are the same float64 but
+// canonicalise to "1" and "1.0". The previous implementation papered over that
+// by rendering integral float64s without a decimal point, which happened to fix
+// integers and silently corrupted real float values.
 func CanonicalJSONBytes(v any) ([]byte, error) {
-	return json.Marshal(v)
-}
-
-// canonicalJSONOrdered produces canonical JSON with sorted keys at every level.
-// This is necessary because Go's json.Marshal does not guarantee map key order,
-// even though in practice it sorts them. We enforce it explicitly.
-func canonicalJSONOrdered(v any) ([]byte, error) {
 	var buf strings.Builder
-	err := writeCanonicalValue(&buf, v, "")
-	if err != nil {
+	if err := writeCanonicalValue(&buf, v); err != nil {
 		return nil, err
 	}
 	return []byte(buf.String()), nil
 }
 
-func writeCanonicalValue(buf *strings.Builder, v any, _ string) error {
+// formatCanonicalFloat renders f the way CPython's repr does, which is what
+// json.dumps emits for a float.
+//
+// CPython's rule is shortest-round-trip digits with exponent notation when
+// decpt <= -4 || decpt > 16 — that is, fixed notation for 1e-4 <= |f| < 1e16 and
+// scientific outside it. In scientific form the exponent carries an explicit
+// sign and at least two digits ("1e+16", "1e-05") and the mantissa never gets a
+// trailing ".0"; in fixed form an integral value does ("1.0", "100.0"), which is
+// what distinguishes a float from an int in canonical output.
+//
+// Every case below was confirmed against CPython 3.13 by generating the vectors
+// in testdata/canonical_edge_vectors_v0.json.
+func formatCanonicalFloat(f float64) (string, error) {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		// Mirrors allow_nan=False, which raises instead of emitting NaN/Infinity.
+		return "", fmt.Errorf("canonical JSON: %v has no JSON representation", f)
+	}
+	if f == 0 {
+		// Both zeroes are representable, and CPython preserves the sign.
+		if math.Signbit(f) {
+			return "-0.0", nil
+		}
+		return "0.0", nil
+	}
+
+	// The shortest scientific form gives the decimal exponent the rule turns on.
+	sci := strconv.FormatFloat(f, 'e', -1, 64)
+	mantissa, expPart, ok := strings.Cut(sci, "e")
+	if !ok {
+		return "", fmt.Errorf("canonical JSON: no exponent in %q", sci)
+	}
+	exp, err := strconv.Atoi(expPart)
+	if err != nil {
+		return "", fmt.Errorf("canonical JSON: bad exponent %q in %q", expPart, sci)
+	}
+
+	if exp >= 16 || exp <= -5 {
+		return mantissa + "e" + pythonExponent(exp), nil
+	}
+
+	fixed := strconv.FormatFloat(f, 'f', -1, 64)
+	if !strings.Contains(fixed, ".") {
+		fixed += ".0"
+	}
+	return fixed, nil
+}
+
+// pythonExponent formats a decimal exponent the way CPython does: explicit sign,
+// at least two digits.
+func pythonExponent(exp int) string {
+	sign := "+"
+	if exp < 0 {
+		sign = "-"
+		exp = -exp
+	}
+	digits := strconv.Itoa(exp)
+	if len(digits) < 2 {
+		digits = "0" + digits
+	}
+	return sign + digits
+}
+
+// isJSONIntegerToken reports whether a JSON number token denotes an integer,
+// meaning Python's json.loads would produce an int rather than a float.
+func isJSONIntegerToken(s string) bool {
+	return !strings.ContainsAny(s, ".eE")
+}
+
+// writeCanonicalString writes s as CPython's json.dumps(ensure_ascii=False)
+// would: UTF-8 passed through verbatim, with only the mandatory escapes.
+//
+// Iterating bytes rather than runes is deliberate. Every byte of a multi-byte
+// UTF-8 sequence is >= 0x80, so none can collide with an escape, and copying
+// them one at a time passes the sequence through unchanged — including the
+// U+2028 and U+2029 that Python leaves raw and that many encoders escape.
+func writeCanonicalString(buf *strings.Builder, s string) {
+	buf.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '"':
+			buf.WriteString(`\"`)
+		case '\\':
+			buf.WriteString(`\\`)
+		case '\b':
+			buf.WriteString(`\b`)
+		case '\f':
+			buf.WriteString(`\f`)
+		case '\n':
+			buf.WriteString(`\n`)
+		case '\r':
+			buf.WriteString(`\r`)
+		case '\t':
+			buf.WriteString(`\t`)
+		default:
+			if c < 0x20 {
+				// Lowercase hex, four digits, as CPython emits.
+				fmt.Fprintf(buf, `\u%04x`, c)
+				continue
+			}
+			buf.WriteByte(c)
+		}
+	}
+	buf.WriteByte('"')
+}
+
+// writeCanonicalValue writes v in canonical form.
+//
+// Map keys are sorted at every level. Only string keys are supported: Python
+// coerces int/float/bool/None keys, but a non-string key here means the caller
+// built a payload the kernel never produces, so it is an error rather than a
+// guess.
+//
+// Unsupported types are an error, deliberately. The previous implementation fell
+// back to json.Marshal here, which is exactly how the escaping divergence went
+// unnoticed — a silent fallback produces a plausible digest over different bytes.
+func writeCanonicalValue(buf *strings.Builder, v any) error {
 	switch val := v.(type) {
 	case nil:
 		buf.WriteString("null")
@@ -57,37 +187,111 @@ func writeCanonicalValue(buf *strings.Builder, v any, _ string) error {
 		} else {
 			buf.WriteString("false")
 		}
-	case float64:
-		// Match Python's json.dumps behavior for numbers
-		if val == float64(int64(val)) && val != 0 && val > -1e15 && val < 1e15 {
-			fmt.Fprintf(buf, "%d", int64(val))
-		} else {
-			b, err := json.Marshal(val)
-			if err != nil {
-				return err
-			}
-			buf.Write(b)
-		}
-	case json.Number:
-		buf.WriteString(val.String())
 	case string:
-		b, err := json.Marshal(val)
+		writeCanonicalString(buf, val)
+	case json.Number:
+		// A json.Number carries the original token text, which is the only way to
+		// recover Python's int/float distinction: encoding/json's default
+		// interface{} decoding collapses every number to float64, and a JSON `1`
+		// and `1.0` are different values to Python ("1" vs "1.0").
+		//
+		// Python's json.loads yields an int for a token with no fraction or
+		// exponent and a float otherwise, then json.dumps renders accordingly. So
+		// an integer token is emitted verbatim — which also preserves Python's
+		// arbitrary-precision ints, beyond float64's range — while anything with a
+		// '.' or exponent is parsed and formatted as a float, so `1e2` canonicalises
+		// to `100.0` exactly as Python does rather than staying `1e2`.
+		//
+		// Callers decoding JSON payloads for digesting MUST use
+		// json.Decoder.UseNumber() (or unmarshal into json.Number) to reach this
+		// case; see the CanonicalJSONBytes doc comment.
+		s := val.String()
+		if isJSONIntegerToken(s) {
+			buf.WriteString(s)
+			return nil
+		}
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return fmt.Errorf("canonical JSON: json.Number %q is not a number: %w", s, err)
+		}
+		out, err := formatCanonicalFloat(f)
 		if err != nil {
 			return err
 		}
-		buf.Write(b)
+		buf.WriteString(out)
+	case float64:
+		s, err := formatCanonicalFloat(val)
+		if err != nil {
+			return err
+		}
+		buf.WriteString(s)
+	case float32:
+		s, err := formatCanonicalFloat(float64(val))
+		if err != nil {
+			return err
+		}
+		buf.WriteString(s)
+	case int:
+		buf.WriteString(strconv.Itoa(val))
+	case int8:
+		buf.WriteString(strconv.FormatInt(int64(val), 10))
+	case int16:
+		buf.WriteString(strconv.FormatInt(int64(val), 10))
+	case int32:
+		buf.WriteString(strconv.FormatInt(int64(val), 10))
+	case int64:
+		buf.WriteString(strconv.FormatInt(val, 10))
+	case uint:
+		buf.WriteString(strconv.FormatUint(uint64(val), 10))
+	case uint8:
+		buf.WriteString(strconv.FormatUint(uint64(val), 10))
+	case uint16:
+		buf.WriteString(strconv.FormatUint(uint64(val), 10))
+	case uint32:
+		buf.WriteString(strconv.FormatUint(uint64(val), 10))
+	case uint64:
+		buf.WriteString(strconv.FormatUint(val, 10))
 	case []any:
 		buf.WriteByte('[')
 		for i, item := range val {
 			if i > 0 {
 				buf.WriteByte(',')
 			}
-			if err := writeCanonicalValue(buf, item, ""); err != nil {
+			if err := writeCanonicalValue(buf, item); err != nil {
 				return err
 			}
 		}
 		buf.WriteByte(']')
+	case []string:
+		buf.WriteByte('[')
+		for i, item := range val {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			writeCanonicalString(buf, item)
+		}
+		buf.WriteByte(']')
 	case map[string]any:
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		// Sorting UTF-8 bytes equals sorting code points, which is what Python's
+		// sort_keys does for str keys.
+		sort.Strings(keys)
+		buf.WriteByte('{')
+		for i, k := range keys {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			writeCanonicalString(buf, k)
+			buf.WriteByte(':')
+			if err := writeCanonicalValue(buf, val[k]); err != nil {
+				return err
+			}
+		}
+		buf.WriteByte('}')
+	case map[string]string:
 		keys := make([]string, 0, len(val))
 		for k := range val {
 			keys = append(keys, k)
@@ -98,30 +302,24 @@ func writeCanonicalValue(buf *strings.Builder, v any, _ string) error {
 			if i > 0 {
 				buf.WriteByte(',')
 			}
-			keyBytes, err := json.Marshal(k)
-			if err != nil {
-				return err
-			}
-			buf.Write(keyBytes)
+			writeCanonicalString(buf, k)
 			buf.WriteByte(':')
-			if err := writeCanonicalValue(buf, val[k], ""); err != nil {
-				return err
-			}
+			writeCanonicalString(buf, val[k])
 		}
 		buf.WriteByte('}')
 	default:
-		b, err := json.Marshal(val)
-		if err != nil {
-			return err
-		}
-		buf.Write(b)
+		return fmt.Errorf("canonical JSON: unsupported type %T", v)
 	}
 	return nil
 }
 
 // CanonicalDigest returns the kernel digest for a canonical input payload.
+//
+// It is byte-identical to Python's canonical_digest:
+// sha256(CANONICAL_PREFIX + canonical_json_bytes(value)), rendered as
+// "sha256:<hex>".
 func CanonicalDigest(v any) (string, error) {
-	b, err := canonicalJSONOrdered(v)
+	b, err := CanonicalJSONBytes(v)
 	if err != nil {
 		return "", err
 	}

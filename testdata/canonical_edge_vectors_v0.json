@@ -1,0 +1,392 @@
+{
+  "canonical_version": "shepherd.kernel.canonical.v2",
+  "edge_floats": [
+    {
+      "canonical_bytes": "{\"v\":0.0}",
+      "digest": "sha256:a2d4ad337b261d3b986d96d8da410640827f5b6c4b196e131946272405709b39",
+      "label": "zero",
+      "payload": {
+        "v": 0.0
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":-0.0}",
+      "digest": "sha256:3a38d2a108ca78de51508644b274b02817d6269f988d632c3ba5953f3a49eaaa",
+      "label": "negative_zero",
+      "payload": {
+        "v": -0.0
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":2.5}",
+      "digest": "sha256:736962590eee506f724511bc513eb0bd844b20e3d3ce833179110e3b02c514f8",
+      "label": "simple_fraction",
+      "payload": {
+        "v": 2.5
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":1.0}",
+      "digest": "sha256:0330401aea0490903e6cfaa297b51c53c23e841a9e1c3b7650f8c76584a85048",
+      "label": "one",
+      "payload": {
+        "v": 1.0
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":100.0}",
+      "digest": "sha256:4278adb37043755f92c0787189d21ea23f8eedcb3ebb97f683e85c487b6bd1cc",
+      "label": "hundred",
+      "payload": {
+        "v": 100.0
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":-1.0}",
+      "digest": "sha256:280faec1aef5230beb77e4b3527a72487445bd36ac402cccdeda08e42e906a80",
+      "label": "negative_one",
+      "payload": {
+        "v": -1.0
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":0.30000000000000004}",
+      "digest": "sha256:d5a3eb0d9e8160ba939d1945d8562ed49860c22b5e5bffd5b8f2010af8c20ef1",
+      "label": "binary_rounding",
+      "payload": {
+        "v": 0.30000000000000004
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":1000000000000000.0}",
+      "digest": "sha256:36f4065aa49ade13f52f7662c9f8b367d791564e40f6699247f08b04a72d1631",
+      "label": "just_below_exp_threshold",
+      "payload": {
+        "v": 1000000000000000.0
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":1e+16}",
+      "digest": "sha256:669e72cafaec6dbc273fd24b0981cf0235de819248e251913b4f5970a9387dcb",
+      "label": "exp_threshold",
+      "payload": {
+        "v": 1e+16
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":1e+17}",
+      "digest": "sha256:ed87b994ca36b17e9ad881db0518ec98a61a035fc1740bb4ee1eeab4efae7d56",
+      "label": "above_exp_threshold",
+      "payload": {
+        "v": 1e+17
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":0.0001}",
+      "digest": "sha256:d26a0f094178c71239133e036e749b98f723a6798c595184d0287c8b6ed3ca9d",
+      "label": "fixed_lower_bound",
+      "payload": {
+        "v": 0.0001
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":1e-05}",
+      "digest": "sha256:798b6676a36fdaf519f494ff662b1a653756401d48971af8f19e34cd0aec77bb",
+      "label": "exp_lower_bound",
+      "payload": {
+        "v": 1e-05
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":1e-07}",
+      "digest": "sha256:a5af761dd755eec01a34616da2e5b3c9499ff025f27072957817deca753126ac",
+      "label": "small_exp",
+      "payload": {
+        "v": 1e-07
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":9007199254740992.0}",
+      "digest": "sha256:e2d7c57a340ea5038053e3ec8cf082e5ad5d38549684f16cb6288a10871de6c4",
+      "label": "two_pow_53",
+      "payload": {
+        "v": 9007199254740992.0
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":1.5e+16}",
+      "digest": "sha256:45e2138a959dd626522f40774af5e0067ee4744e34828518dc20f005a42d63be",
+      "label": "exp_with_fraction",
+      "payload": {
+        "v": 1.5e+16
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":1e+300}",
+      "digest": "sha256:a1f72042da11f23293a70bc3e19eab7bb93d1148ee1e758d75de8d37c6c6cf56",
+      "label": "huge",
+      "payload": {
+        "v": 1e+300
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":5e-324}",
+      "digest": "sha256:2d4f3babd65c41e3569ef9ae786d8ab05650e93d87d9215accc1c56867c56ad9",
+      "label": "denormal_min",
+      "payload": {
+        "v": 5e-324
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":1234.5}",
+      "digest": "sha256:d01b7fce845a911f7634d2aa256d023616d0a9f8df62c3b664469164c9591551",
+      "label": "four_significant",
+      "payload": {
+        "v": 1234.5
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":1e+21}",
+      "digest": "sha256:9c2581c2441d15c11b6a4856e7c641c3b5f63103242782f03d53b1a0421bca1b",
+      "label": "twenty_one_exp",
+      "payload": {
+        "v": 1e+21
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":1e+22}",
+      "digest": "sha256:f754e1eaf71b17a371fcf0805b73b3bacdf082792c1927b880718498afd75d78",
+      "label": "twenty_two_exp",
+      "payload": {
+        "v": 1e+22
+      }
+    }
+  ],
+  "edge_strings": [
+    {
+      "canonical_bytes": "{\"v\":\"<script>a&&b</script>\"}",
+      "digest": "sha256:24579d8409a83a0bd014ee46234adfe96937b449f788dfd181f1b0beb4b508dd",
+      "label": "html_script",
+      "payload": {
+        "v": "<script>a&&b</script>"
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":\"a>b\"}",
+      "digest": "sha256:2a050e88d8e2ca07ee9261100ebc4cfe6c6a59e70b0a4a6b608e889daad7eb58",
+      "label": "gt_only",
+      "payload": {
+        "v": "a>b"
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":\"quote\\\"backslash\\\\slash/\"}",
+      "digest": "sha256:adc979308fb9e96a7851ac642a30b3f3c465a81fb9a6724bd12c209a8c533513",
+      "label": "quotes_backslash_slash",
+      "payload": {
+        "v": "quote\"backslash\\slash/"
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":\"tab\\tnewline\\ncr\\rbell\\u0007\"}",
+      "digest": "sha256:48840f745f21bbafbd6f4d4bf5abaee54bca0324248c00e71156b43ebcea845f",
+      "label": "control_short_forms",
+      "payload": {
+        "v": "tab\tnewline\ncr\rbell\u0007"
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":\"null\\u0000char\"}",
+      "digest": "sha256:2fa570e3860e7d4b6dab926ae85959dd7340c95415e608e444e408f118467567",
+      "label": "null_char",
+      "payload": {
+        "v": "null\u0000char"
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":\"unicodé ünïcödé 日本語\"}",
+      "digest": "sha256:1ee8e8f447391a5595d988d7f2442770339983988102220c84e41ebb422a9fc4",
+      "label": "non_ascii_bmp",
+      "payload": {
+        "v": "unicodé ünïcödé 日本語"
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":\"emoji 😀\"}",
+      "digest": "sha256:e1f838194f1fd59d2fa8efc6dd45a7af4e4fd2ed9fed96244138e1db443b1824",
+      "label": "non_bmp_emoji",
+      "payload": {
+        "v": "emoji 😀"
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":\"esc\\u001b[0m\"}",
+      "digest": "sha256:cd8d45ad8943f4edbb649100d281151f0ea21ada223a977656f0fc2c38a6c3e1",
+      "label": "ansi_escape",
+      "payload": {
+        "v": "esc\u001b[0m"
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":\"tilde~ and DEL\"}",
+      "digest": "sha256:e090aebf4582fda84fcfe6cec5469b289109d1339b57f74b38a78c5ec18e17ec",
+      "label": "del_and_tilde",
+      "payload": {
+        "v": "tilde~ and DEL"
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":\"sep   para  \"}",
+      "digest": "sha256:8557840fb0e7e01d6e5be59b1378d77f7851a2284c586b47385d073fb86dca87",
+      "label": "line_para_sep",
+      "payload": {
+        "v": "sep   para  "
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":\"\\b\\f\\n\\r\\t\"}",
+      "digest": "sha256:9251000351e21edfb1d64da43b537557de9d97ad42729642b0864fe4a488ddad",
+      "label": "all_short_escapes",
+      "payload": {
+        "v": "\b\f\n\r\t"
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":\"c1 \\u001f end\"}",
+      "digest": "sha256:43f44f9ad765561e2c05f51af7642df04327f209d978707beda304ac7809cd19",
+      "label": "high_control",
+      "payload": {
+        "v": "c1 \u001f end"
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":\"a&b=c\"}",
+      "digest": "sha256:0cfa1328e44ba2cf7130e5712cc3c8d92d3a2f198e939ee866f1eca73a04402d",
+      "label": "ampersand_only",
+      "payload": {
+        "v": "a&b=c"
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":\"<>&\"}",
+      "digest": "sha256:d2772fb197896ecab2302af016e17dcfa56803d253f13346cb8e1f2d185bb635",
+      "label": "lt_gt_amp",
+      "payload": {
+        "v": "<>&"
+      }
+    }
+  ],
+  "generator": "generate_canonical_edge_vectors.py",
+  "mixed": [
+    {
+      "canonical_bytes": "{\"v\":{\"a\":{\"c\":null},\"b\":[1,2.0,\"x<y\"]}}",
+      "digest": "sha256:0d70cfaf3422e28dab0fd8f13d6f96706dae3fc37186eb9b10a3a54653332ab2",
+      "label": "nested_mixed",
+      "payload": {
+        "v": {
+          "a": {
+            "c": null
+          },
+          "b": [
+            1,
+            2.0,
+            "x<y"
+          ]
+        }
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":{\"Z\":3,\"a\":2,\"é\":1}}",
+      "digest": "sha256:91715471af13a6a4c51b1f6c15efff181ddf25aa060936ee3781450e0ee77aec",
+      "label": "sort_order",
+      "payload": {
+        "v": {
+          "Z": 3,
+          "a": 2,
+          "é": 1
+        }
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":{\"f\":false,\"n\":null,\"t\":true}}",
+      "digest": "sha256:5adeedfbd362ac2540288ae8deb9da0c9379b3381e12ceb772e56d2154661b52",
+      "label": "bool_and_null",
+      "payload": {
+        "v": {
+          "f": false,
+          "n": null,
+          "t": true
+        }
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":{\"a\":{\"b\":{\"c\":{\"d\":[1.5,\"e&f\"]}}}}}",
+      "digest": "sha256:dcc7834f62ca98428fec67973c7d84ac5f7980ab262d5cb3e4da72b7d6ea0db1",
+      "label": "deep_nesting",
+      "payload": {
+        "v": {
+          "a": {
+            "b": {
+              "c": {
+                "d": [
+                  1.5,
+                  "e&f"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":{\"list\":[],\"map\":{}}}",
+      "digest": "sha256:046985a277b805548077eaad570b4e5143fa221bfc528a992689ebdda6459a39",
+      "label": "empty_containers",
+      "payload": {
+        "v": {
+          "list": [],
+          "map": {}
+        }
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":{\"f\":1.0,\"i\":1}}",
+      "digest": "sha256:7e0a404c8be49cf662ca9dd9b58ac32c461f6ec68cf1fca6dd3c89853318374d",
+      "label": "int_vs_float",
+      "payload": {
+        "v": {
+          "f": 1.0,
+          "i": 1
+        }
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":{\"k\\\"ey\\\\\":\"v\",\"k<ey\":\"w\"}}",
+      "digest": "sha256:47fb5d65c7e33ec8a8cffcd14452376b1b1ead571a19e68a0da39d2b72814464",
+      "label": "key_with_escaping",
+      "payload": {
+        "v": {
+          "k\"ey\\": "v",
+          "k<ey": "w"
+        }
+      }
+    },
+    {
+      "canonical_bytes": "{\"v\":{\"a\":0.0,\"b\":-0.0,\"c\":1e+16,\"d\":1e-05,\"e\":2.5}}",
+      "digest": "sha256:1d45a27e7375670e0a00a0538d61bbdda6e4162cd55ecf5d5d80f050219c8ead",
+      "label": "many_float_forms",
+      "payload": {
+        "v": {
+          "a": 0.0,
+          "b": -0.0,
+          "c": 1e+16,
+          "d": 1e-05,
+          "e": 2.5
+        }
+      }
+    }
+  ],
+  "python_version": "3.13.13",
+  "source_commit": "d34d5ca334871dfcb5a3dc76dd78045829fa4e56",
+  "source_repo": "../shepherd"
+}
