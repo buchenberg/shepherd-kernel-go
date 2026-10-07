@@ -50,6 +50,18 @@ pre-fix code was the only thing a `go get` could resolve. `v0.4.1` supersedes it
   sandbox now acquires a labelled lease in `Create`/`Apply` and releases it in
   `Destroy`. Verified by **12 consecutive green runs** and by a live assertion
   that the lease lists the sandbox's own snapshot keys as resources.
+- **Lease lifecycle hardened after review:**
+  - Acquisition and release are serialized. Without that, two concurrent
+    `Create`/`Apply` calls could both create a lease and overwrite one id, and
+    the loser would never be released — pinning the sandbox's snapshots against
+    the GC for good, which is the failure the lease exists to prevent.
+  - A failed lease delete keeps its id, so a later `Destroy` retries instead of
+    reporting success over an orphan that holds snapshots indefinitely.
+  - `SandboxSpec.Timeout` now bounds the daemon connection and the lease RPC, not
+    only the work that follows them.
+  - `Diff` stages once and derives both its file list and its unified diff from
+    that single pass. Two stagings could describe different workspace states if
+    the workspace changed between them.
 
 ### Verified
 The containerd backend's daemon path is exercised, not merely compiled. The live

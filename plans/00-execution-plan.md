@@ -63,12 +63,12 @@ also be a bug-fix vehicle.
 | T0.5b | Record the live-daemon result | ✅ | `README.md` states the daemon path is **verified**, naming the ten defects and the 12/12 soak; `CHANGELOG.md` v0.4.1 carries the same |
 | T0.6 | Bug batch (6 items) | ✅ | `4203993` touches `checkpoint.go`, `sandbox.go`, `sandbox_git.go`, `scope.go`, `store.go`, `supervisor.go`, `types.go` + both containerd files, with tests |
 | T0.7 | CI bootstrap | ✅ | `7281fe1` + `3cf961d` + `55b4daf`; `ci.yml` has the 3-OS matrix, `gofmt` fail-on-output, `go vet`, `go test -race`, `go build -trimpath`, and a linux containerd job |
-| T0.8 | **Cut `v0.4.1`** so a core release contains the Phase 0 bug batch, and repin the nested `go.mod` to it | 🔄 | Tagged locally at `3c5e96c`, **then moved to `8e9b867` to include the T0.9 fix** — see the note below. The `go.mod` repin is **pending push**: a tag that exists only locally cannot resolve through the module proxy, so repinning now would leave the nested module unbuildable |
+| T0.8 | **Cut `v0.4.1`** so a core release contains the Phase 0 bug batch, and repin the nested `go.mod` to it | ✅ | Merged as `bee4ca5` (PR #10) and **both tags re-pointed there before publishing** — the first cut at `3315b3a` predated the review fixes. Published: `v0.4.1` and `sandbox/containerd/v0.1.1`. Resolution verified from a clean module context, and the nested `go.mod` now requires `v0.4.1` with no `replace` |
 | T0.9 | **Hold a containerd lease for the sandbox's lifetime** so its snapshots cannot be garbage-collected | ✅ | `8e9b867`. Created in `Create`/`Apply` via `ensureLease`, injected into every snapshotter call by `namespaceSnapshotter` (atomic `leaseRef`, so the hot path takes no lock), released in `Destroy`, labelled `shepherd.lease=sandbox` so an orphan from a crashed process is findable. **Accept met: 12/12 consecutive green soak runs** (was 3/5 failing). Ten daemon-free tests in `lease_test.go` pin the bookkeeping; `TestLive_LeaseHoldsSnapshots` proves the lease lists the sandbox's own snapshot keys, and `TestLive_DestroyReleasesTheLease` proves it is dropped |
 
-**Phase 0 is complete except T0.8's `go.mod` repin, which is blocked on pushing
-the tag.** T0.5 passed, T0.9 proved out the fix, and the live suite is now
-deterministic at 12/12.
+**Phase 0 is complete.** T0.5 passed, T0.9 proved out the fix, T0.8 published the
+release, and the live suite is deterministic at 12/12. Nothing in this phase is
+waiting on a decision, a fix, or an unreleased tag.
 
 **The stop-gate did its job, and how it did so is worth recording.** T0.5 was
 written as a de-risking step so a fatal containerd problem would surface before
@@ -88,11 +88,21 @@ and moving the tag was preferable to publishing a release whose own notes descri
 a defect that is fixed in the same unreleased state. If the tag had been pushed,
 the correct move would instead have been a `v0.4.2`.
 
-**Where this stands (2026-10-07):** the work is on branch `parity/p0-t9-lease` and
-up for review as **PR #10**, with `main` left at `55b4daf`. Both tags remain
-**local only**, deliberately: pushing a release tag that points at an unmerged
-branch would publish a version that is not on `main`, and would hand `go get` a
-release cut from a feature branch.
+**Where this stands (2026-10-07, evening): done.** PR #10 merged as `bee4ca5`, and
+both tags were re-pointed there before publication — the first cut pointed at
+`3315b3a`, which predated the review fixes, so publishing it would have shipped a
+`v0.4.1` without them. Both tags are now **published**, and resolution is verified
+from a clean module context:
+
+```
+github.com/buchenberg/shepherd-kernel-go                    v0.4.1
+github.com/buchenberg/shepherd-kernel-go/sandbox/containerd v0.1.1
+```
+
+**One caveat worth remembering:** the tags are only as good as the check that they
+point at merged, reviewed history. Publishing a stale tag is easy to do and
+invisible until a consumer compiles against it — so the check is
+`git merge-base --is-ancestor <last-fix-commit> <tag>` before every push.
 
 **Post-merge sequence, in order — steps 2 and 3 depend on step 1:**
 
@@ -284,11 +294,12 @@ Linux spot-check (WSL/CI).
       than a Phase 2b surprise, which is exactly what this criterion was for.)*
 - [x] CHANGELOG + LICENSE present.
       *(Verified: `89ebeb3`, `a7562d0`.)*
-- [ ] **Added (T0.8, decided §15):** `v0.4.1` tagged at/after `55b4daf` so that
+- [x] **Added (T0.8, decided §15):** `v0.4.1` tagged at/after `55b4daf` so that
       at least one core release contains the bug batch (§0 finding), and
       `sandbox/containerd/go.mod` repinned to it.
-      *(Tag ✅ local at `8e9b867`; **repin still open and blocked on the push** —
-      a local-only tag cannot resolve through the module proxy.)*
+      *(Done. Both tags published at the merge commit `bee4ca5` after being
+      re-pointed from the pre-review `3315b3a`; `go.mod` requires `v0.4.1` with no
+      `replace`; resolution verified from a clean module context.)*
 
 **yaah coordination**: v0.4.0 is API-compatible with what yaah's
 `feat/containerd`-era code already expects; publish the tag so yaah can pin it.
