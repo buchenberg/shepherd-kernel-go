@@ -86,8 +86,25 @@ landed, and its CHANGELOG carried a "Known limitation — containerd backend is 
 yet reliable" section. Since the tag had **never been pushed**, folding the fix in
 and moving the tag was preferable to publishing a release whose own notes describe
 a defect that is fixed in the same unreleased state. If the tag had been pushed,
-the correct move would instead have been a `v0.4.2`. **Nothing here has been
-pushed** — confirm before publishing.
+the correct move would instead have been a `v0.4.2`.
+
+**Where this stands (2026-10-07):** the work is on branch `parity/p0-t9-lease` and
+up for review as **PR #10**, with `main` left at `55b4daf`. Both tags remain
+**local only**, deliberately: pushing a release tag that points at an unmerged
+branch would publish a version that is not on `main`, and would hand `go get` a
+release cut from a feature branch.
+
+**Post-merge sequence, in order — steps 2 and 3 depend on step 1:**
+
+1. Merge PR #10 into `main`.
+2. `git push origin v0.4.1 sandbox/containerd/v0.1.1` **from `main`**, so the tags
+   point at merged history. Only now does `v0.4.1` resolve for anyone else.
+3. Repin `sandbox/containerd/go.mod` from `v0.4.0` to `v0.4.1` and land it. This is
+   T0.8's remaining half, and it is blocked on step 2 rather than on effort: a tag
+   that exists only locally cannot resolve through the module proxy, so repinning
+   earlier leaves the nested module unbuildable.
+4. Only then can `yaah` pin a tag instead of a pseudo-version — the precondition
+   its activation plan's step 1 has been waiting on.
 
 ### Phase 1 — ABI trust (v0.5.0)
 
@@ -238,11 +255,26 @@ Linux spot-check (WSL/CI).
       builds; nested module resolvable without `replace`.
       *(Verified: `sandbox/containerd/go.mod` has no `replace` and requires
       tagged `v0.4.0`. Note the tag predates the bug batch — §0.)*
-- [ ] CI green on 3 OSes; nested module compiles on linux, is excluded (via
+- [x] CI green on 3 OSes; nested module compiles on linux, is excluded (via
       build tags) — not broken — elsewhere.
-      *(Workflow exists with the 3-OS matrix and a linux containerd job;
-      **run status not verified from the tree**. Build-tag exclusion is
-      **partial** — only `live_test.go` is tagged.)*
+      *(**Verified 2026-10-07: all four jobs green on PR #10**, run
+      `37667196360` — `test (ubuntu-latest)` 1m30s, `test (macos-latest)` 2m49s,
+      `test (windows-latest)` 2m46s, `containerd adapter (linux)` 1m5s. The
+      gofmt gate passed on Windows and macOS, which is the check that matters
+      for this file's CRLF history. On "build tags": the nested module is a
+      separate Go module that the root module never imports, so it is excluded
+      from the 3-OS builds by module separation rather than by tags — the
+      original wording was optimistic. Only `live_test.go` carries a tag, and
+      only to keep the live suite out of a plain `go test`.)*
+
+      **Note what CI does and does not cover.** The `containerd adapter` job runs
+      `go vet` and `go test` only, so the live suite **skips there** — there is no
+      daemon on the runner. CI therefore protects the *mechanism* (the unit tests
+      assert the lease reaches the snapshotter context) but **not the daemon
+      integration**; the 12/12 soak is currently reproducible only by hand.
+      Automating it — the ubuntu runner can host a containerd — would be the
+      natural next CI task, and is the only thing standing between this backend
+      and silent regression.*
 - [x] All six bug-batch fixes merged with tests; T0.5 smoke result recorded
       (pass → phase 2b de-risked; fail → containerd findings converted to
       tasks before T2b.7).
