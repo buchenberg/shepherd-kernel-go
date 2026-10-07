@@ -59,26 +59,35 @@ also be a bug-fix vehicle.
 | T0.2 | CHANGELOG + tag `v0.4.0` | 🔄 | CHANGELOG ✅ (`89ebeb3`, reconstructs v0.1.0→v0.4.0); **tag mis-positioned** — see finding above |
 | T0.3 | LICENSE | ✅ | `a7562d0` — MIT, matching upstream |
 | T0.4 | containerd publishability + tag | 🔄 | `40a2178` removes `replace`, `require`s tagged `v0.4.0`; tag `sandbox/containerd/v0.1.0` exists. **Build-tag split incomplete**: the only `//go:build` in the nested module is on `live_test.go` (`linux && !nolive`); no portable/tagged split of `client.go` as specified |
-| T0.5 | Manual live-daemon smoke | ❌ **FAILED** | **Run 2026-10-07 against containerd v2.3.5 (overlayfs).** Harness committed (`603fdcf`), 5 live tests added, and **nine defects found and fixed** — see `603fdcf`. But the suite is **not reliably green: 3 of 5 consecutive runs failed, with a different test failing each time**, which is the signature of a shared-resource race rather than a per-test bug. Root cause established by inspection: **the adapter holds no containerd lease** (the only "lease" matches in `client.go` are the word *release* in a comment and an error string), and this daemon's GC is aggressive (`mutation_threshold = 100`, `schedule_delay = '0s'`, `startup_delay = '100ms'`). `Capture` stops the task and then prepares a successor whose parent is the just-committed snapshot — which is **unreferenced** in that window, so the GC may reap it. Observed directly: `Capture: prepare successor snapshot: parent snapshot shepherd/<id>/committed/1 does not exist: not found`, followed by the cleanup `Destroy` failing on an already-reaped `active/0`. **Decisive validation is the fix itself: add the lease and require a green soak.** Tracked as T0.9 |
-| T0.5b | ~~Record live-daemon result~~ | ⬜ | Blocked on T0.9 — the README status note (`README.md:269-275`) must not claim the daemon path is verified until the soak is green |
+| T0.5 | Manual live-daemon smoke | ✅ | **Passed 2026-10-07 against containerd v2.3.5 (overlayfs).** The harness (`603fdcf`) found and fixed **nine defects**, then the first soak **failed 3 of 5 runs with a different test failing each time** — a shared-resource race, not per-test bugs. Root cause: the adapter held **no containerd lease**, and this daemon's GC is aggressive (`mutation_threshold = 100`, `schedule_delay = '0s'`, `startup_delay = '100ms'`), so `Capture`'s stop-then-prepare window left its just-committed snapshot unreferenced — observed as `parent snapshot shepherd/<id>/committed/1 does not exist`. Fixed by T0.9. **Re-soak: 12 of 12 green**, zero leaked containers/tasks/snapshots |
+| T0.5b | Record the live-daemon result | ✅ | `README.md` states the daemon path is **verified**, naming the ten defects and the 12/12 soak; `CHANGELOG.md` v0.4.1 carries the same |
 | T0.6 | Bug batch (6 items) | ✅ | `4203993` touches `checkpoint.go`, `sandbox.go`, `sandbox_git.go`, `scope.go`, `store.go`, `supervisor.go`, `types.go` + both containerd files, with tests |
 | T0.7 | CI bootstrap | ✅ | `7281fe1` + `3cf961d` + `55b4daf`; `ci.yml` has the 3-OS matrix, `gofmt` fail-on-output, `go vet`, `go test -race`, `go build -trimpath`, and a linux containerd job |
-| T0.8 | **Cut `v0.4.1`** at/after HEAD so a core release contains the Phase 0 bug batch; repin `sandbox/containerd/go.mod` to it. Closes the §0 mis-tag finding. | `CHANGELOG.md`, tag, `sandbox/containerd/go.mod` | 0.25d | T0.5 committed |
-| T0.9 | **Hold a containerd lease for the sandbox's lifetime** so its snapshots cannot be garbage-collected. Create a lease in `Create` (`LeasesService().Create`, namespace-scoped), thread `leases.WithLease(...)` through every snapshot/container/content call, and delete it in `Destroy`. Accept: **≥10 consecutive green soak runs** of the live suite | `client.go`, `sandbox.go`, `live_test.go` | 0.5–1d | T0.5 |
+| T0.8 | **Cut `v0.4.1`** so a core release contains the Phase 0 bug batch, and repin the nested `go.mod` to it | 🔄 | Tagged locally at `3c5e96c`, **then moved to `8e9b867` to include the T0.9 fix** — see the note below. The `go.mod` repin is **pending push**: a tag that exists only locally cannot resolve through the module proxy, so repinning now would leave the nested module unbuildable |
+| T0.9 | **Hold a containerd lease for the sandbox's lifetime** so its snapshots cannot be garbage-collected | ✅ | `8e9b867`. Created in `Create`/`Apply` via `ensureLease`, injected into every snapshotter call by `namespaceSnapshotter` (atomic `leaseRef`, so the hot path takes no lock), released in `Destroy`, labelled `shepherd.lease=sandbox` so an orphan from a crashed process is findable. **Accept met: 12/12 consecutive green soak runs** (was 3/5 failing). Ten daemon-free tests in `lease_test.go` pin the bookkeeping; `TestLive_LeaseHoldsSnapshots` proves the lease lists the sandbox's own snapshot keys, and `TestLive_DestroyReleasesTheLease` proves it is dropped |
 
-**Phase 0 is materially complete except T0.5, which FAILED, and T0.8, which is
-pending.** Do not mark M0 closed until T0.9 is green and T0.8 is tagged.
+**Phase 0 is complete except T0.8's `go.mod` repin, which is blocked on pushing
+the tag.** T0.5 passed, T0.9 proved out the fix, and the live suite is now
+deterministic at 12/12.
 
-**The stop-gate did its job.** T0.5 was written as a de-risking step precisely so
-that a fatal containerd problem would surface before Phase 2b built on it, and it
-surfaced exactly that: nine defects fixed, and a tenth — GC-vulnerable snapshots —
-that makes the backend unfit for a long-running agent. Per §4 and the yaah plan's
-step-2 instruction (**"If it fails, stop"**), **Phase 2b and any `yaah` isolated-
-workspace activation remain blocked on T0.9.**
+**The stop-gate did its job, and how it did so is worth recording.** T0.5 was
+written as a de-risking step so a fatal containerd problem would surface before
+Phase 2b built on it. It surfaced a tenth defect — GC-vulnerable snapshots — that
+**no amount of unit testing could have caught**, because the fakes seed their
+rootfs key directly and have no garbage collector. And a backend that *sometimes*
+loses its workspace is worse than one that fails outright: the symptom would have
+looked like anything but a containerd GC, in a long agent run, intermittently.
 
-T0.8 is **not** blocked by T0.9: the core bug batch is independent of the
-containerd lease, and `yaah` needs a pinnable tag. Cutting `v0.4.1` now is correct;
-the released nested module should carry a known-limitation note until T0.9 lands.
+**Phase 2b is therefore unblocked, and so is `yaah`'s isolated-workspace
+activation.** Both were gated on a green soak, not on a judgement call.
+
+**Note on the `v0.4.1` tag move.** The tag was created at `3c5e96c` before T0.9
+landed, and its CHANGELOG carried a "Known limitation — containerd backend is not
+yet reliable" section. Since the tag had **never been pushed**, folding the fix in
+and moving the tag was preferable to publishing a release whose own notes describe
+a defect that is fixed in the same unreleased state. If the tag had been pushed,
+the correct move would instead have been a `v0.4.2`. **Nothing here has been
+pushed** — confirm before publishing.
 
 ### Phase 1 — ABI trust (v0.5.0)
 
@@ -103,12 +112,12 @@ the released nested module should carry a known-limitation note until T0.9 lands
 All ⬜ for Phases 2a, 3 and 4. No evidence of work on executions/relations/history
 (2a), the merge gate or settlement (3), or recovery/durability (4).
 
-**Phase 2b's harness now exists and has been exercised** (`sandbox/containerd/live_test.go`,
-committed in `603fdcf`, env-gated exactly as T2b.7 specifies). It is not a
-scaffold: it found nine defects and exposed a tenth that blocks the phase. T2b.7
-must not be estimated or started until **T0.9** makes the soak green — a
-materialization path built on GC-vulnerable snapshots would fail nondeterministically
-under a real workload, which is worse than failing outright.
+**Phase 2b's harness exists, has been exercised, and its blocker is cleared**
+(`sandbox/containerd/live_test.go`, committed in `603fdcf`, env-gated exactly as
+T2b.7 specifies). It is emphatically not a scaffold: it found nine defects, then
+exposed a tenth (GC-vulnerable snapshots) that unit tests could not reach, and
+T0.9 fixed it. **Phase 2b is unblocked** — the soak is green, so a materialization
+path built on this backend will not fail nondeterministically under load.
 
 ### Sequencing consequence
 
@@ -158,7 +167,7 @@ in §14's convention is applied inline below. Keep it in sync at each phase exit
 
 | Milestone | Tag | Phase | Contents | Target (weeks from start) |
 |---|---|---|---|---|
-| M0 | **v0.4.1** (patch; supersedes the mis-placed `v0.4.0`) + `sandbox/containerd/v0.1.0` | 0 | Sandbox substrate shipped, tagged, consumable; bug batch; CI bootstrap | W1 |
+| M0 | **v0.4.1** (patch; supersedes the mis-placed `v0.4.0`) + nested `sandbox/containerd/v0.1.1` | 0 | Sandbox substrate shipped, tagged, consumable; bug batch; CI bootstrap; **daemon path verified by a 12/12 soak** | W1 |
 | M1 | **v0.5.0** | 1 | Canonical byte-identity proven; conformance suite; store vectors; `ReadPathPrefix` | W2–3 |
 | M2 | **v0.6.0** | 2a | Execution/relation/history schemas, projections, runtime handles | W4–6 |
 | M3 | **v0.7.0** | 2b | Substrates, materialize dispatch + ledger, `WorkspaceSubstrate` | W5–7 (overlaps 2a) |
@@ -234,16 +243,20 @@ Linux spot-check (WSL/CI).
       *(Workflow exists with the 3-OS matrix and a linux containerd job;
       **run status not verified from the tree**. Build-tag exclusion is
       **partial** — only `live_test.go` is tagged.)*
-- [ ] All six bug-batch fixes merged with tests; T0.5 smoke result recorded
+- [x] All six bug-batch fixes merged with tests; T0.5 smoke result recorded
       (pass → phase 2b de-risked; fail → containerd findings converted to
       tasks before T2b.7).
-      *(Fixes merged with tests ✅ via `4203993`; **T0.5 not done**, so this
-      box stays open — it is the gate for Phase 2b.)*
+      *(Fixes merged ✅ `4203993`. T0.5 ran, **failed 3/5**, root-caused to
+      GC-vulnerable snapshots, fixed by T0.9 (`8e9b867`), and **re-soaked 12/12
+      green** — so phase 2b is de-risked. The tenth defect became T0.9 rather
+      than a Phase 2b surprise, which is exactly what this criterion was for.)*
 - [x] CHANGELOG + LICENSE present.
       *(Verified: `89ebeb3`, `a7562d0`.)*
 - [ ] **Added (T0.8, decided §15):** `v0.4.1` tagged at/after `55b4daf` so that
       at least one core release contains the bug batch (§0 finding), and
       `sandbox/containerd/go.mod` repinned to it.
+      *(Tag ✅ local at `8e9b867`; **repin still open and blocked on the push** —
+      a local-only tag cannot resolve through the module proxy.)*
 
 **yaah coordination**: v0.4.0 is API-compatible with what yaah's
 `feat/containerd`-era code already expects; publish the tag so yaah can pin it.

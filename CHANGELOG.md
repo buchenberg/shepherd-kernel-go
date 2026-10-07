@@ -42,16 +42,22 @@ pre-fix code was the only thing a `go get` could resolve. `v0.4.1` supersedes it
 - `Exec` now rejects `ExecRequest.Stdin` explicitly (`ErrStdinUnsupported`): the
   runc-v2 shim holds a write end on the exec's stdin FIFO, so a reader never sees
   EOF and a stdin-reading command hangs rather than erroring.
+- **The containerd sandbox now holds a lease for its lifetime.** Without one a
+  snapshot is referenced only by the container rooted at it, and `Capture` stops
+  that container before preparing its successor — leaving the just-committed
+  layer unreferenced for the daemon's garbage collector to reclaim. That made the
+  live suite flaky, failing **3 runs in 5** with a different test each time. The
+  sandbox now acquires a labelled lease in `Create`/`Apply` and releases it in
+  `Destroy`. Verified by **12 consecutive green runs** and by a live assertion
+  that the lease lists the sandbox's own snapshot keys as resources.
 
-### Known limitation — containerd backend is not yet reliable
-The live harness is **flaky**: 3 of 5 consecutive runs failed, with a different
-test failing each time. The adapter holds **no containerd lease**, so once
-`Capture` stops the task its just-committed snapshot is unreferenced and the
-daemon's garbage collector can reap it before the successor is prepared (a
-default install runs `mutation_threshold = 100`, `schedule_delay = 0s`).
-Treat the containerd backend as **unverified** until a lease is held for the
-sandbox's lifetime — tracked as T0.9 in `plans/00-execution-plan.md`. In a long
-run it can lose its workspace mid-operation.
+### Verified
+The containerd backend's daemon path is exercised, not merely compiled. The live
+harness (`sandbox/containerd/live_test.go`) covers full lifecycle, namespace
+isolation, destroy keeping the image rootfs, diff preserving pre-staged changes,
+stdin rejection, lease-held snapshots, and lease release on destroy. It still
+needs a Linux host with a running containerd daemon — a stock image and the
+overlayfs snapshotter are enough, no root-owned FIFO directory required.
 
 ## [v0.4.0] - 2026-09-16
 
