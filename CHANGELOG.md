@@ -4,6 +4,47 @@ Notable changes to `shepherd-kernel-go`. This project follows
 [Semantic Versioning](https://semver.org/); while pre-1.0, minor releases may
 contain breaking changes, which are called out below.
 
+## [v0.6.0] - 2026-10-07
+
+Phase 2a (schema rings & runtime handles): traces written by the Go kernel are
+now interpretable without the Python reference at hand — the execution
+lifecycle, relations, effective-history, and schema-library layers are ported,
+with a synchronous task facade on top. Purely additive: no breaking changes, no
+new dependencies (`go.mod` untouched).
+
+### Added
+- Execution lifecycle schema: `shepherd2.execution.{created,started,completed,failed}.v1`
+  records, deterministic `exec:<32hex>` ids (`ExecutionIDFor`), batch builders
+  (`CreateExecutionBatch`, `CompleteExecutionBatch`, `FailExecutionBatch`),
+  `PublishExecutionFrontier` with the terminal-frontier law, and the
+  `ProjectExecution(FromStore)` fold.
+- Execution relations: `shepherd2.execution_relation.created.v1`
+  (`spawned`/`adopted`/`abandoned`), parent-owner-path invariants, and the
+  `ProjectExecutionRelations(FromStore)` projection.
+- Effective history: `ProjectEffectiveHistory(FromStore)` folding published
+  facts and active relations into the `EffectiveHistory` tree.
+- Schema library: `ProjectionSpec`, `StaticSchemaLibrary`,
+  `EnsureProjectionCompatible`, and the default `ShepherdSchemas()` registry —
+  closes the plan-01 law 21/23 gaps (`TestProjectExecutionRequiresBothModes`).
+- Runtime handles: `StartTask`/`StartTaskSync`, `Run` and `ChildHandle`
+  (Wait/Snapshot/Cutoff), and `TaskControl`
+  (CausalTail/Publish/Spawn/Adopt/Abandon/AwaitTerminal/ReadExecution),
+  mirroring Python's owner-path convention.
+- `testdata/execution_vectors_v0.json`: run, fail, relation, and
+  effective-history sequences recorded through the real Python handles
+  (`testdata/generate_execution_vectors.py`), replayed ID-for-ID through the
+  Go facade, and hash-pinned in `golden_provenance_test.go`.
+
+### Verified
+- `TestStartTaskSyncMatchesPythonVector` reproduces the Python `@task` run's
+  owner path fact-for-fact through the facade — vector-pinned, not asserted.
+- Terminal-frontier and projection-purity laws enforced by negative tests;
+  foreign-schema facts and unknown relation kinds are rejected.
+- The task-tree integration (`handles_integration_test.go`) exercises
+  spawn + adopt + abandon + publish, pending → running → succeeded
+  transitions, the fail path, and the restart law: reopen the store file and
+  re-project identically.
+
 ## [v0.5.0] - 2026-10-07
 
 Phase 1 (ABI trust): the canonical digest layer is now byte-identical to
