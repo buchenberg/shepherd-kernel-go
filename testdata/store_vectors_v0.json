@@ -58,6 +58,7 @@
         "receipts": [
           {
             "append_intent_id": "intent:a",
+            "batch_digest": "af77fa6a2570e3571186d9aced92c96543058817429f84abaac7376a4fd8b4ba",
             "causal_edges": [],
             "commit_receipts": [
               "commit:0"
@@ -150,6 +151,7 @@
         "receipts": [
           {
             "append_intent_id": "intent:ctx",
+            "batch_digest": "2e18f32d20b7546730e1ff4859597433830af4d5abd312f2708c3489417866d4",
             "causal_edges": [],
             "commit_receipts": [
               "commit:0"
@@ -264,6 +266,7 @@
         "receipts": [
           {
             "append_intent_id": "intent:reuse-1",
+            "batch_digest": "9d8b28b0dc5d68d4c14ed089ac589de639bf12ac713218fe27c7c2d24361fb26",
             "causal_edges": [],
             "commit_receipts": [
               "commit:0"
@@ -283,6 +286,7 @@
           },
           {
             "append_intent_id": "intent:reuse-2",
+            "batch_digest": "71236b371359704b4c04ee76c1509c0f49d49fadc9f75381b473f5750c4b01ca",
             "causal_edges": [],
             "commit_receipts": [
               "commit:1"
@@ -381,6 +385,7 @@
         "receipts": [
           {
             "append_intent_id": "intent:multi",
+            "batch_digest": "743e753bfd45d1d3a3facb9cd1c24ecb24fa4ee38c275272fefa4ab69750b4ab",
             "causal_edges": [],
             "commit_receipts": [
               "commit:0",
@@ -479,6 +484,7 @@
         "receipts": [
           {
             "append_intent_id": "intent:local",
+            "batch_digest": "8063e4ecaf2a6e890cccee5998e19cd40cdf944cb79b163df7b33405b17ce95f",
             "causal_edges": [
               [
                 "sha256:29be31f5da7e15d68ffff137c63604330f611d984ac99220aae085f18ffd59ee",
@@ -568,6 +574,7 @@
         "receipts": [
           {
             "append_intent_id": "intent:frontier",
+            "batch_digest": "192a3983b1dfd18be8b0408a0d04e77660461e5821c785158fa1ec822568f15a",
             "causal_edges": [],
             "commit_receipts": [
               "commit:0"
@@ -664,6 +671,7 @@
         "receipts": [
           {
             "append_intent_id": "intent:unicode",
+            "batch_digest": "b0bd6636e0f51d563a9dd076ecb75d271079dcfb6d2aaea3e3dadb33109a886d",
             "causal_edges": [],
             "commit_receipts": [
               "commit:0"
@@ -763,6 +771,7 @@
         "receipts": [
           {
             "append_intent_id": "intent:replay",
+            "batch_digest": "a8343c9bf378166c9a3c50b8c7f15b4c56c0e98bee2d7e722a8597f26d6cbbed",
             "causal_edges": [],
             "commit_receipts": [
               "commit:0"
@@ -782,6 +791,7 @@
           },
           {
             "append_intent_id": "intent:replay",
+            "batch_digest": "a8343c9bf378166c9a3c50b8c7f15b4c56c0e98bee2d7e722a8597f26d6cbbed",
             "causal_edges": [],
             "commit_receipts": [
               "commit:0"
@@ -871,6 +881,7 @@
         "receipts": [
           {
             "append_intent_id": "intent:modes",
+            "batch_digest": "9c25a496b26f5214a16971b2b0add7b58d3107c2e18c3d7c2f568829626fcc72",
             "causal_edges": [],
             "commit_receipts": [
               "commit:0",

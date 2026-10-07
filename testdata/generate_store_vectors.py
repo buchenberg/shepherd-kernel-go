@@ -5,6 +5,9 @@ Run from the repository root:
 
     python testdata/generate_store_vectors.py testdata/store_vectors_v0.json
 
+The Python checkout defaults to the sibling `../shepherd` directory and can be
+overridden with SHEPHERD_REPO (or SHEPHERD2_SRC for the import path alone).
+
 This drives shepherd2's own `SQLiteTraceStore` against a fresh database per
 fixture and records every identity it allocates — record ids, witness refs,
 commit receipts, context ids, owner ordinals, causal edges, frontier ids and owner
@@ -36,8 +39,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-DEFAULT_SHEPHERD2_SRC = r"C:\Code\Personal\agentic\shepherd\shepherd2\src"
-DEFAULT_SHEPHERD_REPO = r"C:\Code\Personal\agentic\shepherd"
+DEFAULT_SHEPHERD_REPO = str(Path(__file__).resolve().parent.parent.parent / "shepherd")
+DEFAULT_SHEPHERD2_SRC = str(Path(DEFAULT_SHEPHERD_REPO) / "shepherd2" / "src")
 
 SRC = os.environ.get("SHEPHERD2_SRC", DEFAULT_SHEPHERD2_SRC)
 REPO = os.environ.get("SHEPHERD_REPO", DEFAULT_SHEPHERD_REPO)
@@ -52,7 +55,7 @@ from shepherd2.kernel.facts import (  # noqa: E402
     RecordDraft,
     RetainedContextDraft,
 )
-from shepherd2.trace_store import SQLiteTraceStore  # noqa: E402
+from shepherd2.trace_store import SQLiteTraceStore, _batch_digest  # noqa: E402
 
 TRUSTED = dict(
     actor_ref="runtime:conformance",
@@ -278,10 +281,11 @@ def run_fixture(fixture, store_factory):
                 fact_drafts=build_drafts(gspec["fact_drafts"]),
             ))
 
-        receipt = store.append(ctx, AppendBatch(
+        batch = AppendBatch(
             append_intent_id=batch_spec["append_intent_id"],
             groups=tuple(groups),
-        ))
+        )
+        receipt = store.append(ctx, batch)
 
         for gi, cid in enumerate(receipt.context_receipts):
             context_ids_by_key[(batch_index, gi)] = cid
@@ -301,6 +305,12 @@ def run_fixture(fixture, store_factory):
                 owner: [rng[0], rng[1]] for owner, rng in receipt.owner_ordinal_ranges.items()
             },
             "causal_edges": [[a, b] for a, b in receipt.causal_edges],
+            # The reference batch digest, so the Go port's batch-digest payload shape
+            # is checked against Python rather than only against itself. Without it
+            # the intent_replay fixture would compare two digests both computed by
+            # the implementation under test, and any error in the translated shape
+            # would still pass.
+            "batch_digest": _batch_digest(batch, ctx),
         })
 
         for fspec in fixture.get("frontiers", []):

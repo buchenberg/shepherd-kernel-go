@@ -519,7 +519,7 @@ func (s *SQLiteTraceStore) appendInTx(tx *sql.Tx, ctx OperationContext, batch Ap
 		batch.AppendIntentID,
 	).Scan(&existingDigest, &existingReceiptJSON)
 	if err == nil {
-		if existingDigest != batchDigest {
+		if existingDigest != batchDigest && existingDigest != legacyBatchDigest(batch, ctx) {
 			return AppendReceipt{}, false, &AppendIntentConflictError{
 				fmt.Sprintf("append intent %q was already committed with different content", batch.AppendIntentID),
 			}
@@ -1610,7 +1610,11 @@ func scanRecord(row *sql.Row) (Record, error) {
 	}
 
 	r.Envelope.CausedByIDs = jsonToStrings(causedByJSON)
-	r.Body = bodyFromJSON(bodyJSON)
+	body, err := bodyFromJSON(bodyJSON)
+	if err != nil {
+		return Record{}, fmt.Errorf("record %s: %w", r.Envelope.RecordID, err)
+	}
+	r.Body = body
 	r.View = &RecordView{
 		TraceOwnerID: traceOwnerID,
 		OwnerOrdinal: ownerOrdinal,
@@ -1902,6 +1906,35 @@ func modeMatches(fact Record, modeFilter ModeFilter) bool {
 	}
 }
 
+// legacyBatchDigest reproduces the pre-correction digest algorithm, which
+// marshalled Go structs with encoding/json.
+//
+// It exists only to read rows written before the algorithm was aligned with
+// Python, and is never stored. Without it, a database created by an earlier
+// release would see every retry of an already-committed intent as a *different*
+// batch — because the stored digest cannot be recomputed — and return
+// AppendIntentConflictError instead of the stored receipt. That would break
+// idempotent retry, which is the property the check exists to provide.
+//
+// It is safe to keep: accepting either digest means an old row can be read, while
+// a row written now can only match the corrected value. Retire it when no
+// supported database predates the correction.
+func legacyBatchDigest(batch AppendBatch, ctx OperationContext) string {
+	data := map[string]any{
+		"append_intent_id": batch.AppendIntentID,
+		"groups":           batch.Groups,
+		"actor_ref":        ctx.ActorRef,
+		"authority_refs":   ctx.PresentedAuthorityRefs,
+		"schema_env":       ctx.SchemaEnvironmentRef,
+		"trust_mode":       ctx.TrustMode,
+	}
+	b, err := json.Marshal(data)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256Sum(b))
+}
+
 // nullableString renders an unset Go string as JSON null, which is what Python's
 // Optional fields serialise to. Go has no separate "unset" for a string field.
 func nullableString(s string) any {
@@ -2026,14 +2059,17 @@ func bodyToJSON(body RecordBody) string {
 // every number becomes float64, so a retained body that said `1` would
 // re-canonicalise as `1.0` and the record could no longer reproduce its own id —
 // which is exactly what happened before this was fixed.
-func bodyFromJSON(s string) RecordBody {
+func bodyFromJSON(s string) (RecordBody, error) {
 	var payload map[string]any
 	dec := json.NewDecoder(strings.NewReader(s))
 	dec.UseNumber()
 	if err := dec.Decode(&payload); err != nil {
-		return RecordBody{}
+		// Reported rather than swallowed. An empty body would still be returned to
+		// the caller looking like a valid record whose payload happened to be
+		// empty, and any digest computed from it would be a plausible wrong answer.
+		return RecordBody{}, fmt.Errorf("decode retained body: %w", err)
 	}
-	return RecordBody{Payload: payload}
+	return RecordBody{Payload: payload}, nil
 }
 
 func stringToJSON(ss []string) string {

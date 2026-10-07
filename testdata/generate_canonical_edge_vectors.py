@@ -7,8 +7,9 @@ Run from the repository root:
 
 It imports shepherd2's own `canonical_json_bytes` / `canonical_digest` rather than
 reimplementing them, so the expected bytes come from the authoritative
-implementation. Point SHEPHERD2_SRC at the checkout if it is not at the default
-location below.
+implementation. The Python checkout defaults to the sibling `../shepherd`
+directory and can be overridden with SHEPHERD_REPO (or SHEPHERD2_SRC for the
+import path alone).
 
 Do not edit the generated JSON by hand. If the vectors change, update the pinned
 SHA-256 in golden_provenance_test.go in the same commit and say why.
@@ -25,9 +26,10 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
-DEFAULT_SHEPHERD2_SRC = r"C:\Code\Personal\agentic\shepherd\shepherd2\src"
-DEFAULT_SHEPHERD_REPO = r"C:\Code\Personal\agentic\shepherd"
+DEFAULT_SHEPHERD_REPO = str(Path(__file__).resolve().parent.parent.parent / "shepherd")
+DEFAULT_SHEPHERD2_SRC = str(Path(DEFAULT_SHEPHERD_REPO) / "shepherd2" / "src")
 
 SRC = os.environ.get("SHEPHERD2_SRC", DEFAULT_SHEPHERD2_SRC)
 REPO = os.environ.get("SHEPHERD_REPO", DEFAULT_SHEPHERD_REPO)
