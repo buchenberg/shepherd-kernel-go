@@ -51,6 +51,20 @@ var vectorFiles = []vectorFile{
 		wantSHA256:  "0a6ca4fde531a163bbee7f4fefea6215988f2578f84c95209c094e85e3b54edd",
 		generatedBy: "shepherd2@d34d5ca334871dfcb5a3dc76dd78045829fa4e56 (CPython 3.13.13)",
 	},
+	{
+		// The T1.3 property corpus: 200 seeded-random payloads whose expected
+		// bytes and digests come from the reference implementation. The seed is
+		// fixed in the generator and recorded in the file, so regeneration is
+		// byte-reproducible; a changed hash means the seed, the reference commit
+		// or the generator changed — never chance. Regenerated once after
+		// review: the first corpus contained no subnormals and nothing around
+		// the 1e16 notation boundary, so the sampler gained explicit bands for
+		// both (see the generator's random_float and
+		// TestCanonicalCorpusCoversItsAdvertisedShapes).
+		path:        "testdata/canonical_corpus_v0.json",
+		wantSHA256:  "74a24de3b15318725f469099dccfa4d8e7b7a72e084c98424787b4a0bbc9a69f",
+		generatedBy: "shepherd2@d34d5ca334871dfcb5a3dc76dd78045829fa4e56 (CPython 3.13.13, seed 20261007)",
+	},
 }
 
 // normalizeEOL returns data with CRLF replaced by LF.
