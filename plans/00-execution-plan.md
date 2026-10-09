@@ -177,8 +177,8 @@ not-found errors, honest error wrapping, a real `ChildHandle.Snapshot`, and the
 Phases 3 and 4 remain ⬜.
 
 **Phase 2b is complete** (2026-10-09; merged as PR #22 at `df43d33`, released
-as `v0.7.0`; the nested repin that activates T2b.7's live test lands as PR
-#23, with `sandbox/containerd/v0.1.3` as its post-merge tag). Substrates (`Substrate`/`SubstrateRegistry`, Echo, SQLite KV), the
+as `v0.7.0`; the nested repin that activates T2b.7's live test merged as PR
+#23, released as `sandbox/containerd/v0.1.3` at `57a5329`). Substrates (`Substrate`/`SubstrateRegistry`, Echo, SQLite KV), the
 `Materialize` dispatch with the completed-intent ledger, and the
 capability-gated `WorkspaceSubstrate` over `Sandbox` are in, measured by
 `testdata/materialize_vectors_v0.json`: the request digests and the
@@ -436,7 +436,7 @@ ledger, bridged to `Sandbox`. Detailed spec: `plans/03-substrate-materialization
 cut only after v0.6.0 merges (avoid interleaved minors).
 **Deliverable**: v0.7.0.
 
-**Status (2026-10-09): complete — T2b.1–T2b.7 ✅. v0.7.0 tagged at `df43d33` (PR #22, CI green, review findings addressed); the nested repin that activates T2b.7 lands as PR #23, and the `sandbox/containerd/v0.1.3` tag at that merge is the post-merge release step.**
+**Status (2026-10-09): complete — T2b.1–T2b.7 ✅. v0.7.0 tagged at `df43d33` (PR #22, CI green, review findings addressed); the nested repin merged as PR #23 at `57a5329`, and `sandbox/containerd/v0.1.3` is tagged there and verified end-to-end from a clean module.**
 
 | ID | Task | Status | Evidence |
 |---|---|---|---|
@@ -450,10 +450,16 @@ cut only after v0.6.0 merges (avoid interleaved minors).
 **Exit criteria**: plan-03 §6 boxes checked ✅; ledger idempotency proven by
 crash-window test ✅ (`TestMaterializeCrashWindowReplayIsConsistent`);
 v0.7.0 tagged ✅ (`df43d33`, published). The nested
-`sandbox/containerd/v0.1.3` tag — carrying the repin and the activated live
-test — is the post-merge release step for the repin PR; it does not exist
-until that merge is tagged, and this page records it as done only then
-(the PR #19 pattern: tick the box in a follow-up once the tag resolves).
+`sandbox/containerd/v0.1.3` tag is published at `57a5329` (the PR #23
+merge) and the T0.8b end-to-end check passes — verified from a clean
+module, not inferred from the tag list:
+
+```
+$ go get github.com/buchenberg/shepherd-kernel-go/sandbox/containerd@v0.1.3
+$ go list -m all | grep shepherd
+github.com/buchenberg/shepherd-kernel-go                     v0.7.0
+github.com/buchenberg/shepherd-kernel-go/sandbox/containerd  v0.1.3
+```
 
 ---
 
