@@ -387,4 +387,105 @@ func materializationReceiptFromJSON(payload string) (MaterializationReceipt, err
 		SubstrateRef      string           `json:"substrate_ref"`
 		TargetRecordIDs   []string         `json:"target_record_ids"`
 		ProducedRecordIDs []string         `json:"produced_record_ids"`
-		FailureRea
+		FailureReason     string           `json:"failure_reason"`
+		WorldSideAnchors  []map[string]any `json:"world_side_anchors"`
+	}
+	// UseNumber, matching retained-body reads: without it a numeric anchor
+	// value would decode as float64 while a fresh receipt (and Python's
+	// json.loads) holds the exact number, so the replay comparison at
+	// materialize.go's receipt construction would silently stop holding.
+	dec := json.NewDecoder(strings.NewReader(payload))
+	dec.UseNumber()
+	if err := dec.Decode(&stored); err != nil {
+		return MaterializationReceipt{}, fmt.Errorf("materialization receipt decode: %w", err)
+	}
+	return MaterializationReceipt{
+		Outcome:           MaterializationOutcome(stored.Outcome),
+		SubstrateRef:      stored.SubstrateRef,
+		TargetRecordIDs:   nonNilStrings(stored.TargetRecordIDs),
+		ProducedRecordIDs: nonNilStrings(stored.ProducedRecordIDs),
+		FailureReason:     stored.FailureReason,
+		WorldSideAnchors:  nonNilAnchors(stored.WorldSideAnchors),
+	}, nil
+}
+
+// nonNilAnchors returns an empty (non-nil) slice for nil input, so a receipt
+// without anchors serializes as [] rather than null, matching Python's tuple.
+func nonNilAnchors(anchors []map[string]any) []map[string]any {
+	if anchors == nil {
+		return []map[string]any{}
+	}
+	return anchors
+}
+
+// --- completed-intent ledger (store-private table) ---
+
+// readCompletedMaterialization looks up the ledger for a materialize intent.
+// The store lock is held only around the query, mirroring Python's
+// _read_completed_intent; no lock is held across the substrate call or the
+// capture append in Materialize.
+func (s *SQLiteTraceStore) readCompletedMaterialization(intentID string) (string, MaterializationReceipt, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var digest, receiptJSON string
+	err := s.db.QueryRow(
+		"SELECT request_digest, receipt_json FROM materialization_intents WHERE materialize_intent_id = ?",
+		intentID,
+	).Scan(&digest, &receiptJSON)
+	if err == sql.ErrNoRows {
+		return "", MaterializationReceipt{}, false, nil
+	}
+	if err != nil {
+		return "", MaterializationReceipt{}, false, fmt.Errorf("query materialization intent: %w", err)
+	}
+	receipt, err := materializationReceiptFromJSON(receiptJSON)
+	if err != nil {
+		return "", MaterializationReceipt{}, false, err
+	}
+	return digest, receipt, true, nil
+}
+
+// recordCompletedMaterialization writes the ledger entry — the idempotency
+// commit point. The insert races only with a concurrent completion of the
+// same intent; INSERT OR IGNORE plus a digest comparison decides replays the
+// same way Python's IntegrityError branch does, without matching driver
+// error strings.
+func (s *SQLiteTraceStore) recordCompletedMaterialization(intentID, digest string, receipt MaterializationReceipt) error {
+	receiptJSON, err := materializationReceiptJSON(receipt)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	res, err := s.db.Exec(
+		"INSERT OR IGNORE INTO materialization_intents(materialize_intent_id, request_digest, receipt_json) VALUES (?, ?, ?)",
+		intentID, digest, receiptJSON,
+	)
+	if err != nil {
+		return fmt.Errorf("record materialization intent: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		return nil
+	}
+
+	// The row exists: this intent was completed concurrently. Same digest
+	// means the concurrent receipt describes the same transition — the
+	// store-level intent idempotency guarantees identical produced ids —
+	// so replay is a silent success. Different content is a conflict.
+	var existingDigest string
+	err = s.db.QueryRow(
+		"SELECT request_digest FROM materialization_intents WHERE materialize_intent_id = ?",
+		intentID,
+	).Scan(&existingDigest)
+	if err != nil {
+		return fmt.Errorf("re-read materialization intent: %w", err)
+	}
+	if existingDigest != digest {
+		return &AppendIntentConflictError{
+			fmt.Sprintf("materialize intent %q was already committed with different content", intentID),
+		}
+	}
+	return nil
+}

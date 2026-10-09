@@ -275,4 +275,45 @@ overlayfs snapshotter are enough, no root-owned FIFO directory required.
 ## [v0.3.2] - 2026-08-18
 
 ### Fixed
-- Capture un-stages after `git add -A` so a checkpoint no lo
+- Capture un-stages after `git add -A` so a checkpoint no longer mutates the
+  caller's index.
+
+## [v0.3.1] - 2026-08-17
+
+### Fixed
+- Tree capture/apply now derive unique trace intent IDs; the previous
+  content-addressed IDs collided.
+
+## [v0.3.0] - 2026-08-17
+
+### Added
+- `TreeState` capture/apply and `DiffSince` for reusable workspace snapshots.
+
+## [v0.2.1] - 2026-08-12
+
+### Fixed
+- SQLite trace store enables WAL mode and a busy timeout.
+
+## [v0.2.0] - 2026-08-12
+
+### Added
+- Checkpoint create/restore with single-use semantics.
+- `InterventionDeny`, letting the supervisor block a tool call rather than only
+  injecting guidance.
+
+### Fixed
+- Monotonic checkpoint identity and ordering (no wall-clock ties or
+  collisions).
+
+## [v0.1.1] - 2026-08-10
+
+### Added
+- Ring-0 kernel: canonical JSON v2 digests, a content-addressed SQLite trace
+  store with witnesses, cuts/frontiers, and slices.
+- `EffectBus` for real-time effect subscription.
+- `Scope`/`ScopeManager` fork, merge, and discard, recorded in the trace.
+- `Supervisor` rules engine with inject/halt interventions and built-in rules.
+- Scope snapshots for speculative execution.
+
+> `0.1.0` is an alias for the same commit as `v0.1.1`; `v0.1.1` is the first
+> `v`-prefixed tag.

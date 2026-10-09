@@ -343,4 +343,255 @@ A **`WorkspaceState`** is a backend-neutral snapshot of a workspace — the repl
 
 ```go
 type WorkspaceState struct {
-    Backend  string         // "git"
+    Backend  string         // "git", "containerd"
+    Revision string         // git HEAD SHA, or a snapshot key
+    Data     map[string]any // backend-specific, opaque to the kernel
+}
+```
+
+`Digest()` returns the kernel canonical digest of the state (`sha256:…`), used in trace records and for drift detection. Two states with identical content digest identically regardless of map iteration order, because canonicalization sorts keys at every level.
+
+Unlike a `Checkpoint`, a `WorkspaceState` has no lifecycle: it is reusable and stays valid, so one fork point can seed many speculative branches.
+
+### Supervisor
+
+A rule-based engine that watches the effect bus and emits **interventions** when rules match. Built-in rules guard against destructive operations, high error rates, and stuck detection.
+
+## API
+
+### Store
+
+```go
+store, err := shepherd.NewSQLiteTraceStore(path)  // ":memory:" for in-memory
+defer store.Close()
+store.WithBus(bus)  // optional: attach effect bus
+
+receipt, err := store.Append(ctx, batch)            // Append records
+slice, err := store.ReadOwnerPrefix(ctx, owner, through, modeFilter)
+slice, err := store.ReadCausalClosure(ctx, roots, modeFilter, closurePolicy)
+frontier, err := store.PublishFrontier(ctx, spec)   // Immutable checkpoint
+slice, err := store.ResolveFrontier(ctx, frontierId, modeFilter)
+ids, err := store.PreviewRecordIDs(ctx, batch)      // Dry-run append
+```
+
+### Effect Bus
+
+```go
+bus := shepherd.NewEffectBus(bufferSize)  // 0 = default (64)
+defer bus.Close()
+
+ch := bus.Subscribe("watcher-id")     // <-chan EffectEvent
+bus.Unsubscribe("watcher-id")
+bus.Publish(event)                     // non-blocking
+```
+
+### Scope Manager
+
+```go
+mgr := shepherd.NewScopeManager(store)
+
+scope, err := mgr.Create("owner-id", sb)                            // sb may be nil (pure-causal)
+child, err := mgr.Fork("parent-scope-id", "child-owner-id", nil)    // inherits parent's sandbox
+child, err := mgr.ForkIsolated("parent-scope-id", "child-owner-id", nil, sb)
+err := parent.Merge(child)                                          // takes *Scope, not an ID
+err := parent.Discard(child)
+err := mgr.DestroyScopeSandbox(ctx, "scope-id")                     // release provisioned resources
+scope, ok := mgr.Get("scope-id")
+active := mgr.ActiveScopes()
+
+cp, err := mgr.CreateCheckpoint(ctx, "scope-id", snapshot)          // single-use
+snapshot, err := mgr.RestoreCheckpoint(ctx, cp.ID)
+latest := mgr.LatestCheckpoint("scope-id")
+mgr.PruneCheckpoints("scope-id")
+```
+
+### Scope workspace and checkpoint operations
+
+```go
+scope := shepherd.NewScope(store, "owner-id").WithSandbox(sb, false)  // owns=false: do not Destroy
+
+ws, err := scope.CaptureWorkspace(ctx)          // reusable state, no lifecycle
+err = scope.ApplyWorkspace(ctx, ws)
+diff, files, err := scope.DiffWorkspace(ctx, ws, 2000)
+
+cp, err := scope.CreateCheckpoint(ctx, snapshot)
+snapshot, err := scope.RestoreCheckpoint(ctx, cp)
+```
+
+### Sandbox backends
+
+```go
+// In-place: materializes on your repository. Destroy is a no-op.
+sb := shepherd.NewLocalGitSandbox(repoPath)
+
+// Worktree: a detached git worktree this scope owns.
+sb := shepherd.NewWorktreeSandbox(repoPath, worktreePath)
+
+err := sb.Create(ctx, shepherd.SandboxSpec{})
+defer sb.Destroy(ctx)
+
+ws, err := sb.Capture(ctx)
+err = sb.Apply(ctx, ws)
+diff, files, err := sb.Diff(ctx, ws, maxLines)
+
+caps := sb.Capabilities()   // capability negotiation: Lifecycle/Exec/FileIO/Diff/Isolated/Containment
+```
+
+### Supervisor
+
+```go
+sup := shepherd.NewSupervisor(mgr, bus)
+sup.AddRule(shepherd.DestructiveToolRule())
+sup.AddRule(shepherd.HighErrorRateRule(0.5, 10))
+sup.AddRule(shepherd.StuckDetectionRule(3))
+sup.Start("orchestrator")
+defer sup.Close()
+
+for iv := range sup.Interventions() { ... }
+
+err := sup.Inject(scopeID, "guidance text")
+err := sup.Halt(scopeID)
+```
+
+### Materialization
+
+```go
+registry := shepherd.NewSubstrateRegistry()
+err := registry.Register(substrate)               // Substrate interface: SubstrateRef,
+                                                  // DeclarationSchemas, CaptureSchemas,
+                                                  // Containment, Materialize
+substrate, err := registry.Get(substrateRef)      // ErrUnknownSubstrate when missing
+
+receipt, err := shepherd.Materialize(ctx, store, opCtx, req, registry)
+// opCtx.Operation must be shepherd.OpMaterialize
+// req: AppendIntentID, TargetTraceOwnerID, TargetRecordIDs,
+//      TargetThroughOwnerOrdinal (shepherd.MaxOwnerOrdinal), CaptureTraceOwnerID
+// receipt: Outcome (success | clean_failure | split_state), SubstrateRef,
+//          TargetRecordIDs, ProducedRecordIDs, WorldSideAnchors
+
+echo := shepherd.NewEchoSubstrate("my.echo.v1", "example.write.v1")
+kv, err := shepherd.NewKVSubstrate("world.sqlite")   // kv.sqlite.local.v1
+ws := shepherd.NewWorkspaceSubstrate(sandbox)       // workspace.sandbox.v1
+
+result, err := substrate.Materialize(ctx, records)   // substrates never append;
+                                                     // dispatch owns the append
+```
+
+### Constants
+
+```go
+shepherd.Capture                    // "capture"
+shepherd.Declaration                // "declaration"
+shepherd.ModeBoth                   // "both"
+shepherd.ModeCapturesOnly           // "captures_only"
+shepherd.ModeDeclarationsOnly       // "declarations_only"
+shepherd.TrustedAppendContext       // Default trusted append context
+shepherd.TrustedReadContext         // Default trusted read context
+shepherd.SchemaScopeForked          // "shepherd.scope.forked.v1"
+shepherd.SchemaScopeMerged          // "shepherd.scope.merged.v1"
+shepherd.SchemaScopeDiscarded       // "shepherd.scope.discarded.v1"
+shepherd.SchemaSupervisorInject     // "shepherd.supervisor.inject.v1"
+shepherd.SchemaSupervisorHalt       // "shepherd.supervisor.halt.v1"
+shepherd.SchemaCheckpointCreated    // "shepherd.checkpoint.created.v2"
+shepherd.SchemaCheckpointRestored   // "shepherd.checkpoint.restored.v2"
+shepherd.SchemaWorkspaceCaptured    // "shepherd.workspace.captured.v1"
+shepherd.SchemaWorkspaceApplied     // "shepherd.workspace.applied.v1"
+
+shepherd.CheckpointValid            // "valid"
+shepherd.CheckpointUsed             // "used"
+shepherd.CheckpointInvalid          // "invalid"
+
+shepherd.ErrNoSandbox               // scope has no sandbox
+shepherd.ErrUnsupported             // backend does not implement the capability
+```
+
+### Trace schemas
+
+The checkpoint and workspace schemas embed a backend-neutral `revision` and
+`state_digest` rather than git-specific SHAs, so a trace reads the same whether
+the workspace was a git tree, a worktree, or a container snapshot:
+
+| Schema | Mode | Payload |
+|---|---|---|
+| `shepherd.checkpoint.created.v2` | declaration | `checkpoint_id, backend, revision, state_digest, has_snapshot` |
+| `shepherd.checkpoint.restored.v2` | capture | `checkpoint_id, backend, revision, state_digest` |
+| `shepherd.workspace.captured.v1` | declaration | `backend, revision, state_digest` |
+| `shepherd.workspace.applied.v1` | capture | `backend, revision, state_digest` |
+
+These are kernel extensions, not part of `shepherd.kernel.abi.v0`, so they do not
+affect the golden vectors. Trace writes are advisory: a failed append never fails
+the workspace operation, because the rollback guarantee does not depend on the
+audit record.
+
+## Executions & Handles
+
+Executions give runs identities: a create/complete/fail lifecycle folded from
+retained facts, parent/child relations, and a synchronous task facade over the
+store. Every id is derived exactly as the Python reference derives it —
+`ExecutionIDFor` and the full run sequence are pinned by Python-generated
+vectors — so a Go-written trace is readable by `shepherd2` and vice versa.
+
+```go
+reg := shepherd.NewRegistry()
+reg.Register("MyTask", func(c *shepherd.TaskControl) (map[string]any, error) {
+    c.Publish("note", map[string]any{"msg": "working"})
+    child, err := c.Spawn("LeafTask", inputs, reg)
+    if err != nil { return nil, err }
+    exec, err := c.AwaitTerminal(ctx, child)
+    return map[string]any{"child": exec.ExecutionID}, nil
+})
+
+run, err := shepherd.StartTaskSync(store, reg, "MyTask", "run:fixed-id", inputs)
+exec, err := run.Wait(ctx)      // terminal projection: succeeded / failed
+
+// or async: StartTask returns a live handle; Wait blocks until terminal
+run, err = shepherd.StartTask(ctx, store, reg, "MyTask", "", inputs)
+
+history, err := shepherd.ProjectEffectiveHistoryFromStore(store, reader, cutoff)
+// root execution + active children (spawned/adopted; abandoned drops) + published facts
+```
+
+Spawns and adopts are recorded as parent-owned relation facts; abandoning a
+child writes an abandoned relation under the same relation id, so the
+effective-history fold drops it. The whole tree projects from one terminal
+frontier, and re-opening the store file re-projects it identically.
+
+Godoc: https://pkg.go.dev/github.com/buchenberg/shepherd-kernel-go
+
+## Golden Vectors
+
+The `testdata/kernel_abi_v0.json` file contains deterministic test vectors shared across implementations. If your digest of the root witness body matches `sha256:28aa527e...`, your implementation is compatible.
+
+## Tests
+
+```bash
+go test -v ./...
+```
+
+161 tests, all passing:
+
+| Area | Tests |
+|---|---|
+| Golden vector digest compatibility (`canonical_test.go`) | 21 |
+| Store: append idempotency, conflict detection, content-addressed identity, frontier publish/resolve, causal closure, mode filtering, witness chains, authorization, persistence | 18 |
+| Effect bus: pub/sub, non-blocking, concurrency | 14 |
+| Scopes: fork/merge/discard, nesting, lifecycle, sandbox ownership | 34 |
+| Supervisor: rules, interventions, built-in rules | 24 |
+| Checkpoints: create/restore, single-use, index hygiene | 18 |
+| Workspace states: capture/apply/diff, reusability, non-mutating contract | 12 |
+| Git sandbox: in-place and worktree modes | 15 |
+| Integration: end-to-end rollback and worktree fork/discard/choose | 5 |
+
+## Dependencies
+
+- `modernc.org/sqlite` — pure Go SQLite driver (no CGo). The core module has exactly one direct dependency.
+- Go 1.21+
+
+The `sandbox/containerd/` adapter is a nested module with its own `go.mod`, so its (much larger) dependency graph never enters the core module. It is excluded from `go build ./...` and `go test ./...` here; build it from its own directory.
+
+## License
+
+No `LICENSE` file is currently present in this repository, so no rights are granted
+for reuse or redistribution yet. A license should be added before this module is
+consumed as a dependency or published. The sibling `yaah` project uses
+`MIT OR Apache-2.0`.
