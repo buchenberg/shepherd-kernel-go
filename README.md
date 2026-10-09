@@ -337,6 +337,18 @@ daemon; a stock image and the overlayfs snapshotter suffice, and no root-owned
 FIFO directory is required. It is Linux-only and can never be this module's
 default.
 
+**State durability.** A first run against a *cold* daemon (fresh namespace, no
+image) found an eleventh defect the warm-daemon runs had masked, and a twelfth
+that no run could have passed: `Destroy` deleted the committed layers backing
+captured states, so `Apply` after `Destroy` — plan 03's acceptance sequence —
+failed every time. States are now durable by construction: every `Capture`
+pins its committed layer under a namespace-scoped `shepherd-states` lease that
+outlives any sandbox, `Destroy` removes only the sandbox's private active
+layer, and an optional `StateReleaser` interface
+(`ReleaseState`) is the deliberate reclaim path — disk comes back when the
+caller says so, not when a sandbox happens to die. Promoting the release call
+into core's `Sandbox` interface is a separate kernel-API decision.
+
 ### Workspace State
 
 A **`WorkspaceState`** is a backend-neutral snapshot of a workspace — the replacement for the git-specific stash/HEAD pair:

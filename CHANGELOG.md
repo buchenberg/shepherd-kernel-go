@@ -4,6 +4,42 @@ Notable changes to `shepherd-kernel-go`. This project follows
 [Semantic Versioning](https://semver.org/); while pre-1.0, minor releases may
 contain breaking changes, which are called out below.
 
+## [Unreleased]
+
+containerd backend (`sandbox/containerd/`): captured states are now durable
+across sandbox teardown, and a cold-daemon defect in image resolution is fixed.
+Both were found by the first live run against a cold daemon (fresh namespace,
+image not yet pulled) — the warm-daemon runs that produced "12 consecutive
+green" had masked both.
+
+### Fixed (containerd)
+- `RootfsSnapshot` passed the caller's raw context to `img.RootFS`, the one
+  containerd call in the adapter not wrapped with the namespace injector. On a
+  cold daemon the image object comes from `Pull` with an empty diffIDs cache,
+  so the call reached the daemon and was rejected with
+  `namespace is required: failed precondition`; on a warm daemon
+  `GetImage`+`IsUnpacked` (namespaced) had already populated the cache, so the
+  missing wrapper never fired.
+
+### Changed (containerd, breaking for direct users of the adapter)
+- **Captured states now outlive the sandbox that captured them**, per the
+  kernel contract that a `WorkspaceState` has no lifecycle. Every `Capture`
+  pins its committed layer as a lease resource on a namespace-scoped
+  `shepherd-states` lease; `Destroy` releases the sandbox lease and removes
+  only the sandbox's private active layer, never committed layers; `Apply` no
+  longer prunes layers captured after the applied state — they are states the
+  caller may still hold. Plan 03's acceptance sequence (write → capture →
+  destroy → apply → verify) passes for the first time.
+- A failed state pin fails the `Capture` and rolls forward onto the committed
+  layer as an internal layer (the commit already renamed the active key), so
+  the sandbox stays usable and no unpinned state is handed out.
+
+### Added (containerd)
+- `StateReleaser` optional interface with `ReleaseState(ctx, state)`: the
+  deliberate reclaim path for a state's pin. The daemon's GC reclaims the
+  layer once nothing references it. Deliberately not part of core's `Sandbox`
+  interface; promoting it is a kernel-API decision.
+
 ## [v0.7.0] - 2026-10-08
 
 Phase 2b (substrates & materialization): recorded intents are now actionable —
