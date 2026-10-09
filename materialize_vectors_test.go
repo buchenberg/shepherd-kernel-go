@@ -19,12 +19,15 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
 type materializeVectorDoc struct {
 	Generator      string                    `json:"generator"`
+	SourceRepo     string                    `json:"source_repo"`
 	SourceCommit   string                    `json:"source_commit"`
+	PythonVersion  string                    `json:"python_version"`
 	RequestDigests []materializeDigestVector `json:"request_digests"`
 	EchoSequence   materializeSequence       `json:"echo_sequence"`
 	KVSequence     materializeSequence       `json:"kv_sequence"`
@@ -125,6 +128,29 @@ func loadMaterializeVectors(t *testing.T) materializeVectorDoc {
 		t.Fatalf("parse materialize vectors: %v", err)
 	}
 	return doc
+}
+
+// TestMaterializeVectorsCarryProvenance pins the vector file's header the way
+// TestCanonicalEdgeVectorsMatchPython pins the edge corpus: a regeneration
+// that loses its traceable revision must fail loudly rather than re-pin
+// silently. The pinned hash in golden_provenance_test.go guards the bytes;
+// this guards the provenance the bytes claim.
+func TestMaterializeVectorsCarryProvenance(t *testing.T) {
+	doc := loadMaterializeVectors(t)
+	if doc.Generator != "testdata/generate_materialize_vectors.py" {
+		t.Errorf("generator = %q, want the committed generator", doc.Generator)
+	}
+	// HasPrefix, not ==: the generator's git_commit swallows failures and
+	// returns "unknown (<exc>)", which an equality check would let through.
+	if doc.SourceCommit == "" || strings.HasPrefix(doc.SourceCommit, "unknown") {
+		t.Error("vector file has no source_commit, so the vectors cannot be traced to a revision")
+	}
+	if doc.SourceRepo == "" {
+		t.Error("vector file has no source_repo, so the checkout that produced it is unrecorded")
+	}
+	if doc.PythonVersion == "" {
+		t.Error("vector file has no python_version, so the generating interpreter is unrecorded")
+	}
 }
 
 // TestMaterializeRequestDigestMatchesPython pins the digest algorithm: the

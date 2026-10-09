@@ -66,6 +66,32 @@ func TestSubstrateRegistryUnknownSubstrate(t *testing.T) {
 	}
 }
 
+// nonComparableSubstrate is a value-typed Substrate holding a map, so its
+// dynamic type cannot be compared with == without panicking. It exists to
+// pin that the registry fails closed instead.
+type nonComparableSubstrate struct{ seen map[string]bool }
+
+func (n nonComparableSubstrate) SubstrateRef() string         { return "test.noncomparable.v1" }
+func (n nonComparableSubstrate) DeclarationSchemas() []string { return nil }
+func (n nonComparableSubstrate) CaptureSchemas() []string     { return nil }
+func (n nonComparableSubstrate) Containment() Containment     { return ContainContained }
+func (n nonComparableSubstrate) Materialize(context.Context, []Record) (MaterializationResult, error) {
+	return MaterializationResult{}, nil
+}
+
+func TestSubstrateRegistryNonComparableFailsClosed(t *testing.T) {
+	reg := NewSubstrateRegistry()
+	s := nonComparableSubstrate{seen: map[string]bool{}}
+	if err := reg.Register(s); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	// Re-registration cannot be identity-checked, so it must fail closed
+	// rather than panic on the interface comparison.
+	if err := reg.Register(s); err == nil {
+		t.Error("re-registering a non-comparable substrate succeeded, want a fail-closed error")
+	}
+}
+
 // --- echo substrate ---
 
 func TestEchoSubstratePairsDeclarationsWithCaptures(t *testing.T) {
@@ -377,16 +403,49 @@ func TestWorkspaceSubstrateRoundTripsFileWrites(t *testing.T) {
 	}
 }
 
+// TestWorkspaceSubstrateWritesEmptyFile pins that empty content is a write,
+// not a missing payload: "" is base64 for zero bytes, and rejecting it would
+// make creating an empty file inexpressible.
+func TestWorkspaceSubstrateWritesEmptyFile(t *testing.T) {
+	sb := fullCapsFake()
+	ws := NewWorkspaceSubstrate(sb)
+
+	result, err := ws.Materialize(context.Background(), []Record{
+		workspaceDecl(SchemaWorkspaceFileWrite, "sha256:empty", map[string]any{
+			"path":        "empty.txt",
+			"content_b64": "",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	if result.Outcome != MaterializationSuccess {
+		t.Fatalf("outcome = %q, want success (%s)", result.Outcome, result.FailureReason)
+	}
+	got, err := sb.ReadFile(context.Background(), "empty.txt")
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("file content = %q, want empty", got)
+	}
+	if digest := result.CaptureDrafts[0].Payload["digest"]; digest != sha256Hex("") {
+		t.Errorf("digest = %v, want the sha256 of empty content", digest)
+	}
+}
+
 func TestWorkspaceSubstrateRecordsExecOutcome(t *testing.T) {
 	sb := fullCapsFake()
 	sb.execResult = ExecResult{ExitCode: 3, Stdout: "out", Stderr: "err"}
 	ws := NewWorkspaceSubstrate(sb)
 
 	// A nonzero exit code is an observed result, not a substrate failure.
+	// An empty-string argument is a legitimate argument, not a malformed
+	// entry; only non-strings are rejected.
 	result, err := ws.Materialize(context.Background(), []Record{
 		workspaceDecl(SchemaWorkspaceExec, "sha256:e1", map[string]any{
 			"command":    "grep",
-			"args":       []any{"-c", "needle"},
+			"args":       []any{"-c", "needle", ""},
 			"cwd":        "/work",
 			"timeout_ms": json.Number("500"),
 		}),
@@ -400,7 +459,7 @@ func TestWorkspaceSubstrateRecordsExecOutcome(t *testing.T) {
 	if len(sb.execs) != 1 {
 		t.Fatalf("execs = %d, want 1", len(sb.execs))
 	}
-	if sb.execs[0].Command != "grep" || !reflect.DeepEqual(sb.execs[0].Args, []string{"-c", "needle"}) ||
+	if sb.execs[0].Command != "grep" || !reflect.DeepEqual(sb.execs[0].Args, []string{"-c", "needle", ""}) ||
 		sb.execs[0].Cwd != "/work" || sb.execs[0].Timeout.String() != "500ms" {
 		t.Errorf("exec request = %+v", sb.execs[0])
 	}
@@ -421,7 +480,7 @@ func TestWorkspaceSubstrateRecordsExecOutcome(t *testing.T) {
 	}
 }
 
-func TestWorkspaceSubstrateMidBatchFailureIsSplitState(t *testing.T) {
+func TestWorkspaceSubstrateAllWritesFailIsCleanFailure(t *testing.T) {
 	sb := fullCapsFake()
 	sb.writeErr = errors.New("disk full")
 	ws := NewWorkspaceSubstrate(sb)
@@ -492,6 +551,11 @@ func TestWorkspaceSubstrateSplitStateAfterPartialApplication(t *testing.T) {
 	if result.CaptureDrafts[0].Payload["path"] != "one.txt" {
 		t.Errorf("capture path = %v, want one.txt", result.CaptureDrafts[0].Payload["path"])
 	}
+	// The landed record keeps its anchor too: the receipt describes both
+	// halves of what landed, not just the captures.
+	if len(result.WorldSideAnchors) != 1 || result.WorldSideAnchors[0]["path"] != "one.txt" {
+		t.Errorf("anchors = %v, want the landed record's anchor", result.WorldSideAnchors)
+	}
 	if result.FailureReason == "" || !strings.Contains(result.FailureReason, "sha256:bad") {
 		t.Errorf("failure reason = %q, want it to name the failed record", result.FailureReason)
 	}
@@ -507,8 +571,12 @@ func TestWorkspaceSubstrateRejectsMalformedDeclarations(t *testing.T) {
 	}{
 		{"write without path", workspaceDecl(SchemaWorkspaceFileWrite, "sha256:x", map[string]any{"content_b64": "aGk="})},
 		{"write without content", workspaceDecl(SchemaWorkspaceFileWrite, "sha256:x", map[string]any{"path": "a.txt"})},
+		{"write with non-string content", workspaceDecl(SchemaWorkspaceFileWrite, "sha256:x", map[string]any{"path": "a.txt", "content_b64": json.Number("5")})},
 		{"write with bad base64", workspaceDecl(SchemaWorkspaceFileWrite, "sha256:x", map[string]any{"path": "a.txt", "content_b64": "!!!"})},
 		{"exec without command", workspaceDecl(SchemaWorkspaceExec, "sha256:x", map[string]any{})},
+		{"exec with non-string cwd", workspaceDecl(SchemaWorkspaceExec, "sha256:x", map[string]any{"command": "ls", "cwd": json.Number("1")})},
+		{"exec with non-string env value", workspaceDecl(SchemaWorkspaceExec, "sha256:x", map[string]any{"command": "ls", "env": map[string]any{"A": json.Number("1")}})},
+		{"exec with non-string arg", workspaceDecl(SchemaWorkspaceExec, "sha256:x", map[string]any{"command": "ls", "args": []any{"ok", json.Number("1")}})},
 	}
 	for _, tc := range cases {
 		result, err := ws.Materialize(context.Background(), []Record{tc.record})
@@ -524,6 +592,42 @@ func TestWorkspaceSubstrateRejectsMalformedDeclarations(t *testing.T) {
 		if result.FailureReason == "" {
 			t.Errorf("%s: empty failure reason", tc.name)
 		}
+	}
+}
+
+// TestWorkspaceSubstrateRejectsUnknownSchemas pins that a direct caller gets
+// a loud outcome for a schema outside the vocabulary (the dispatch layer
+// rejects those before the substrate sees them; this keeps the contract
+// self-contained). After a landed record the rejection is split_state — in
+// particular workspace.file.delete.v1, the deliberately absent schema.
+func TestWorkspaceSubstrateRejectsUnknownSchemas(t *testing.T) {
+	sb := fullCapsFake()
+	ws := NewWorkspaceSubstrate(sb)
+
+	result, err := ws.Materialize(context.Background(), []Record{
+		workspaceDecl("workspace.file.delete.v1", "sha256:del", map[string]any{"path": "gone.txt"}),
+	})
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	if result.Outcome != MaterializationCleanFailure {
+		t.Errorf("outcome = %q, want clean_failure for an unsupported schema", result.Outcome)
+	}
+	if len(result.CaptureDrafts) != 0 {
+		t.Errorf("captures = %d, want none", len(result.CaptureDrafts))
+	}
+
+	result, err = ws.Materialize(context.Background(), []Record{
+		workspaceDecl(SchemaWorkspaceFileWrite, "sha256:ok", map[string]any{
+			"path": "kept.txt", "content_b64": base64.StdEncoding.EncodeToString([]byte("kept")),
+		}),
+		workspaceDecl("workspace.file.delete.v1", "sha256:del", map[string]any{"path": "gone.txt"}),
+	})
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	if result.Outcome != MaterializationSplitState || len(result.CaptureDrafts) != 1 || len(result.WorldSideAnchors) != 1 {
+		t.Errorf("result = %+v, want split_state with one capture and one anchor", result)
 	}
 }
 

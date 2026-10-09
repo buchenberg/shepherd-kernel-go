@@ -83,10 +83,13 @@ var vectorFiles = []vectorFile{
 		// sequences through the reference Echo and SQLiteKV substrates,
 		// replayed ID-for-ID by materialize_vectors_test.go. The ledger
 		// replay sequence pins that a restarted store returns the stored
-		// receipt with exactly one substrate dispatch.
+		// receipt with exactly one substrate dispatch. Unlike the other
+		// vendored vectors, this file was generated under CPython 3.14.4 —
+		// the file's own python_version header (asserted non-empty by
+		// TestMaterializeVectorsCarryProvenance) is the source of truth.
 		path:        "testdata/materialize_vectors_v0.json",
 		wantSHA256:  "e5dfb3eb282327ccf96f4b32843175e7420128d8cbdf87952dc80a47c7125fa1",
-		generatedBy: "shepherd2@d34d5ca334871dfcb5a3dc76dd78045829fa4e56 (CPython 3.13.13)",
+		generatedBy: "shepherd2@d34d5ca334871dfcb5a3dc76dd78045829fa4e56 (CPython 3.14.4)",
 	},
 }
 

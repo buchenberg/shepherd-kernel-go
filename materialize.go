@@ -185,6 +185,10 @@ func Materialize(ctx context.Context, store *SQLiteTraceStore, opCtx OperationCo
 		// Normalized the same way the ledger serializes it, so a fresh
 		// receipt and a replayed one are equal under reflect.DeepEqual —
 		// Python gets this for free because its default is an empty tuple.
+		// Anchors are contractually JSON-native values (numbers as
+		// json.Number, the shape store reads produce): the replay decodes
+		// with UseNumber, so a substrate handing back a Go int would not
+		// compare equal to its own decoded form.
 		WorldSideAnchors: nonNilAnchors(result.WorldSideAnchors),
 	}
 	if err := store.recordCompletedMaterialization(req.AppendIntentID, digest, receipt); err != nil {
@@ -213,6 +217,12 @@ func ensureMaterializeAuthorized(ctx OperationContext) error {
 }
 
 // validateMaterializationRequest mirrors _validate_request.
+//
+// One Python check has no Go equivalent: Python rejects an explicitly empty
+// capture_trace_owner_id, but a Go string cannot distinguish "" from unset,
+// so an empty value is the documented default (CaptureOwner returns the
+// target owner) rather than an error. Only requests Python would already
+// reject observe this divergence; valid inputs behave identically.
 func validateMaterializationRequest(req MaterializationRequest) error {
 	if req.AppendIntentID == "" {
 		return fmt.Errorf("append_intent_id is required")
@@ -301,8 +311,9 @@ func substrateRefForRecords(store *SQLiteTraceStore, targets []Record) (string, 
 //
 // Go's empty string maps to Python's None for the two Optional fields
 // (capture_trace_owner_id, trust_mode): Python's dataclass distinguishes
-// None from "", but "" never survives validation for capture_trace_owner_id,
-// and a trust_mode of "" cannot be authorized, so the mapping is total.
+// None from "", but its own validation rejects "" for capture_trace_owner_id
+// (see validateMaterializationRequest for the recorded divergence) and a
+// trust_mode of "" cannot be authorized, so the mapping is total.
 func materializationRequestDigest(req MaterializationRequest, ctx OperationContext) (string, error) {
 	payload := map[string]any{
 		"append_intent_id":             req.AppendIntentID,
@@ -359,7 +370,13 @@ func materializationReceiptFromJSON(payload string) (MaterializationReceipt, err
 		FailureReason     string           `json:"failure_reason"`
 		WorldSideAnchors  []map[string]any `json:"world_side_anchors"`
 	}
-	if err := json.Unmarshal([]byte(payload), &stored); err != nil {
+	// UseNumber, matching retained-body reads: without it a numeric anchor
+	// value would decode as float64 while a fresh receipt (and Python's
+	// json.loads) holds the exact number, so the replay comparison at
+	// materialize.go's receipt construction would silently stop holding.
+	dec := json.NewDecoder(strings.NewReader(payload))
+	dec.UseNumber()
+	if err := dec.Decode(&stored); err != nil {
 		return MaterializationReceipt{}, fmt.Errorf("materialization receipt decode: %w", err)
 	}
 	return MaterializationReceipt{

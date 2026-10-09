@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 )
 
 // MaterializationOutcome is the result vocabulary a substrate reports.
@@ -107,6 +108,9 @@ type Substrate interface {
 // Registering a second, different substrate under an existing ref is an
 // error; registering the same substrate twice is a no-op (Python compares
 // identity, Go compares interface equality, which is identity for pointers).
+// A non-comparable implementation (a value whose struct embeds a map, say)
+// cannot be identity-compared without panicking, so it fails closed on
+// re-registration instead — see sameSubstrate.
 type SubstrateRegistry struct {
 	substrates map[string]Substrate
 }
@@ -118,11 +122,27 @@ func NewSubstrateRegistry() *SubstrateRegistry {
 
 // Register adds a substrate under its ref.
 func (r *SubstrateRegistry) Register(s Substrate) error {
-	if existing, ok := r.substrates[s.SubstrateRef()]; ok && existing != s {
-		return &SubstrateError{fmt.Sprintf("substrate %q is already registered", s.SubstrateRef())}
+	ref := s.SubstrateRef()
+	if existing, ok := r.substrates[ref]; ok && !sameSubstrate(existing, s) {
+		return &SubstrateError{fmt.Sprintf("substrate %q is already registered", ref)}
 	}
-	r.substrates[s.SubstrateRef()] = s
+	r.substrates[ref] = s
 	return nil
+}
+
+// sameSubstrate reports whether two registered substrates are the same
+// instance. Interface equality is identity for the intended pointer
+// implementations, but it panics when the dynamic type is not comparable —
+// for example a Substrate implemented on a value-typed struct containing a
+// map. Such a value cannot be identity-checked, so it is treated as
+// different and fails closed; implement Substrate on a pointer to get the
+// Python no-op re-registration semantics.
+func sameSubstrate(a, b Substrate) bool {
+	t := reflect.TypeOf(a)
+	if t == nil || t != reflect.TypeOf(b) || !t.Comparable() {
+		return false
+	}
+	return a == b
 }
 
 // Get returns the substrate registered under ref.

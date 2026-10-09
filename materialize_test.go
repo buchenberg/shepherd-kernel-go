@@ -337,6 +337,83 @@ func TestMaterializeRetryReturnsReceiptWithoutRedispatchingSubstrate(t *testing.
 	}
 }
 
+// anchorSubstrate emits a numeric world-side anchor, the shape a substrate
+// reading declarations from the trace produces (json.Number). The ledger
+// replay must return a receipt equal to the fresh one; the receipt decode
+// uses UseNumber for exactly this.
+type anchorSubstrate struct {
+	calls int
+}
+
+func (a *anchorSubstrate) SubstrateRef() string         { return "test.anchor.v1" }
+func (a *anchorSubstrate) DeclarationSchemas() []string { return []string{"example.write.v1"} }
+func (a *anchorSubstrate) CaptureSchemas() []string     { return []string{"example.write.applied.v1"} }
+func (a *anchorSubstrate) Containment() Containment     { return ContainContained }
+
+func (a *anchorSubstrate) Materialize(_ context.Context, records []Record) (MaterializationResult, error) {
+	a.calls++
+	return MaterializationResult{
+		Outcome: MaterializationSuccess,
+		CaptureDrafts: []RecordDraft{{
+			Mode:            Capture,
+			SchemaRef:       "example.write.applied.v1",
+			KindLabel:       "write_applied",
+			Payload:         map[string]any{"call": a.calls},
+			CausedByFactIDs: []string{records[0].Envelope.RecordID},
+		}},
+		WorldSideAnchors: []map[string]any{{
+			"kind":          "counter",
+			"count":         json.Number("41"),
+			"substrate_ref": "test.anchor.v1",
+		}},
+	}, nil
+}
+
+// TestMaterializeReceiptReplayPreservesAnchorValueTypes pins that a replayed
+// receipt decodes its numeric anchors back to the same value a fresh receipt
+// carries. Without UseNumber decoding the replayed count would be float64
+// and the receipts would diverge under reflect.DeepEqual.
+func TestMaterializeReceiptReplayPreservesAnchorValueTypes(t *testing.T) {
+	store := newMemStore(t)
+	substrate := &anchorSubstrate{}
+	registry := NewSubstrateRegistry()
+	if err := registry.Register(substrate); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	declaration, err := store.Append(materializeAppend, declareBatch(
+		"intent:anchor-declaration", "owner:anchor", "test.anchor.v1",
+		RecordDraft{Mode: Declaration, SchemaRef: "example.write.v1", Payload: map[string]any{"value": jsonNumber(t, 1)}},
+	))
+	if err != nil {
+		t.Fatalf("append declaration: %v", err)
+	}
+	req := MaterializationRequest{
+		AppendIntentID:            "intent:anchor-apply",
+		TargetTraceOwnerID:        "owner:anchor",
+		TargetRecordIDs:           declaration.FactIDs,
+		TargetThroughOwnerOrdinal: MaxOwnerOrdinal,
+	}
+
+	first, err := Materialize(context.Background(), store, materializeContext(), req, registry)
+	if err != nil {
+		t.Fatalf("first materialize: %v", err)
+	}
+	second, err := Materialize(context.Background(), store, materializeContext(), req, registry)
+	if err != nil {
+		t.Fatalf("second materialize: %v", err)
+	}
+
+	if !reflect.DeepEqual(first, second) {
+		t.Errorf("replayed receipt diverged:\nfirst  = %#v\nsecond = %#v", first, second)
+	}
+	if got, ok := second.WorldSideAnchors[0]["count"].(json.Number); !ok || got != json.Number("41") {
+		t.Errorf("replayed anchor count = %v (%T), want json.Number 41", second.WorldSideAnchors[0]["count"], second.WorldSideAnchors[0]["count"])
+	}
+	if substrate.calls != 1 {
+		t.Errorf("substrate calls = %d, want 1", substrate.calls)
+	}
+}
+
 func TestMaterializeIntentConflictIsRejectedBeforeSubstrateDispatch(t *testing.T) {
 	store := newMemStore(t)
 	substrate := &countingSubstrate{}

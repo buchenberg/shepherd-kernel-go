@@ -89,9 +89,11 @@ func (w *WorkspaceSubstrate) Containment() Containment {
 // Capability gating happens before the first mutation: a batch that needs a
 // capability the backend does not have fails cleanly with nothing applied —
 // the git backend's honest-failure story, never a partial append. A record
-// that fails after earlier records landed reports split_state, with
-// captures for the part that landed and a failure reason naming the record
-// that failed.
+// that fails after earlier records landed reports split_state, with captures
+// and anchors for the part that landed and a failure reason naming the
+// record that failed. A schema outside the vocabulary is a record failure
+// like any other (the dispatch layer already rejects it before this point,
+// but a direct caller gets the same loud outcome instead of a silent skip).
 //
 // An exec that runs to completion is a success even with a nonzero exit
 // code: the exit code is the observed result, recorded in the capture. Only
@@ -129,17 +131,21 @@ func (w *WorkspaceSubstrate) Materialize(ctx context.Context, records []Record) 
 		case SchemaWorkspaceFileWrite:
 			draft, anchor, err := w.applyWrite(ctx, record)
 			if err != nil {
-				return splitOrClean(captures, record, err), nil
+				return splitOrClean(captures, anchors, record, err), nil
 			}
 			captures = append(captures, draft)
 			anchors = append(anchors, anchor)
 		case SchemaWorkspaceExec:
 			draft, anchor, err := w.applyExec(ctx, record)
 			if err != nil {
-				return splitOrClean(captures, record, err), nil
+				return splitOrClean(captures, anchors, record, err), nil
 			}
 			captures = append(captures, draft)
 			anchors = append(anchors, anchor)
+		default:
+			return splitOrClean(captures, anchors, record, &SubstrateError{
+				fmt.Sprintf("workspace substrate does not accept schema %q", record.Envelope.SchemaRef),
+			}), nil
 		}
 	}
 	return MaterializationResult{
@@ -151,16 +157,18 @@ func (w *WorkspaceSubstrate) Materialize(ctx context.Context, records []Record) 
 
 // splitOrClean turns a mid-batch record failure into the honest outcome:
 // split_state when earlier records already landed, clean_failure when
-// nothing did.
-func splitOrClean(captures []RecordDraft, failed Record, err error) MaterializationResult {
+// nothing did. The landed records keep their anchors as well as their
+// captures, so the receipt describes both halves of what landed.
+func splitOrClean(captures []RecordDraft, anchors []map[string]any, failed Record, err error) MaterializationResult {
 	reason := fmt.Sprintf("record %s: %v", failed.Envelope.RecordID, err)
 	if len(captures) == 0 {
 		return MaterializationResult{Outcome: MaterializationCleanFailure, FailureReason: reason}
 	}
 	return MaterializationResult{
-		Outcome:       MaterializationSplitState,
-		CaptureDrafts: captures,
-		FailureReason: reason,
+		Outcome:          MaterializationSplitState,
+		CaptureDrafts:    captures,
+		WorldSideAnchors: anchors,
+		FailureReason:    reason,
 	}
 }
 
@@ -169,11 +177,17 @@ func (w *WorkspaceSubstrate) applyWrite(ctx context.Context, record Record) (Rec
 	if path == "" {
 		return RecordDraft{}, nil, &SubstrateError{"workspace file write requires a non-empty path"}
 	}
-	contentB64, _ := record.Body.Payload["content_b64"].(string)
-	if contentB64 == "" {
+	contentB64, ok := record.Body.Payload["content_b64"]
+	if !ok {
 		return RecordDraft{}, nil, &SubstrateError{fmt.Sprintf("workspace file write %q requires content_b64", path)}
 	}
-	content, err := base64.StdEncoding.DecodeString(contentB64)
+	contentB64String, ok := contentB64.(string)
+	if !ok {
+		return RecordDraft{}, nil, &SubstrateError{fmt.Sprintf("workspace file write %q: content_b64 must be a base64 string", path)}
+	}
+	// An empty string is the encoding of empty content: a write may create an
+	// empty file, and rejecting it would make that intent inexpressible.
+	content, err := base64.StdEncoding.DecodeString(contentB64String)
 	if err != nil {
 		return RecordDraft{}, nil, &SubstrateError{fmt.Sprintf("workspace file write %q: content_b64 is not valid base64", path)}
 	}
@@ -220,7 +234,10 @@ func (w *WorkspaceSubstrate) applyExec(ctx context.Context, record Record) (Reco
 		req.Args = args
 	}
 	if raw, ok := record.Body.Payload["cwd"]; ok {
-		cwd, _ := raw.(string)
+		cwd, ok := raw.(string)
+		if !ok {
+			return RecordDraft{}, nil, &SubstrateError{fmt.Sprintf("workspace exec %q: cwd must be a string", command)}
+		}
 		req.Cwd = cwd
 	}
 	if raw, ok := record.Body.Payload["env"]; ok {
@@ -318,8 +335,8 @@ func stringSliceFromPayload(raw any, field string) ([]string, error) {
 	case []any:
 		out := make([]string, 0, len(v))
 		for _, item := range v {
-			s, _ := item.(string)
-			if s == "" {
+			s, ok := item.(string)
+			if !ok {
 				return nil, fmt.Errorf("%s entries must be strings", field)
 			}
 			out = append(out, s)
@@ -337,7 +354,10 @@ func stringMapFromPayload(raw any, field string) (map[string]string, error) {
 	case map[string]any:
 		out := make(map[string]string, len(v))
 		for k, item := range v {
-			s, _ := item.(string)
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s values must be strings", field)
+			}
 			out[k] = s
 		}
 		return out, nil

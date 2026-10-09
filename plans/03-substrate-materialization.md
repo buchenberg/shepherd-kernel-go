@@ -188,8 +188,8 @@ down" discipline:
    `clean_failure` is what a capability-gated batch returns, and
    `split_state` is what a mid-batch record failure returns.
    `WorkspaceSubstrate` uses all three: capability gate → `clean_failure`
-   (nothing applied), mid-batch failure → `split_state` (captures only for
-   the records that landed).
+   (nothing applied), mid-batch failure → `split_state` (captures and anchors
+   only for the records that landed).
 
 2. **`workspace.file.delete.v1` is not in the vocabulary.** The `Sandbox`
    contract has no delete operation, and the only thing `WriteFile` could
