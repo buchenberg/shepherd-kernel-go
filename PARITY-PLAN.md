@@ -80,7 +80,7 @@ divergence (documented decision) · ➖ out of scope · 🟦 Go-only strength.
 | `TraceStore` protocol surface | `append, preview_*, read_fact, read_owner_prefix, read_path_prefix, publish_cut/frontier, resolve_cut/frontier, read_owner_cutoff, read_causal_closure, close` | all except **`ReadPathPrefix`** (table `path_entries` exists) | ⚠️ — **plan 01** |
 | Backend-agnostic conformance suite | `test_trace_store_conformance.py` (438 L, parametrized — explicitly intended to gate a Go backend) | ad-hoc store tests (18) | ❌ port suite — **plan 01** |
 | 25 executable ABI laws | `test_kernel_abi_v0_laws.py` (~790 L) | partial coverage across `canonical_test.go`/`store_test.go` | ⚠️ map + close — **plan 01** |
-| Authorization model | Slice-A trusted contexts; `full_internal` requires trusted authority; operation kinds | same for append/read; `OpMaterialize`/`OpObserve` declared but unenforced | ⚠️ enforce with materialization — **plan 03** |
+| Authorization model | Slice-A trusted contexts; `full_internal` requires trusted authority; operation kinds | same for append/read; `OpMaterialize` enforced by `Materialize` (any other operation kind rejected); `OpObserve` still reserved | ✅ for materialize (plan 03, landed); `OpObserve` stays reserved |
 | `context.Context` / cancellation | n/a (threading) | store APIs take no `context.Context` | ⚠️ Go-idiom gap — **plan 05** |
 
 ### 2.2 Rings 1–2 — schemas and runtime handles
@@ -98,8 +98,8 @@ divergence (documented decision) · ➖ out of scope · 🟦 Go-only strength.
 
 | Capability | Python | Go | Verdict |
 |---|---|---|---|
-| `Substrate` protocol + registry (`substrate_ref`, declaration/capture schemas, containment, `materialize`) | `vnext/substrates.py`, `EchoSubstrate`, `SQLiteKVSubstrate` (`kv.sqlite.local.v1`) | ❌ (Go `Sandbox` is workspace-level, not trace-record-level) | **plan 03** — bridge both concepts |
-| `Materialize` dispatch: owner-path-explicit requests, witness-stamped operation, declaration→capture append, completed-intent idempotency ledger | `vnext/materialization.py` (~296 L) | ❌ | **plan 03** |
+| `Substrate` protocol + registry (`substrate_ref`, declaration/capture schemas, containment, `materialize`) | `vnext/substrates.py`, `EchoSubstrate`, `SQLiteKVSubstrate` (`kv.sqlite.local.v1`) | `substrate.go`/`substrate_echo.go`/`substrate_kv.go` — same refs, same outcome vocabulary, `SubstrateRegistry`, plus the Go-native `WorkspaceSubstrate` (`workspace.sandbox.v1`) bridged to `Sandbox` | ✅ (plan 03, landed; `materialize_vectors_v0.json` pins the record identities) |
+| `Materialize` dispatch: owner-path-explicit requests, witness-stamped operation, declaration→capture append, completed-intent idempotency ledger | `vnext/materialization.py` (~296 L) | `materialize.go` — `materialization_intents` ledger, append-before-ledger ordering, request digest in the ASCII json flavour, `OpMaterialize` enforced | ✅ (plan 03, landed; crash-window replay proven in `TestMaterializeCrashWindowReplayIsConsistent`) |
 | Skeleton `Session` over vcs-core (retained outputs, custody validation, seal handoff) | `vnext/skeleton.py` (1302 L) | ➖ requires vcs-core | out of scope; plan 04 takes the settlement *pattern* only |
 
 ### 2.4 Scope, checkpoints, materialization mechanics (v1 ↔ Go sandbox layer)

@@ -46,18 +46,16 @@ const (
 	OpRead       OperationKind = "read"
 	OpPublishCut OperationKind = "publish_cut"
 
-	// OpMaterialize and OpObserve are reserved for plan 03 (substrate
-	// materialization) and are not reachable today: no exported entry point
-	// accepts an OperationContext, and the exported AppendContext/ReadContext
-	// helpers set the operation themselves. They are declared so the vocabulary
-	// is fixed before the callers exist.
-	//
-	// Note that OperationContext.Operation is carried but not yet consulted by any
-	// authorization check. Do not rely on it to gate anything until plan 03 wires
-	// it; see TestReservedOperationKindsAreUnreachable, which asserts both facts
-	// so the gap is deliberate rather than assumed.
+	// OpMaterialize is the operation kind the substrate materialization
+	// dispatch requires (plan 03): Materialize accepts an OperationContext
+	// and rejects any context whose Operation is not this kind. The
+	// append/read entry points still derive their own operation kinds, so
+	// the only way to present this one is through Materialize itself.
 	OpMaterialize OperationKind = "materialize"
-	OpObserve     OperationKind = "observe"
+
+	// OpObserve is reserved for a future operation and remains unreachable:
+	// no exported entry point presents it.
+	OpObserve OperationKind = "observe"
 )
 
 // RecordDraft is an append input. Drafts are not retained records.
@@ -172,11 +170,11 @@ type AppendReceipt struct {
 
 // OperationContext is the trace-facing operation context for kernel operations.
 //
-// Operation records which operation the context was built for, but no
-// authorization check consults it yet: ensureAppendAuthorized and
-// ensureReadAuthorized look only at the trust mode, authority refs and
-// visibility profile. Treat it as descriptive, not enforcing, until plan 03 adds
-// materialization and the checks that go with it.
+// Operation records which operation the context was built for. Since plan 03,
+// the materialization dispatch consults it: ensureMaterializeAuthorized
+// requires OpMaterialize and rejects anything else. The append/read helpers
+// still set it themselves and their authorization checks still do not consult
+// it, so outside Materialize it remains descriptive.
 type OperationContext struct {
 	ActorRef               string
 	Operation              OperationKind

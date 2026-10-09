@@ -1,0 +1,224 @@
+{
+  "echo_sequence": {
+    "capture": {
+      "caused_by": [
+        "sha256:9ef9f12cca941bb510088bc1c02144558d0b73c6c82004fd50021e24d061c3b7"
+      ],
+      "digest": "sha256:38c5302025c994223483278ecf003bf7d6d2b9179e16dee1d167ef0e620386b9",
+      "kind_label": "write",
+      "mode": "capture",
+      "payload": {
+        "n": 42,
+        "path": "note.txt",
+        "text": "hello <>&"
+      },
+      "record_id": "sha256:38c5302025c994223483278ecf003bf7d6d2b9179e16dee1d167ef0e620386b9",
+      "schema_ref": "vector.write.v1",
+      "witness_ref": "sha256:4b31da5482a3074718688396f0bb0ef25b16a5ef1d1f17643720a1c6f6e772f1"
+    },
+    "declaration": {
+      "drafts": [
+        {
+          "kind_label": "write",
+          "mode": "declaration",
+          "payload": {
+            "n": 42,
+            "path": "note.txt",
+            "text": "hello <>&"
+          },
+          "schema_ref": "vector.write.v1"
+        }
+      ],
+      "fact_ids": [
+        "sha256:9ef9f12cca941bb510088bc1c02144558d0b73c6c82004fd50021e24d061c3b7"
+      ],
+      "intent": "vector:echo:declare",
+      "owner": "owner:vector-echo",
+      "substrate_ref": "vector.echo.v1"
+    },
+    "receipt": {
+      "failure_reason": "",
+      "outcome": "success",
+      "produced_record_ids": [
+        "sha256:38c5302025c994223483278ecf003bf7d6d2b9179e16dee1d167ef0e620386b9"
+      ],
+      "substrate_ref": "vector.echo.v1",
+      "target_record_ids": [
+        "sha256:9ef9f12cca941bb510088bc1c02144558d0b73c6c82004fd50021e24d061c3b7"
+      ],
+      "world_side_anchors": []
+    },
+    "request": {
+      "append_intent_id": "vector:echo:apply",
+      "capture_trace_owner_id": null,
+      "target_through_owner_ordinal": 9223372036854775807,
+      "target_trace_owner_id": "owner:vector-echo"
+    },
+    "witness": {
+      "containment": "contained",
+      "record_id": "sha256:4b31da5482a3074718688396f0bb0ef25b16a5ef1d1f17643720a1c6f6e772f1",
+      "substrate_ref": "vector.echo.v1"
+    }
+  },
+  "generator": "testdata/generate_materialize_vectors.py",
+  "kv_sequence": {
+    "capture": {
+      "caused_by": [
+        "sha256:59fe58d12179da252ce8f9d13f732a64ea65f3c2efdcbd9c432e63f34ae4ff3e"
+      ],
+      "digest": "sha256:93c1a8e65f56a78b43b7e066cdad09407d804a1eda82af6c019d2c8f19ed3371",
+      "kind_label": "kv_put_applied",
+      "mode": "capture",
+      "payload": {
+        "key": "answer",
+        "value": {
+          "n": 42
+        }
+      },
+      "record_id": "sha256:93c1a8e65f56a78b43b7e066cdad09407d804a1eda82af6c019d2c8f19ed3371",
+      "schema_ref": "shepherd2.kv.put.applied.v1",
+      "witness_ref": "sha256:82dcf80f8226aaa671181d2b4bd7470fe6cef43a14f6c126ea83238b35757da7"
+    },
+    "declaration": {
+      "drafts": [
+        {
+          "kind_label": "kv_put",
+          "mode": "declaration",
+          "payload": {
+            "key": "answer",
+            "value": {
+              "n": 42
+            }
+          },
+          "schema_ref": "shepherd2.kv.put.v1"
+        }
+      ],
+      "fact_ids": [
+        "sha256:59fe58d12179da252ce8f9d13f732a64ea65f3c2efdcbd9c432e63f34ae4ff3e"
+      ],
+      "intent": "vector:kv:declare",
+      "owner": "owner:vector-kv",
+      "substrate_ref": "kv.sqlite.local.v1"
+    },
+    "receipt": {
+      "failure_reason": "",
+      "outcome": "success",
+      "produced_record_ids": [
+        "sha256:93c1a8e65f56a78b43b7e066cdad09407d804a1eda82af6c019d2c8f19ed3371"
+      ],
+      "substrate_ref": "kv.sqlite.local.v1",
+      "target_record_ids": [
+        "sha256:59fe58d12179da252ce8f9d13f732a64ea65f3c2efdcbd9c432e63f34ae4ff3e"
+      ],
+      "world_side_anchors": [
+        {
+          "key": "answer",
+          "kind": "kv_key",
+          "substrate_ref": "kv.sqlite.local.v1"
+        }
+      ]
+    },
+    "request": {
+      "append_intent_id": "vector:kv:apply",
+      "capture_trace_owner_id": null,
+      "target_through_owner_ordinal": 9223372036854775807,
+      "target_trace_owner_id": "owner:vector-kv"
+    },
+    "witness": {
+      "containment": "contained",
+      "record_id": "sha256:82dcf80f8226aaa671181d2b4bd7470fe6cef43a14f6c126ea83238b35757da7",
+      "substrate_ref": "kv.sqlite.local.v1"
+    },
+    "world_value": {
+      "n": 42
+    }
+  },
+  "python_version": "3.14.4",
+  "replay_sequence": {
+    "declaration_fact_ids": [
+      "sha256:76aa5edc3925f643b9b1e6c4c61a665ed68166bc7975c68334206d9791366d23"
+    ],
+    "first_receipt": {
+      "failure_reason": "",
+      "outcome": "success",
+      "produced_record_ids": [
+        "sha256:d5208dcb5323b62ba963ffc35e5053a12d5848e9af93dd593e9f61c7ef15f855"
+      ],
+      "substrate_ref": "vector.count.v1",
+      "target_record_ids": [
+        "sha256:76aa5edc3925f643b9b1e6c4c61a665ed68166bc7975c68334206d9791366d23"
+      ],
+      "world_side_anchors": []
+    },
+    "second_receipt": {
+      "failure_reason": "",
+      "outcome": "success",
+      "produced_record_ids": [
+        "sha256:d5208dcb5323b62ba963ffc35e5053a12d5848e9af93dd593e9f61c7ef15f855"
+      ],
+      "substrate_ref": "vector.count.v1",
+      "target_record_ids": [
+        "sha256:76aa5edc3925f643b9b1e6c4c61a665ed68166bc7975c68334206d9791366d23"
+      ],
+      "world_side_anchors": []
+    },
+    "substrate_calls": 1
+  },
+  "request_digests": [
+    {
+      "digest": "2c7f7f38773cf14d8675ba2b230ec5d3e12ecc8d4574e6f4d663e8dbbabb3d4e",
+      "request": {
+        "actor_ref": "runtime:vector",
+        "append_intent_id": "vector:digest:one",
+        "authority_refs": [
+          "trusted:internal"
+        ],
+        "capture_trace_owner_id": null,
+        "schema_environment_ref": "shepherd2-slice-a",
+        "target_record_ids": [
+          "sha256:aaaa",
+          "sha256:bbbb"
+        ],
+        "target_through_owner_ordinal": 9223372036854775807,
+        "target_trace_owner_id": "owner:digest",
+        "trust_mode": "internal"
+      }
+    },
+    {
+      "digest": "3f2b461b3aa570aba3c4672a647f4ceb10c79768f5421c9e0704e3122521a03c",
+      "request": {
+        "actor_ref": "runtime:vector",
+        "append_intent_id": "vector:digest:two",
+        "authority_refs": [
+          "trusted:internal"
+        ],
+        "capture_trace_owner_id": "owner:captures",
+        "schema_environment_ref": "shepherd2-slice-a",
+        "target_record_ids": [
+          "sha256:cccc"
+        ],
+        "target_through_owner_ordinal": 5,
+        "target_trace_owner_id": "owner:digest",
+        "trust_mode": "internal"
+      }
+    },
+    {
+      "digest": "2aa716d5f6d2c7a3a02ea46741a3a4951581f7d73e50652ec9819673a8fafd60",
+      "request": {
+        "actor_ref": "runtime:vector <actor>",
+        "append_intent_id": "vector:digest:ünïcode",
+        "authority_refs": [],
+        "capture_trace_owner_id": null,
+        "schema_environment_ref": "shepherd2-slice-a",
+        "target_record_ids": [
+          "sha256:dddd"
+        ],
+        "target_through_owner_ordinal": 0,
+        "target_trace_owner_id": "owner:dïgest",
+        "trust_mode": null
+      }
+    }
+  ],
+  "source_commit": "d34d5ca334871dfcb5a3dc76dd78045829fa4e56",
+  "source_repo": "../shepherd"
+}

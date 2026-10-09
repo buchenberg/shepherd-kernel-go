@@ -76,6 +76,18 @@ var vectorFiles = []vectorFile{
 		wantSHA256:  "02f596e7eaec5215868ec3fc1ec0e911c2395b64d0e5cd27793129eca8666f69",
 		generatedBy: "shepherd2@d34d5ca334871dfcb5a3dc76dd78045829fa4e56 (CPython 3.13.13)",
 	},
+	{
+		// T2b.5 materialize vectors: the request digests (which pin the
+		// ASCII json.dumps flavour and the "" <-> null mapping for the
+		// Optional request fields) and the declare -> materialize record
+		// sequences through the reference Echo and SQLiteKV substrates,
+		// replayed ID-for-ID by materialize_vectors_test.go. The ledger
+		// replay sequence pins that a restarted store returns the stored
+		// receipt with exactly one substrate dispatch.
+		path:        "testdata/materialize_vectors_v0.json",
+		wantSHA256:  "e5dfb3eb282327ccf96f4b32843175e7420128d8cbdf87952dc80a47c7125fa1",
+		generatedBy: "shepherd2@d34d5ca334871dfcb5a3dc76dd78045829fa4e56 (CPython 3.13.13)",
+	},
 }
 
 // normalizeEOL returns data with CRLF replaced by LF.

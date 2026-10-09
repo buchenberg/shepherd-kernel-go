@@ -313,26 +313,24 @@ func assertSameSequence(t *testing.T, read int, field string, got, want []string
 	}
 }
 
-// TestReservedOperationKindsAreUnreachable pins the current status of
-// OpMaterialize and OpObserve, which plan 03 reserves for substrate
-// materialization.
+// TestReservedOperationKindsAreUnreachable pins the status of the reserved
+// operation kinds after plan 03.
 //
-// Plan 01 §2 expected these to be "rejected or ignored consistently rather than
-// silently trusted". Verified instead: they cannot be supplied at all through the
-// exported API — the entry points take AppendContext or ReadContext, whose
-// ToOperationContext helpers set the operation themselves — and
-// OperationContext.Operation is never read anywhere in the package (no
-// occurrence of `.Operation` selects a code path).
+// History: both kinds were once unreachable — the entry points take
+// AppendContext or ReadContext, whose ToOperationContext helpers set the
+// operation themselves, and no code read OperationContext.Operation. Plan 03
+// wired OpMaterialize: Materialize accepts an OperationContext and
+// ensureMaterializeAuthorized rejects any context whose Operation is not
+// OpMaterialize. That inverted the gap assertion this test used to carry
+// ("expected to be inverted into a rejection check when plan 03 wires
+// materialization"), exactly as its comment anticipated.
 //
-// So there is nothing to reject today, and the hazard the plan described does not
-// exist: a caller cannot make an append present itself as a materialization.
-// What this test does is make the two supporting facts deliberate, and leave a
-// tripwire for the moment plan 03 makes Operation load-bearing.
+// OpObserve remains reserved and unreachable.
 func TestReservedOperationKindsAreUnreachable(t *testing.T) {
 	// A reserved kind must not collide with an enforced one, or declaring it
 	// would silently change the meaning of an existing operation.
-	enforced := []OperationKind{OpAppend, OpRead, OpPublishCut}
-	for _, reserved := range []OperationKind{OpMaterialize, OpObserve} {
+	enforced := []OperationKind{OpAppend, OpRead, OpPublishCut, OpMaterialize}
+	for _, reserved := range []OperationKind{OpObserve} {
 		for _, e := range enforced {
 			if reserved == e {
 				t.Fatalf("reserved operation %q is the same as enforced %q", reserved, e)
@@ -340,8 +338,8 @@ func TestReservedOperationKindsAreUnreachable(t *testing.T) {
 		}
 	}
 
-	// The exported entry points derive their own operation, which is what makes
-	// the reserved kinds unreachable rather than merely unused.
+	// The append/read entry points still derive their own operation, which
+	// is what keeps OpObserve unreachable rather than merely unused.
 	if got := trustedAppend.ToOperationContext(OpAppend).Operation; got != OpAppend {
 		t.Errorf("AppendContext.ToOperationContext(OpAppend).Operation = %q, want %q", got, OpAppend)
 	}
@@ -349,15 +347,17 @@ func TestReservedOperationKindsAreUnreachable(t *testing.T) {
 		t.Errorf("ReadContext.ToOperationContext().Operation = %q, want %q", got, OpRead)
 	}
 
-	// The documented gap, asserted so it stays deliberate. The authorization
-	// helpers do not consult Operation, so routing a reserved kind through one of
-	// them today would be accepted. This assertion is expected to be *inverted*
-	// into a rejection check when plan 03 wires materialization; if it starts
-	// failing before then, someone has added the check and this test should be
-	// updated to pin the rejection instead.
-	if err := ensureAppendAuthorized(trustedAppend.ToOperationContext(OpMaterialize)); err != nil {
-		t.Fatalf("ensureAppendAuthorized now rejects a reserved operation (%v): good — "+
-			"invert this assertion to pin the rejection rather than the gap", err)
+	// OpMaterialize is now enforced, in the direction the old gap assertion
+	// predicted: a materialize context is required for Materialize, and any
+	// other operation kind is rejected (see
+	// TestMaterializeRejectsNonMaterializeOperationContext for the dispatch
+	// level; this pins the authorization helper itself).
+	trusted := trustedAppend.ToOperationContext(OpMaterialize)
+	if err := ensureMaterializeAuthorized(trusted); err != nil {
+		t.Errorf("ensureMaterializeAuthorized rejected a trusted materialize context: %v", err)
+	}
+	if err := ensureMaterializeAuthorized(trustedAppend.ToOperationContext(OpAppend)); err == nil {
+		t.Error("ensureMaterializeAuthorized accepted an append operation context, want rejection")
 	}
 }
 
