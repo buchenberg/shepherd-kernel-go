@@ -233,6 +233,9 @@ type fakeSandbox struct {
 	writeErr error
 	// writeHook, when set, can fail individual writes by path.
 	writeHook func(path string) error
+	// execDeadlines records, per Exec call, whether the ctx carried a
+	// deadline — the observable effect of a declared timeout_ms.
+	execDeadlines []bool
 }
 
 func (f *fakeSandbox) Backend() string { return f.backend }
@@ -248,8 +251,10 @@ func (f *fakeSandbox) Apply(context.Context, WorkspaceState) error { return nil 
 func (f *fakeSandbox) Diff(context.Context, WorkspaceState, int) (string, []string, error) {
 	return "", nil, nil
 }
-func (f *fakeSandbox) Exec(_ context.Context, req ExecRequest) (ExecResult, error) {
+func (f *fakeSandbox) Exec(ctx context.Context, req ExecRequest) (ExecResult, error) {
 	f.execs = append(f.execs, req)
+	_, hasDeadline := ctx.Deadline()
+	f.execDeadlines = append(f.execDeadlines, hasDeadline)
 	return f.execResult, nil
 }
 func (f *fakeSandbox) ReadFile(_ context.Context, path string) ([]byte, error) {
@@ -463,177 +468,6 @@ func TestWorkspaceSubstrateRecordsExecOutcome(t *testing.T) {
 		sb.execs[0].Cwd != "/work" || sb.execs[0].Timeout.String() != "500ms" {
 		t.Errorf("exec request = %+v", sb.execs[0])
 	}
-
-	draft := result.CaptureDrafts[0]
-	if draft.SchemaRef != SchemaWorkspaceExecApplied {
-		t.Errorf("schema = %q", draft.SchemaRef)
-	}
-	payload := draft.Payload
-	if payload["exit_code"] != 3 {
-		t.Errorf("exit_code = %v, want 3", payload["exit_code"])
-	}
-	if payload["stdout_digest"] != sha256Hex("out") {
-		t.Errorf("stdout_digest = %v", payload["stdout_digest"])
-	}
-	if payload["stderr_digest"] != sha256Hex("err") {
-		t.Errorf("stderr_digest = %v", payload["stderr_digest"])
-	}
-}
-
-func TestWorkspaceSubstrateAllWritesFailIsCleanFailure(t *testing.T) {
-	sb := fullCapsFake()
-	sb.writeErr = errors.New("disk full")
-	ws := NewWorkspaceSubstrate(sb)
-
-	result, err := ws.Materialize(context.Background(), []Record{
-		workspaceDecl(SchemaWorkspaceFileWrite, "sha256:ok1", map[string]any{
-			"path": "one.txt", "content_b64": base64.StdEncoding.EncodeToString([]byte("1")),
-		}),
-		workspaceDecl(SchemaWorkspaceFileWrite, "sha256:bad", map[string]any{
-			"path": "two.txt", "content_b64": base64.StdEncoding.EncodeToString([]byte("2")),
-		}),
-		workspaceDecl(SchemaWorkspaceFileWrite, "sha256:ok2", map[string]any{
-			"path": "three.txt", "content_b64": base64.StdEncoding.EncodeToString([]byte("3")),
-		}),
-	})
-	if err != nil {
-		t.Fatalf("materialize: %v", err)
-	}
-
-	// The write error applies to every write, so this batch lands nothing;
-	// to exercise split_state we need the first write to succeed. The fake
-	// fails all writes, so assert the clean path here and flip the fake in
-	// the split-state test below.
-	if result.Outcome != MaterializationCleanFailure {
-		t.Errorf("outcome = %q, want clean_failure when nothing landed", result.Outcome)
-	}
-	if len(result.CaptureDrafts) != 0 {
-		t.Errorf("captures = %d, want 0", len(result.CaptureDrafts))
-	}
-	if result.FailureReason == "" {
-		t.Error("no failure reason")
-	}
-}
-
-func TestWorkspaceSubstrateSplitStateAfterPartialApplication(t *testing.T) {
-	sb := fullCapsFake()
-	// Fail only the second write: the first record's capture must be
-	// present and the outcome must be split_state.
-	failPath := "two.txt"
-	sb.writeHook = func(path string) error {
-		if path == failPath {
-			return errors.New("disk full")
-		}
-		return nil
-	}
-	ws := NewWorkspaceSubstrate(sb)
-
-	result, err := ws.Materialize(context.Background(), []Record{
-		workspaceDecl(SchemaWorkspaceFileWrite, "sha256:ok1", map[string]any{
-			"path": "one.txt", "content_b64": base64.StdEncoding.EncodeToString([]byte("1")),
-		}),
-		workspaceDecl(SchemaWorkspaceFileWrite, "sha256:bad", map[string]any{
-			"path": failPath, "content_b64": base64.StdEncoding.EncodeToString([]byte("2")),
-		}),
-		workspaceDecl(SchemaWorkspaceFileWrite, "sha256:ok2", map[string]any{
-			"path": "three.txt", "content_b64": base64.StdEncoding.EncodeToString([]byte("3")),
-		}),
-	})
-	if err != nil {
-		t.Fatalf("materialize: %v", err)
-	}
-	if result.Outcome != MaterializationSplitState {
-		t.Errorf("outcome = %q, want split_state", result.Outcome)
-	}
-	if len(result.CaptureDrafts) != 1 {
-		t.Fatalf("captures = %d, want 1 (only the record that landed)", len(result.CaptureDrafts))
-	}
-	if result.CaptureDrafts[0].Payload["path"] != "one.txt" {
-		t.Errorf("capture path = %v, want one.txt", result.CaptureDrafts[0].Payload["path"])
-	}
-	// The landed record keeps its anchor too: the receipt describes both
-	// halves of what landed, not just the captures.
-	if len(result.WorldSideAnchors) != 1 || result.WorldSideAnchors[0]["path"] != "one.txt" {
-		t.Errorf("anchors = %v, want the landed record's anchor", result.WorldSideAnchors)
-	}
-	if result.FailureReason == "" || !strings.Contains(result.FailureReason, "sha256:bad") {
-		t.Errorf("failure reason = %q, want it to name the failed record", result.FailureReason)
-	}
-}
-
-func TestWorkspaceSubstrateRejectsMalformedDeclarations(t *testing.T) {
-	sb := fullCapsFake()
-	ws := NewWorkspaceSubstrate(sb)
-
-	cases := []struct {
-		name   string
-		record Record
-	}{
-		{"write without path", workspaceDecl(SchemaWorkspaceFileWrite, "sha256:x", map[string]any{"content_b64": "aGk="})},
-		{"write without content", workspaceDecl(SchemaWorkspaceFileWrite, "sha256:x", map[string]any{"path": "a.txt"})},
-		{"write with non-string content", workspaceDecl(SchemaWorkspaceFileWrite, "sha256:x", map[string]any{"path": "a.txt", "content_b64": json.Number("5")})},
-		{"write with bad base64", workspaceDecl(SchemaWorkspaceFileWrite, "sha256:x", map[string]any{"path": "a.txt", "content_b64": "!!!"})},
-		{"exec without command", workspaceDecl(SchemaWorkspaceExec, "sha256:x", map[string]any{})},
-		{"exec with non-string cwd", workspaceDecl(SchemaWorkspaceExec, "sha256:x", map[string]any{"command": "ls", "cwd": json.Number("1")})},
-		{"exec with non-string env value", workspaceDecl(SchemaWorkspaceExec, "sha256:x", map[string]any{"command": "ls", "env": map[string]any{"A": json.Number("1")}})},
-		{"exec with non-string arg", workspaceDecl(SchemaWorkspaceExec, "sha256:x", map[string]any{"command": "ls", "args": []any{"ok", json.Number("1")}})},
-	}
-	for _, tc := range cases {
-		result, err := ws.Materialize(context.Background(), []Record{tc.record})
-		if err != nil {
-			t.Errorf("%s: unexpected transport error: %v", tc.name, err)
-			continue
-		}
-		// Substrate-level payload errors surface as clean_failure results
-		// (honest outcomes), not transport errors.
-		if result.Outcome != MaterializationCleanFailure {
-			t.Errorf("%s: outcome = %q, want clean_failure", tc.name, result.Outcome)
-		}
-		if result.FailureReason == "" {
-			t.Errorf("%s: empty failure reason", tc.name)
-		}
-	}
-}
-
-// TestWorkspaceSubstrateRejectsUnknownSchemas pins that a direct caller gets
-// a loud outcome for a schema outside the vocabulary (the dispatch layer
-// rejects those before the substrate sees them; this keeps the contract
-// self-contained). After a landed record the rejection is split_state — in
-// particular workspace.file.delete.v1, the deliberately absent schema.
-func TestWorkspaceSubstrateRejectsUnknownSchemas(t *testing.T) {
-	sb := fullCapsFake()
-	ws := NewWorkspaceSubstrate(sb)
-
-	result, err := ws.Materialize(context.Background(), []Record{
-		workspaceDecl("workspace.file.delete.v1", "sha256:del", map[string]any{"path": "gone.txt"}),
-	})
-	if err != nil {
-		t.Fatalf("materialize: %v", err)
-	}
-	if result.Outcome != MaterializationCleanFailure {
-		t.Errorf("outcome = %q, want clean_failure for an unsupported schema", result.Outcome)
-	}
-	if len(result.CaptureDrafts) != 0 {
-		t.Errorf("captures = %d, want none", len(result.CaptureDrafts))
-	}
-
-	result, err = ws.Materialize(context.Background(), []Record{
-		workspaceDecl(SchemaWorkspaceFileWrite, "sha256:ok", map[string]any{
-			"path": "kept.txt", "content_b64": base64.StdEncoding.EncodeToString([]byte("kept")),
-		}),
-		workspaceDecl("workspace.file.delete.v1", "sha256:del", map[string]any{"path": "gone.txt"}),
-	})
-	if err != nil {
-		t.Fatalf("materialize: %v", err)
-	}
-	if result.Outcome != MaterializationSplitState || len(result.CaptureDrafts) != 1 || len(result.WorldSideAnchors) != 1 {
-		t.Errorf("result = %+v, want split_state with one capture and one anchor", result)
-	}
-}
-
-// sha256Hex is the hex sha256 of s, matching the digests the workspace
-// substrate records in applied captures.
-func sha256Hex(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
-}
+	// The declared timeout is enforced by the substrate via the context, so
+	// it reaches every backend regardless of whether the backend reads
+	// Exe

@@ -29,10 +29,17 @@ const (
 	// intended capture is present in the result.
 	MaterializationSuccess MaterializationOutcome = "success"
 	// MaterializationCleanFailure means nothing was applied and the failure
-	// reason explains why. No captures are emitted.
+	// reason explains why. No captures are emitted — a substrate claiming
+	// clean_failure while emitting capture drafts is rejected by dispatch,
+	// because the two claims contradict each other. A substrate may only
+	// claim clean_failure when it did not attempt a world-side mutation:
+	// a failure after a mutation was attempted is split_state, because the
+	// world may have changed without a capture.
 	MaterializationCleanFailure MaterializationOutcome = "clean_failure"
-	// MaterializationSplitState means some declarations were applied and
-	// others were not; the captures describe the part that landed.
+	// MaterializationSplitState means the batch did not apply cleanly: the
+	// captures and anchors describe only the records that verifiably
+	// landed, and the world-side state of the failed record(s) is uncertain
+	// — the failure reason names them.
 	MaterializationSplitState MaterializationOutcome = "split_state"
 )
 

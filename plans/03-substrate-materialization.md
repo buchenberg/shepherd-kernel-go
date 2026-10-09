@@ -221,3 +221,40 @@ Other notes:
   interface level by the core module's `fakeSandbox` tests; the nested
   module's `fakeSnapshotter` suite already owns the adapter lifecycle and
   cannot see the substrate API until the repin (same reason as above).
+
+### 8. PR review findings, addressed (PR #22, 2026-10-09)
+
+The PR review (Copilot) surfaced five findings; all five were addressed in
+the review-fix commit:
+
+1. **`int` ordinals cannot carry Python's 2**63−1 on 32-bit targets.**
+   `MaxOwnerOrdinal` is now `math.MaxInt` — equal to Python's
+   `MAX_OWNER_ORDINAL` on every 64-bit platform (where the vectors run),
+   and the largest cutoff this API can express on a 32-bit one. No
+   32-bit consumer exists; only the request *digest* of a default-cutoff
+   request would differ there.
+2. **`clean_failure` results carrying captures were persisted.** Dispatch
+   now rejects the combination before the append — the two claims
+   contradict each other. Recorded as a deliberate divergence from
+   Python, which appends the drafts unconditionally; no Python-pinned
+   vector covers the combination, and the reference substrates never
+   produce it. Pinned by `TestMaterializeRejectsCleanFailureWithCaptures`,
+   including the no-ledger-entry (retryable) property.
+3. **World-touched failures were mislabeled `clean_failure`.** A failure
+   after a sandbox call was made may have partially applied — backends
+   write files in chunks, and an exec can run to completion before failing
+   in teardown — so `splitOrClean` now reports `split_state` for any
+   world-touched failure, even with zero captures; `clean_failure` is
+   reserved for failures that provably touched nothing (capability gates,
+   malformed declarations). Pinned by
+   `TestWorkspaceSubstrateWorldTouchedFailureIsSplitState`.
+4. **`timeout_ms` never reached the containerd backend** (it observes only
+   the context). The substrate now derives a deadline-bearing context from
+   the declared timeout, so the declaration means the same thing for every
+   backend, and rejects negative values before any sandbox call. Pinned by
+   the deadline assertions in `TestWorkspaceSubstrateRecordsExecOutcome`
+   and `TestWorkspaceSubstrateTimeoutDiscipline`.
+5. **The README overstated the replay guarantee.** Rewritten to state the
+   actual contract: idempotent once an intent has completed; dispatch is
+   at-least-once in the crash window, where deterministic substrates
+   converge and non-deterministic ones fail loudly as intent conflicts.

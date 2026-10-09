@@ -34,6 +34,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"time"
@@ -88,12 +89,18 @@ func (w *WorkspaceSubstrate) Containment() Containment {
 //
 // Capability gating happens before the first mutation: a batch that needs a
 // capability the backend does not have fails cleanly with nothing applied —
-// the git backend's honest-failure story, never a partial append. A record
-// that fails after earlier records landed reports split_state, with captures
-// and anchors for the part that landed and a failure reason naming the
-// record that failed. A schema outside the vocabulary is a record failure
-// like any other (the dispatch layer already rejects it before this point,
-// but a direct caller gets the same loud outcome instead of a silent skip).
+// the git backend's honest-failure story, never a partial append.
+//
+// Once a sandbox call has been made for a record, a failure of that call is
+// reported as split_state even when no capture was emitted and nothing else
+// landed: backends write files in chunks and run commands to completion
+// before teardown, so a failed call may still have changed the world, and
+// claiming clean_failure would assert a world state that was not verified.
+// clean_failure is therefore reserved for failures that provably touched
+// nothing — malformed declarations, unknown schemas, capability gates. The
+// captures and anchors in a split_state receipt cover only the records that
+// verifiably landed, and the failure reason names the record whose
+// world-side state is uncertain.
 //
 // An exec that runs to completion is a success even with a nonzero exit
 // code: the exit code is the observed result, recorded in the capture. Only
@@ -155,22 +162,44 @@ func (w *WorkspaceSubstrate) Materialize(ctx context.Context, records []Record) 
 	}, nil
 }
 
-// splitOrClean turns a mid-batch record failure into the honest outcome:
-// split_state when earlier records already landed, clean_failure when
-// nothing did. The landed records keep their anchors as well as their
-// captures, so the receipt describes both halves of what landed.
+// splitOrClean turns a mid-batch record failure into the honest outcome.
+//
+// The dividing line is whether the world was touched, not whether captures
+// exist: a failure *after* a sandbox call was made may have partially applied
+// (the containerd backend writes files in chunks through its exec shellouts,
+// so a write can fail with earlier chunks already on disk; an exec can run to
+// completion and fail during teardown), so reporting clean_failure would
+// claim a world state that was not verified. Such failures are split_state
+// even with zero captures — the captures cover only what verifiably landed,
+// and the failure reason names the record whose world-side state is
+// uncertain.
+//
+// A failure before any sandbox call for that record — a malformed
+// declaration, an unknown schema — touched nothing, so it is clean_failure
+// when nothing else landed either. The landed records keep their anchors as
+// well as their captures, so the receipt describes both halves of what
+// landed.
 func splitOrClean(captures []RecordDraft, anchors []map[string]any, failed Record, err error) MaterializationResult {
 	reason := fmt.Sprintf("record %s: %v", failed.Envelope.RecordID, err)
-	if len(captures) == 0 {
-		return MaterializationResult{Outcome: MaterializationCleanFailure, FailureReason: reason}
+	var world *worldTouchedError
+	if len(captures) > 0 || errors.As(err, &world) {
+		return MaterializationResult{
+			Outcome:          MaterializationSplitState,
+			CaptureDrafts:    captures,
+			WorldSideAnchors: anchors,
+			FailureReason:    reason,
+		}
 	}
-	return MaterializationResult{
-		Outcome:          MaterializationSplitState,
-		CaptureDrafts:    captures,
-		WorldSideAnchors: anchors,
-		FailureReason:    reason,
-	}
+	return MaterializationResult{Outcome: MaterializationCleanFailure, FailureReason: reason}
 }
+
+// worldTouchedError marks a failure that occurred after a sandbox call was
+// made for the failing record: the world may have changed even though no
+// capture was emitted, so the batch must not be reported as a clean failure.
+type worldTouchedError struct{ err error }
+
+func (e *worldTouchedError) Error() string { return e.err.Error() }
+func (e *worldTouchedError) Unwrap() error { return e.err }
 
 func (w *WorkspaceSubstrate) applyWrite(ctx context.Context, record Record) (RecordDraft, map[string]any, error) {
 	path, _ := record.Body.Payload["path"].(string)
@@ -200,7 +229,9 @@ func (w *WorkspaceSubstrate) applyWrite(ctx context.Context, record Record) (Rec
 	}
 
 	if err := w.sandbox.WriteFile(ctx, path, content, perm); err != nil {
-		return RecordDraft{}, nil, fmt.Errorf("write %q: %w", path, err)
+		// The write may have partially landed (chunked shellouts), so this
+		// is a world-touched failure: splitOrClean reports split_state.
+		return RecordDraft{}, nil, &worldTouchedError{fmt.Errorf("write %q: %w", path, err)}
 	}
 
 	sum := sha256.Sum256(content)
@@ -252,12 +283,28 @@ func (w *WorkspaceSubstrate) applyExec(ctx context.Context, record Record) (Reco
 		if err != nil {
 			return RecordDraft{}, nil, &SubstrateError{fmt.Sprintf("workspace exec %q: %v", command, err)}
 		}
+		if ms < 0 {
+			return RecordDraft{}, nil, &SubstrateError{fmt.Sprintf("workspace exec %q: timeout_ms must be non-negative", command)}
+		}
 		req.Timeout = time.Duration(ms) * time.Millisecond
+	}
+	// The declared timeout is enforced here rather than delegated: a sandbox
+	// backend is only required to honor the context it is given, and the
+	// containerd backend observes ctx without reading ExecRequest.Timeout.
+	// Deriving a deadline-bearing context makes the declaration mean the
+	// same thing for every backend.
+	if req.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, req.Timeout)
+		defer cancel()
 	}
 
 	result, err := w.sandbox.Exec(ctx, req)
 	if err != nil {
-		return RecordDraft{}, nil, fmt.Errorf("exec %q: %w", command, err)
+		// The command may have run to completion and failed during teardown,
+		// so this is a world-touched failure: splitOrClean reports
+		// split_state.
+		return RecordDraft{}, nil, &worldTouchedError{fmt.Errorf("exec %q: %w", command, err)}
 	}
 
 	stdoutSum := sha256.Sum256([]byte(result.Stdout))
