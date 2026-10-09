@@ -208,15 +208,18 @@ Other notes:
 - The ledger table is `materialization_intents`, Python's name, created at
   store open rather than lazily; a pre-2b database gains it on first open by
   the new code.
-- **T2b.7 is committed but dormant**, the same two-act shape as the
-  T0.8/T0.8b repin: `sandbox/containerd/workspace_live_test.go` is complete
-  and compile-verified against core HEAD (via a temporary local `replace`,
-  reverted after), but the nested module compiles against *published* core
-  only, so the test sits behind the `shepherd_p2b_live` build tag until
-  v0.7.0 is tagged and the module repins (then: drop the tag from the
-  constraint, `go get …@v0.7.0`, tag `sandbox/containerd/v0.1.3`). The
-  daemon round trip itself was not executed on the dev machine — no
-  containerd socket there; it runs where the 12/12 soak ran.
+- **T2b.7 is activated** (2026-10-09, act 2 of the two-act shape the
+  T0.8/T0.8b repin taught): `sandbox/containerd/workspace_live_test.go` was
+  committed dormant behind the `shepherd_p2b_live` build tag in the phase-2b
+  PR, because the nested module compiles against *published* core only and
+  the substrate API first shipped in v0.7.0. Once v0.7.0 was tagged
+  (`df43d33`), the repin PR bumped the requirement to `v0.7.0`, dropped the
+  extra tag from the file's constraint so it joins the normal linux build
+  graph, and the nested release will carry it as `v0.1.3` once that merge is
+  tagged — a post-merge step, not yet history at the time this PR lands. The
+  daemon round trip itself has still not been executed — no containerd
+  socket on the dev box; it runs where the 12/12 soak ran, same as the rest
+  of the live suite.
 - The "containerd fake" half of the acceptance criterion is covered at the
   interface level by the core module's `fakeSandbox` tests; the nested
   module's `fakeSnapshotter` suite already owns the adapter lifecycle and
