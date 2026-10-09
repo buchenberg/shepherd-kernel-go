@@ -444,6 +444,13 @@ func (s *SQLiteTraceStore) createSchema() error {
 			committed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
 
+		CREATE TABLE IF NOT EXISTS materialization_intents (
+			materialize_intent_id TEXT PRIMARY KEY,
+			request_digest TEXT NOT NULL,
+			receipt_json TEXT NOT NULL,
+			completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+
 		CREATE TABLE IF NOT EXISTS contexts (
 			context_id TEXT PRIMARY KEY,
 			active_binding_refs_json TEXT NOT NULL,

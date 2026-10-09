@@ -176,11 +176,24 @@ not-found errors, honest error wrapping, a real `ChildHandle.Snapshot`, and the
 `history_sequence` vectors that made the effective-history fold vector-pinned.
 Phases 3 and 4 remain ⬜.
 
+**Phase 2b is implemented** (2026-10-08; T2b.1–T2b.6 landed, T2b.7 committed
+dormant pending the release sequencing — see plan 03 §7). Substrates
+(`Substrate`/`SubstrateRegistry`, Echo, SQLite KV), the `Materialize`
+dispatch with the completed-intent ledger, and the capability-gated
+`WorkspaceSubstrate` over `Sandbox` are in, measured by
+`testdata/materialize_vectors_v0.json`: the request digests and the
+declare→materialize record sequences were recorded through the reference
+Echo/KV substrates and reproduce ID-for-ID through the Go dispatch.
+`OpMaterialize` is now enforced — `TestReservedOperationKindsAreUnreachable`
+was inverted exactly as its comment predicted. The v0.7.0 tag and the
+nested-module repin that activates the containerd live test are the release
+step that remains. Phases 3 and 4 remain ⬜.
+
 **Phase 2b's harness exists, has been exercised, and its blocker is cleared**
 (`sandbox/containerd/live_test.go`, committed in `603fdcf`, env-gated exactly as
 T2b.7 specifies). It is emphatically not a scaffold: it found nine defects, then
 exposed a tenth (GC-vulnerable snapshots) that unit tests could not reach, and
-T0.9 fixed it. **Phase 2b is unblocked** — the soak is green, so a materialization
+T0.9 fixed it. **The soak is green**, so a materialization
 path built on this backend will not fail nondeterministically under load.
 
 ### Sequencing consequence
@@ -422,18 +435,22 @@ ledger, bridged to `Sandbox`. Detailed spec: `plans/03-substrate-materialization
 cut only after v0.6.0 merges (avoid interleaved minors).
 **Deliverable**: v0.7.0.
 
-| ID | Task | Files | Est | Deps |
-|---|---|---|---|---|
-| T2b.1 | `Substrate` interface, `SubstrateRegistry`, `MaterializationResult`/`Receipt`, outcome vocabulary, `ErrUnknownSubstrate` | `substrate.go` (+test) | 1d | phase 1 |
-| T2b.2 | `Materialize` dispatch: owner-path-explicit `MaterializationRequest`, target validation (decl schemas, ordinal ≤ cutoff), request digest, `materialization_ledger` table, replay/conflict semantics, witness-stamped capture append; ordering (append-before-ledger) verified against Python; enforce `OpMaterialize` | `materialize.go` (+test) | 2.5d | T2b.1 |
-| T2b.3 | `EchoSubstrate` + SQLite KV substrate (`kv.sqlite.local.v1`, `shepherd2.kv.put.v1` → `.applied.v1`, separate world-side file per Python's separation) | `substrate_echo.go`, `substrate_kv.go` (+tests) | 1.5d | T2b.1 |
-| T2b.4 | `WorkspaceSubstrate` over `Sandbox`: declaration schemas `workspace.file.{write,delete}.v1`, `workspace.exec.v1`; capability-gated dispatch (git in-place → honest failure; worktree/containerd → full); applied-captures with path digest / exit code / stdout digest | `substrate_workspace.go` (+test, fake sandbox) | 2d | T2b.2 |
-| T2b.5 | Cross-language vectors: Echo + `materialize` capture record IDs vs Python for identical requests | `testdata/` | 0.75d | T2b.3 |
-| T2b.6 | README "Materializing recorded intents" section | `README.md` | 0.25d | T2b.4 |
-| T2b.7 | containerd live integration (linux CI, env-gated `SHEPHERD_CONTAINERD_ADDR`): WorkspaceSubstrate over live daemon — write→capture→destroy→apply→verify; consumes T0.5 findings | `sandbox/containerd/live_test.go`, CI | 1d | T2b.4, T0.5 |
+**Status (2026-10-08): implemented — T2b.1–T2b.6 ✅, T2b.7 🔄 (committed dormant, release-sequenced; plan 03 §7). Tag v0.7.0 pending.**
 
-**Exit criteria**: plan-03 §6 boxes checked; ledger idempotency proven by
-crash-window test; v0.7.0 tagged.
+| ID | Task | Status | Evidence |
+|---|---|---|---|
+| T2b.1 | `Substrate` interface, `SubstrateRegistry`, `MaterializationResult`/`Receipt`, outcome vocabulary, `ErrUnknownSubstrate` | ✅ | `substrate.go`: the vocabulary is the reference's `success/clean_failure/split_state` (§1 sketch corrected, plan 03 §7.1); `substrate_test.go` covers register/get/unknown |
+| T2b.2 | `Materialize` dispatch: owner-path-explicit `MaterializationRequest`, target validation, request digest, `materialization_intents` ledger, replay/conflict semantics, witness-stamped capture append; ordering (append-before-ledger) verified against Python; enforce `OpMaterialize` | ✅ | `materialize.go` + `materialize_test.go` (all eight `test_materialize.py` cases ported 1:1, plus the crash-window, ordinal-cutoff, mixed-substrate, capture-owner and operation-gate cases); ordering matches `materialization.py`; `OpMaterialize` enforced and `TestReservedOperationKindsAreUnreachable` inverted |
+| T2b.3 | `EchoSubstrate` + SQLite KV substrate (`kv.sqlite.local.v1`, `shepherd2.kv.put.v1` → `.applied.v1`, separate world-side file per Python's separation) | ✅ | `substrate_echo.go`, `substrate_kv.go`; separation mirrored (own SQLite file, never a table in the trace DB); payload validation is batch-fatal as in Python |
+| T2b.4 | `WorkspaceSubstrate` over `Sandbox`: declaration schemas `workspace.file.{write}.v1`, `workspace.exec.v1` (delete omitted — recorded decision, plan 03 §7.2); capability-gated dispatch (git in-place → honest failure; worktree/containerd → full); applied-captures with path digest / exit code / stdout digest | ✅ | `substrate_workspace.go` + `substrate_test.go` fake-sandbox tests: capability gate → `clean_failure` with nothing applied; mid-batch failure → `split_state` with captures and anchors only for the landed records; exec exit code is an observed result, not a failure |
+| T2b.5 | Cross-language vectors: Echo + `materialize` capture record IDs vs Python for identical requests | ✅ | `testdata/materialize_vectors_v0.json` (generator `generate_materialize_vectors.py`, byte-reproducible, hash-pinned in `golden_provenance_test.go`): request digests, echo + KV sequences, ledger-replay-across-restart — replayed ID-for-ID by `materialize_vectors_test.go` |
+| T2b.6 | README "Materializing recorded intents" section | ✅ | `README.md` — "What You Can Do With It" section + materialization API reference |
+| T2b.7 | containerd live integration (linux CI, env-gated `SHEPHERD_CONTAINERD_ADDR`): WorkspaceSubstrate over live daemon — write→capture→destroy→apply→verify | 🔄 | `sandbox/containerd/workspace_live_test.go` — complete and compile-verified against core HEAD (temporary local `replace`, reverted), but dormant behind the `shepherd_p2b_live` build tag: the nested module compiles against published core only, so activation lands with the v0.7.0 repin (the T0.8b two-act shape): bump the requirement, drop the tag from the constraint, tag `sandbox/containerd/v0.1.3`. Not executed here — no daemon socket on the dev machine; runs where the 12/12 soak ran |
+
+**Exit criteria**: plan-03 §6 boxes checked ✅; ledger idempotency proven by
+crash-window test ✅ (`TestMaterializeCrashWindowReplayIsConsistent`);
+v0.7.0 tagged ⬜ — the release step that remains, and the v0.7.0 tag itself
+gates the nested-module repin that activates T2b.7's live test.
 
 ---
 

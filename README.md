@@ -171,6 +171,54 @@ frontier, _ := store.PublishFrontier(ctx, shepherd.FrontierSpec{...})
 checkpoint, _ := store.ResolveFrontier(ctx, frontier.FrontierID, shepherd.ModeBoth)
 ```
 
+### Materialize recorded intents
+
+Declarations are commitments: records that say what an agent *intended* to do.
+Materialization is the other half of that rhythm — applying recorded
+declarations through a typed substrate and appending the receipts as
+captures, so the trace describes both sides of the transition:
+
+```go
+registry := shepherd.NewSubstrateRegistry()
+registry.Register(shepherd.NewWorkspaceSubstrate(sandbox))  // or a KV, echo, custom substrate
+
+receipt, err := shepherd.Materialize(ctx, store,
+    appendCtx.ToOperationContext(shepherd.OpMaterialize),
+    shepherd.MaterializationRequest{
+        AppendIntentID:            "run:42:materialize",
+        TargetTraceOwnerID:        "agent:main",
+        TargetRecordIDs:           declarationIDs, // workspace.file.write.v1 records
+        TargetThroughOwnerOrdinal: shepherd.MaxOwnerOrdinal,
+    },
+    registry,
+)
+// receipt.Outcome, receipt.ProducedRecordIDs — applied captures, caused by
+// their declarations, witness-stamped with the substrate that applied them.
+```
+
+The transition is idempotent once an intent has *completed*: a same-intent
+retry replays the stored receipt from the completed-intent ledger without
+redispatching the substrate, and a same-intent request with different content
+is a conflict, not a silent second write. Dispatch itself is at-least-once:
+in the window between the substrate call and the ledger write — including a
+crash there — the substrate runs again. Deterministic substrates (the
+reference Echo and KV substrates) converge to the identical receipt in that
+window; a non-deterministic one fails loudly as an intent conflict rather
+than double-writing. The substrate is selected by the declarations' own
+witnesses — the `substrate_ref` stamped when they were appended — never
+guessed from schemas.
+
+`WorkspaceSubstrate` bridges the kernel's `Sandbox` interface, so recorded
+file-write and exec intents reach a real workspace (git, worktree, or
+containerd) through the same declare→capture rhythm, gated on the backend's
+capabilities: the git backend honestly reports `clean_failure` instead of
+half-applying. Outcome honesty is the contract: `clean_failure` is claimed
+only when nothing was attempted — a failure *after* a sandbox call was made
+is reported as `split_state` even when no capture landed, because backends
+write files in chunks and the world may have changed without a trace. The
+reference KV substrate (`shepherd.NewKVSubstrate`) keeps a world-side SQLite
+store separate from the trace, and the echo substrate is the test fixture.
+
 ## Architecture
 
 ```
@@ -403,6 +451,30 @@ for iv := range sup.Interventions() { ... }
 
 err := sup.Inject(scopeID, "guidance text")
 err := sup.Halt(scopeID)
+```
+
+### Materialization
+
+```go
+registry := shepherd.NewSubstrateRegistry()
+err := registry.Register(substrate)               // Substrate interface: SubstrateRef,
+                                                  // DeclarationSchemas, CaptureSchemas,
+                                                  // Containment, Materialize
+substrate, err := registry.Get(substrateRef)      // ErrUnknownSubstrate when missing
+
+receipt, err := shepherd.Materialize(ctx, store, opCtx, req, registry)
+// opCtx.Operation must be shepherd.OpMaterialize
+// req: AppendIntentID, TargetTraceOwnerID, TargetRecordIDs,
+//      TargetThroughOwnerOrdinal (shepherd.MaxOwnerOrdinal), CaptureTraceOwnerID
+// receipt: Outcome (success | clean_failure | split_state), SubstrateRef,
+//          TargetRecordIDs, ProducedRecordIDs, WorldSideAnchors
+
+echo := shepherd.NewEchoSubstrate("my.echo.v1", "example.write.v1")
+kv, err := shepherd.NewKVSubstrate("world.sqlite")   // kv.sqlite.local.v1
+ws := shepherd.NewWorkspaceSubstrate(sandbox)       // workspace.sandbox.v1
+
+result, err := substrate.Materialize(ctx, records)   // substrates never append;
+                                                     // dispatch owns the append
 ```
 
 ### Constants
