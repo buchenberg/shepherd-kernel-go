@@ -215,7 +215,8 @@ Other notes:
   the substrate API first shipped in v0.7.0. Once v0.7.0 was tagged
   (`df43d33`), the repin PR bumped the requirement to `v0.7.0`, dropped the
   extra tag from the file's constraint so it joins the normal linux build
-  graph, and the nested release carried it as `v0.1.3`. The
+  graph, and the nested release will carry it as `v0.1.3` once that merge is
+  tagged — a post-merge step, not yet history at the time this PR lands. The
   daemon round trip itself has still not been executed — no containerd
   socket on the dev box; it runs where the 12/12 soak ran, same as the rest
   of the live suite.

@@ -177,8 +177,8 @@ not-found errors, honest error wrapping, a real `ChildHandle.Snapshot`, and the
 Phases 3 and 4 remain ⬜.
 
 **Phase 2b is complete** (2026-10-09; merged as PR #22 at `df43d33`, released
-as `v0.7.0`; the nested repin that activated T2b.7's live test landed as PR
-#23). Substrates (`Substrate`/`SubstrateRegistry`, Echo, SQLite KV), the
+as `v0.7.0`; the nested repin that activates T2b.7's live test lands as PR
+#23, with `sandbox/containerd/v0.1.3` as its post-merge tag). Substrates (`Substrate`/`SubstrateRegistry`, Echo, SQLite KV), the
 `Materialize` dispatch with the completed-intent ledger, and the
 capability-gated `WorkspaceSubstrate` over `Sandbox` are in, measured by
 `testdata/materialize_vectors_v0.json`: the request digests and the
@@ -436,7 +436,7 @@ ledger, bridged to `Sandbox`. Detailed spec: `plans/03-substrate-materialization
 cut only after v0.6.0 merges (avoid interleaved minors).
 **Deliverable**: v0.7.0.
 
-**Status (2026-10-09): complete — T2b.1–T2b.7 ✅. v0.7.0 tagged at `df43d33` (PR #22, CI green, review findings addressed); the nested repin that activated T2b.7 landed as PR #23.**
+**Status (2026-10-09): complete — T2b.1–T2b.7 ✅. v0.7.0 tagged at `df43d33` (PR #22, CI green, review findings addressed); the nested repin that activates T2b.7 lands as PR #23, and the `sandbox/containerd/v0.1.3` tag at that merge is the post-merge release step.**
 
 | ID | Task | Status | Evidence |
 |---|---|---|---|
@@ -447,11 +447,13 @@ cut only after v0.6.0 merges (avoid interleaved minors).
 | T2b.5 | Cross-language vectors: Echo + `materialize` capture record IDs vs Python for identical requests | ✅ | `testdata/materialize_vectors_v0.json` (generator `generate_materialize_vectors.py`, byte-reproducible, hash-pinned in `golden_provenance_test.go`): request digests, echo + KV sequences, ledger-replay-across-restart — replayed ID-for-ID by `materialize_vectors_test.go` |
 | T2b.6 | README "Materializing recorded intents" section | ✅ | `README.md` — "What You Can Do With It" section + materialization API reference |
 | T2b.7 | containerd live integration (linux CI, env-gated `SHEPHERD_CONTAINERD_ADDR`): WorkspaceSubstrate over live daemon — write→capture→destroy→apply→verify | ✅ | `sandbox/containerd/workspace_live_test.go` — committed dormant in PR #22 (the nested module compiles against published core only), activated by the repin to `v0.7.0` in PR #23: build tag dropped, file joins the normal linux graph, runtime-skips without a daemon. The daemon round trip runs where the 12/12 soak ran |
-
 **Exit criteria**: plan-03 §6 boxes checked ✅; ledger idempotency proven by
 crash-window test ✅ (`TestMaterializeCrashWindowReplayIsConsistent`);
-v0.7.0 tagged ✅ (`df43d33`, published; the nested `sandbox/containerd/v0.1.3`
-carries the repin and the activated live test).
+v0.7.0 tagged ✅ (`df43d33`, published). The nested
+`sandbox/containerd/v0.1.3` tag — carrying the repin and the activated live
+test — is the post-merge release step for the repin PR; it does not exist
+until that merge is tagged, and this page records it as done only then
+(the PR #19 pattern: tick the box in a follow-up once the tag resolves).
 
 ---
 
