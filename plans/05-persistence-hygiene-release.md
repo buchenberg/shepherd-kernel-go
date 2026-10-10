@@ -178,6 +178,9 @@ Minimal GitHub Actions (`ci.yml`):
 
 ### Post-merge steps for v0.9.0 (the PR #19 pattern)
 
-- [ ] Tag `v0.9.0` at the Phase 4 merge commit and verify it resolves from a
+- [x] Tag `v0.9.0` at the Phase 4 merge commit and verify it resolves from a
       clean module (the release-verify job now automates this check); tick
       this box in the follow-up docs commit and stamp the CHANGELOG section.
+      *(Done 2026-10-10: PR #29 merged at `c605eb3`, `v0.9.0` tagged there;
+      `go get …@v0.9.0` resolves from a clean module and the release-verify
+      job passed on its first live run.)*

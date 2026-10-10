@@ -4,7 +4,7 @@ Notable changes to `shepherd-kernel-go`. This project follows
 [Semantic Versioning](https://semver.org/); while pre-1.0, minor releases may
 contain breaking changes, which are called out below.
 
-## [Unreleased]
+## [v0.9.0] - 2026-10-10
 
 Durability & idioms (plan 05 §4/§6–8, Phase 4). **Breaking**: every store API
 now takes `context.Context` as its first parameter, with the trace-authority
