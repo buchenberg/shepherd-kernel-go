@@ -60,8 +60,7 @@ against pre-ctx core. Core itself is unchanged and stays at `v0.10.0`;
 > the job's `sandbox/` trigger) and passed the full ref as the `go get`
 > version operand, which Go rejects; the branch is fixed (PR #34), so the
 > guard applies from the next nested tag on. This tag's resolution is
-> verified by the hand run above, which is the fixed branch's exact
-> command pair. The live acceptance for `ApplyDelta` — merge
+> verified by the hand run above, whose commands match the fixed branch's. The live acceptance for `ApplyDelta` — merge
 > onto a moved parent with uncommitted pre-fork work preserved and staging
 > intact, and an add/add conflict refusing with the tree untouched and the
 > delta still consumable — is `TestLive_ApplyDeltaMergesOntoMovedParent` and
