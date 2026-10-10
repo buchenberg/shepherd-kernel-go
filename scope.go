@@ -248,7 +248,7 @@ func (s *Scope) forkWithBaseline(childOwnerID string, snapshot any, baseline Wor
 	}
 
 	// Record the fork event in the parent's trace to get a fork-point record.
-	forkReceipt, err := s.store.Append(TrustedAppendContext, AppendBatch{
+	forkReceipt, err := s.store.Append(context.Background(), TrustedAppendContext, AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:fork:%s:%d", s.ownerID, childOwnerID, nextCheckpointSeq.Add(1)),
 		Groups: []AppendGroup{{
 			TraceOwnerID: s.ownerID,
@@ -333,7 +333,7 @@ func (s *Scope) merge(child *Scope) error {
 		causedBy = []string{child.forkPoint}
 	}
 
-	_, err := s.store.Append(TrustedAppendContext, AppendBatch{
+	_, err := s.store.Append(context.Background(), TrustedAppendContext, AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:merge:%s:%d", s.ownerID, child.ownerID, nextCheckpointSeq.Add(1)),
 		Groups: []AppendGroup{{
 			TraceOwnerID:  s.ownerID,
@@ -392,7 +392,7 @@ func (s *Scope) discard(child *Scope) error {
 		causedBy = []string{child.forkPoint}
 	}
 
-	_, err := s.store.Append(TrustedAppendContext, AppendBatch{
+	_, err := s.store.Append(context.Background(), TrustedAppendContext, AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:discard:%s:%d", s.ownerID, child.ownerID, nextCheckpointSeq.Add(1)),
 		Groups: []AppendGroup{{
 			TraceOwnerID:  s.ownerID,
@@ -427,7 +427,7 @@ func (s *Scope) Inject(guidance string) error {
 		return fmt.Errorf("cannot inject into scope %s in state %s", s.id, s.state)
 	}
 
-	_, err := s.store.Append(TrustedAppendContext, AppendBatch{
+	_, err := s.store.Append(context.Background(), TrustedAppendContext, AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:inject:%d", s.ownerID, nextCheckpointSeq.Add(1)),
 		Groups: []AppendGroup{{
 			TraceOwnerID: s.ownerID,
@@ -469,7 +469,7 @@ func (s *Scope) halt() error {
 		return nil // already halted
 	}
 
-	_, err := s.store.Append(TrustedAppendContext, AppendBatch{
+	_, err := s.store.Append(context.Background(), TrustedAppendContext, AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:halt:%d", s.ownerID, nextCheckpointSeq.Add(1)),
 		Groups: []AppendGroup{{
 			TraceOwnerID: s.ownerID,

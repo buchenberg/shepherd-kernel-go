@@ -1,5 +1,7 @@
 package shepherd
 
+import "context"
+
 // Parent-owned execution relation facts (plan 02 §2), mirroring
 // shepherd2/schemas/relations.py.
 //
@@ -127,8 +129,8 @@ func ProjectExecutionRelations(traceSlice Slice, parentTraceOwnerID string) ([]E
 
 // ProjectExecutionRelationsFromStore resolves a frontier and projects the
 // parent-owned relations it covers.
-func ProjectExecutionRelationsFromStore(store *SQLiteTraceStore, readContext ReadContext, cutoff Frontier) ([]ExecutionRelation, error) {
-	slice, err := store.ResolveFrontier(readContext, cutoff.FrontierID, ModeBoth)
+func ProjectExecutionRelationsFromStore(ctx context.Context, store *SQLiteTraceStore, readContext ReadContext, cutoff Frontier) ([]ExecutionRelation, error) {
+	slice, err := store.ResolveFrontier(ctx, readContext, cutoff.FrontierID, ModeBoth)
 	if err != nil {
 		return nil, err
 	}

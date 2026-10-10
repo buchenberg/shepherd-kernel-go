@@ -1,6 +1,7 @@
 package shepherd
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -105,15 +106,15 @@ func NewSQLiteTraceStore(path string) (*SQLiteTraceStore, error) {
 }
 
 // Close closes the underlying database connection.
-func (s *SQLiteTraceStore) Close() error {
+func (s *SQLiteTraceStore) Close(ctx context.Context) error {
 	return s.db.Close()
 }
 
 // queryer is satisfied by both *sql.DB and *sql.Tx.
 type queryer interface {
-	QueryRow(query string, args ...any) *sql.Row
-	Query(query string, args ...any) (*sql.Rows, error)
-	Exec(query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
 // q returns the transaction if non-nil, otherwise the raw db.
@@ -125,8 +126,8 @@ func (s *SQLiteTraceStore) q(tx *sql.Tx) queryer {
 }
 
 // Append appends a semantic batch or returns the prior receipt for its intent.
-func (s *SQLiteTraceStore) Append(ctx AppendContext, batch AppendBatch) (AppendReceipt, error) {
-	opCtx := ctx.ToOperationContext(OpAppend)
+func (s *SQLiteTraceStore) Append(ctx context.Context, auth AppendContext, batch AppendBatch) (AppendReceipt, error) {
+	opCtx := auth.ToOperationContext(OpAppend)
 	if err := ensureAppendAuthorized(opCtx); err != nil {
 		return AppendReceipt{}, err
 	}
@@ -193,29 +194,29 @@ func (s *SQLiteTraceStore) publishAppendEvents(batch AppendBatch, receipt Append
 }
 
 // PreviewRecordIDs returns the durable record IDs this batch would allocate if committed.
-func (s *SQLiteTraceStore) PreviewRecordIDs(ctx AppendContext, batch AppendBatch) ([]string, error) {
-	opCtx := ctx.ToOperationContext(OpAppend)
+func (s *SQLiteTraceStore) PreviewRecordIDs(ctx context.Context, auth AppendContext, batch AppendBatch) ([]string, error) {
+	opCtx := auth.ToOperationContext(OpAppend)
 	if err := ensureAppendAuthorized(opCtx); err != nil {
 		return nil, err
 	}
 	if err := validateBatchShape(batch, opCtx); err != nil {
 		return nil, err
 	}
-	return s.previewFactIDs(batch, opCtx)
+	return s.previewFactIDs(ctx, batch, opCtx)
 }
 
 // ReadFact reads one retained fact.
-func (s *SQLiteTraceStore) ReadFact(ctx ReadContext, factID string) (VisibleRecord, error) {
-	opCtx := ctx.ToOperationContext()
+func (s *SQLiteTraceStore) ReadFact(ctx context.Context, auth ReadContext, factID string) (VisibleRecord, error) {
+	opCtx := auth.ToOperationContext()
 	if err := ensureReadAuthorized(opCtx); err != nil {
 		return nil, err
 	}
-	return s.readFact(factID)
+	return s.readFact(ctx, factID)
 }
 
 // ReadOwnerPrefix reads all facts on an owner path up to and including the given ordinal.
-func (s *SQLiteTraceStore) ReadOwnerPrefix(ctx ReadContext, ownerID string, through int, modeFilter ModeFilter) (Slice, error) {
-	opCtx := ctx.ToOperationContext()
+func (s *SQLiteTraceStore) ReadOwnerPrefix(ctx context.Context, auth ReadContext, ownerID string, through int, modeFilter ModeFilter) (Slice, error) {
+	opCtx := auth.ToOperationContext()
 	if err := ensureReadAuthorized(opCtx); err != nil {
 		return Slice{}, err
 	}
@@ -226,12 +227,12 @@ func (s *SQLiteTraceStore) ReadOwnerPrefix(ctx ReadContext, ownerID string, thro
 	var rows *sql.Rows
 	var err error
 	if ownerID == "" {
-		rows, err = s.db.Query(
+		rows, err = s.db.QueryContext(ctx,
 			"SELECT record_id, path_ref, path_ordinal FROM path_entries WHERE path_ordinal <= ? ORDER BY path_ref, path_ordinal ASC",
 			through,
 		)
 	} else {
-		rows, err = s.db.Query(
+		rows, err = s.db.QueryContext(ctx,
 			"SELECT record_id, path_ref, path_ordinal FROM path_entries WHERE path_ref = ? AND path_ordinal <= ? ORDER BY path_ordinal ASC",
 			ownerID, through,
 		)
@@ -250,7 +251,7 @@ func (s *SQLiteTraceStore) ReadOwnerPrefix(ctx ReadContext, ownerID string, thro
 		pathEntries = append(pathEntries, pe)
 	}
 
-	return s.buildSlice(pathEntries, nil, opCtx.VisibilityProfile, modeFilter, true)
+	return s.buildSlice(ctx, pathEntries, nil, opCtx.VisibilityProfile, modeFilter, true)
 }
 
 // ReadPathPrefix is the TraceStore protocol's path-addressed prefix read.
@@ -263,13 +264,13 @@ func (s *SQLiteTraceStore) ReadOwnerPrefix(ctx ReadContext, ownerID string, thro
 //
 // It exists for protocol completeness: a caller written against the Python
 // protocol can call either name and get the same slice.
-func (s *SQLiteTraceStore) ReadPathPrefix(ctx ReadContext, pathRef string, through int, modeFilter ModeFilter) (Slice, error) {
-	return s.ReadOwnerPrefix(ctx, pathRef, through, modeFilter)
+func (s *SQLiteTraceStore) ReadPathPrefix(ctx context.Context, auth ReadContext, pathRef string, through int, modeFilter ModeFilter) (Slice, error) {
+	return s.ReadOwnerPrefix(ctx, auth, pathRef, through, modeFilter)
 }
 
 // ReadCausalClosure reads the causal closure for one or more root facts.
-func (s *SQLiteTraceStore) ReadCausalClosure(ctx ReadContext, roots []string, modeFilter ModeFilter, closurePolicy string) (Slice, error) {
-	opCtx := ctx.ToOperationContext()
+func (s *SQLiteTraceStore) ReadCausalClosure(ctx context.Context, auth ReadContext, roots []string, modeFilter ModeFilter, closurePolicy string) (Slice, error) {
+	opCtx := auth.ToOperationContext()
 	if err := ensureReadAuthorized(opCtx); err != nil {
 		return Slice{}, err
 	}
@@ -292,7 +293,7 @@ func (s *SQLiteTraceStore) ReadCausalClosure(ctx ReadContext, roots []string, mo
 		}
 		seen[factID] = true
 
-		fact, err := s.readFact(factID)
+		fact, err := s.readFact(ctx, factID)
 		if err != nil {
 			return Slice{}, err
 		}
@@ -303,14 +304,14 @@ func (s *SQLiteTraceStore) ReadCausalClosure(ctx ReadContext, roots []string, mo
 		}
 	}
 
-	entries := s.canonicalFactOrder(seen)
+	entries := s.canonicalFactOrder(ctx, seen)
 	includeAnchors := closurePolicy == "include_external_anchors"
-	return s.buildSlice(entries, nil, opCtx.VisibilityProfile, modeFilter, includeAnchors)
+	return s.buildSlice(ctx, entries, nil, opCtx.VisibilityProfile, modeFilter, includeAnchors)
 }
 
 // PublishFrontier publishes a retained owner-prefix frontier through the append path.
-func (s *SQLiteTraceStore) PublishFrontier(ctx AppendContext, spec FrontierSpec) (Frontier, error) {
-	opCtx := ctx.ToOperationContext(OpPublishCut)
+func (s *SQLiteTraceStore) PublishFrontier(ctx context.Context, auth AppendContext, spec FrontierSpec) (Frontier, error) {
+	opCtx := auth.ToOperationContext(OpPublishCut)
 	if err := ensureAppendAuthorized(opCtx); err != nil {
 		return Frontier{}, err
 	}
@@ -336,13 +337,13 @@ func (s *SQLiteTraceStore) PublishFrontier(ctx AppendContext, spec FrontierSpec)
 }
 
 // PublishCut is an alias for PublishFrontier.
-func (s *SQLiteTraceStore) PublishCut(ctx AppendContext, spec FrontierSpec) (Frontier, error) {
-	return s.PublishFrontier(ctx, spec)
+func (s *SQLiteTraceStore) PublishCut(ctx context.Context, auth AppendContext, spec FrontierSpec) (Frontier, error) {
+	return s.PublishFrontier(ctx, auth, spec)
 }
 
 // ResolveFrontier resolves a frontier into a graph-shaped trace slice.
-func (s *SQLiteTraceStore) ResolveFrontier(ctx ReadContext, frontierID string, modeFilter ModeFilter) (Slice, error) {
-	opCtx := ctx.ToOperationContext()
+func (s *SQLiteTraceStore) ResolveFrontier(ctx context.Context, auth ReadContext, frontierID string, modeFilter ModeFilter) (Slice, error) {
+	opCtx := auth.ToOperationContext()
 	if err := ensureReadAuthorized(opCtx); err != nil {
 		return Slice{}, err
 	}
@@ -350,12 +351,12 @@ func (s *SQLiteTraceStore) ResolveFrontier(ctx ReadContext, frontierID string, m
 		return Slice{}, err
 	}
 
-	frontier, err := s.readOwnerCutoff(frontierID)
+	frontier, err := s.readOwnerCutoff(ctx, frontierID)
 	if err != nil {
 		return Slice{}, err
 	}
 
-	through, err := s.readFactAtPath(frontier.ThroughFactID, frontier.TargetTraceOwnerID, frontier.ThroughOwnerOrdinal)
+	through, err := s.readFactAtPath(ctx, frontier.ThroughFactID, frontier.TargetTraceOwnerID, frontier.ThroughOwnerOrdinal)
 	if err != nil {
 		return Slice{}, err
 	}
@@ -366,7 +367,7 @@ func (s *SQLiteTraceStore) ResolveFrontier(ctx ReadContext, frontierID string, m
 		return Slice{}, &TraceStoreError{"frontier through fact ordinal changed"}
 	}
 
-	rows, err := s.db.Query(
+	rows, err := s.db.QueryContext(ctx,
 		"SELECT record_id, path_ref, path_ordinal FROM path_entries WHERE path_ref = ? AND path_ordinal <= ? ORDER BY path_ordinal ASC",
 		frontier.TargetTraceOwnerID, frontier.ThroughOwnerOrdinal,
 	)
@@ -384,30 +385,30 @@ func (s *SQLiteTraceStore) ResolveFrontier(ctx ReadContext, frontierID string, m
 		pathEntries = append(pathEntries, pe)
 	}
 
-	return s.buildSlice(pathEntries, &frontier, opCtx.VisibilityProfile, modeFilter, true)
+	return s.buildSlice(ctx, pathEntries, &frontier, opCtx.VisibilityProfile, modeFilter, true)
 }
 
 // ResolveCut is an alias for ResolveFrontier.
-func (s *SQLiteTraceStore) ResolveCut(ctx ReadContext, cutID string, modeFilter ModeFilter) (Slice, error) {
-	return s.ResolveFrontier(ctx, cutID, modeFilter)
+func (s *SQLiteTraceStore) ResolveCut(ctx context.Context, auth ReadContext, cutID string, modeFilter ModeFilter) (Slice, error) {
+	return s.ResolveFrontier(ctx, auth, cutID, modeFilter)
 }
 
 // ReadOwnerCutoff reads a published frontier by ID.
-func (s *SQLiteTraceStore) ReadOwnerCutoff(frontierID string) (Frontier, error) {
-	return s.readOwnerCutoff(frontierID)
+func (s *SQLiteTraceStore) ReadOwnerCutoff(ctx context.Context, frontierID string) (Frontier, error) {
+	return s.readOwnerCutoff(ctx, frontierID)
 }
 
 // FactCount returns the retained fact count for diagnostics.
-func (s *SQLiteTraceStore) FactCount() (int, error) {
+func (s *SQLiteTraceStore) FactCount(ctx context.Context) (int, error) {
 	var count int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM records").Scan(&count)
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM records").Scan(&count)
 	return count, err
 }
 
 // ContextCount returns the retained context count for diagnostics.
-func (s *SQLiteTraceStore) ContextCount() (int, error) {
+func (s *SQLiteTraceStore) ContextCount(ctx context.Context) (int, error) {
 	var count int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM contexts").Scan(&count)
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM contexts").Scan(&count)
 	return count, err
 }
 
@@ -778,7 +779,7 @@ func (s *SQLiteTraceStore) prepareAppend(tx *sql.Tx, batch AppendBatch, ctx Oper
 	return contexts, witnessPlans, facts, receipt, nil
 }
 
-func (s *SQLiteTraceStore) previewFactIDs(batch AppendBatch, ctx OperationContext) ([]string, error) {
+func (s *SQLiteTraceStore) previewFactIDs(gctx context.Context, batch AppendBatch, ctx OperationContext) ([]string, error) {
 	// Use the same context resolution as prepareAppend
 	localFactIDs := make(map[string]string)
 	var factIDs []string
@@ -790,7 +791,7 @@ func (s *SQLiteTraceStore) previewFactIDs(batch AppendBatch, ctx OperationContex
 		}
 
 		// Use same context resolution as prepareAppend
-		retCtx, err := s.resolveGroupContext(batch.AppendIntentID, groupIndex, group, ctx)
+		retCtx, err := s.resolveGroupContext(gctx, batch.AppendIntentID, groupIndex, group, ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -823,8 +824,8 @@ func (s *SQLiteTraceStore) previewFactIDs(batch AppendBatch, ctx OperationContex
 
 // --- Read ---
 
-func (s *SQLiteTraceStore) readFact(factID string) (Record, error) {
-	row := s.db.QueryRow(`
+func (s *SQLiteTraceStore) readFact(gctx context.Context, factID string) (Record, error) {
+	row := s.db.QueryRowContext(gctx, `
 		SELECT records.*, path_entries.path_ref, path_entries.path_ordinal,
 		       path_entries.retained_context_ref, path_entries.kind_label
 		FROM records
@@ -835,8 +836,8 @@ func (s *SQLiteTraceStore) readFact(factID string) (Record, error) {
 	return scanRecord(row)
 }
 
-func (s *SQLiteTraceStore) readFactAtPath(factID, ownerID string, ordinal int) (Record, error) {
-	row := s.db.QueryRow(`
+func (s *SQLiteTraceStore) readFactAtPath(gctx context.Context, factID, ownerID string, ordinal int) (Record, error) {
+	row := s.db.QueryRowContext(gctx, `
 		SELECT records.*, path_entries.path_ref, path_entries.path_ordinal,
 		       path_entries.retained_context_ref, path_entries.kind_label
 		FROM path_entries
@@ -846,8 +847,8 @@ func (s *SQLiteTraceStore) readFactAtPath(factID, ownerID string, ordinal int) (
 	return scanRecord(row)
 }
 
-func (s *SQLiteTraceStore) readRecord(factID string) (Record, error) {
-	row := s.db.QueryRow(`
+func (s *SQLiteTraceStore) readRecord(gctx context.Context, factID string) (Record, error) {
+	row := s.db.QueryRowContext(gctx, `
 		SELECT records.*, '' AS trace_owner_id, -1 AS owner_ordinal,
 		       '' AS retained_context_ref, '' AS kind_label
 		FROM records WHERE records.record_id = ?`, factID)
@@ -959,8 +960,8 @@ func (s *SQLiteTraceStore) publishFrontierInTx(tx *sql.Tx, ctx OperationContext,
 	return frontier, nil
 }
 
-func (s *SQLiteTraceStore) readOwnerCutoff(frontierID string) (Frontier, error) {
-	row := s.db.QueryRow("SELECT * FROM frontiers WHERE frontier_id = ?", frontierID)
+func (s *SQLiteTraceStore) readOwnerCutoff(gctx context.Context, frontierID string) (Frontier, error) {
+	row := s.db.QueryRowContext(gctx, "SELECT * FROM frontiers WHERE frontier_id = ?", frontierID)
 	var f Frontier
 	var publisherID, appendIntentID string
 	err := row.Scan(&f.FrontierID, &f.TargetTraceOwnerID, &f.ThroughFactID,
@@ -974,7 +975,7 @@ func (s *SQLiteTraceStore) readOwnerCutoff(frontierID string) (Frontier, error) 
 	f.PublisherOwnerID = publisherID
 
 	// Verify against the retained frontier fact
-	frontierFact, err := s.readFact(f.CreatedByFactID)
+	frontierFact, err := s.readFact(gctx, f.CreatedByFactID)
 	if err != nil {
 		return Frontier{}, err
 	}
@@ -1048,13 +1049,13 @@ func intFromPayload(payload map[string]any, key string) (int, error) {
 	}
 }
 
-func (s *SQLiteTraceStore) readFrontierRow(frontierID string) (*sql.Row, error) {
-	row := s.db.QueryRow("SELECT * FROM frontiers WHERE frontier_id = ?", frontierID)
+func (s *SQLiteTraceStore) readFrontierRow(gctx context.Context, frontierID string) (*sql.Row, error) {
+	row := s.db.QueryRowContext(gctx, "SELECT * FROM frontiers WHERE frontier_id = ?", frontierID)
 	return row, nil
 }
 
-func (s *SQLiteTraceStore) readLatestFactOnPath(factID, ownerID string) (Record, error) {
-	row := s.db.QueryRow(`
+func (s *SQLiteTraceStore) readLatestFactOnPath(gctx context.Context, factID, ownerID string) (Record, error) {
+	row := s.db.QueryRowContext(gctx, `
 		SELECT records.*, path_entries.path_ref, path_entries.path_ordinal,
 		       path_entries.retained_context_ref, path_entries.kind_label
 		FROM path_entries
@@ -1067,6 +1068,7 @@ func (s *SQLiteTraceStore) readLatestFactOnPath(factID, ownerID string) (Record,
 // --- Slice building ---
 
 func (s *SQLiteTraceStore) buildSlice(
+	gctx context.Context,
 	pathEntries []pathEntry,
 	frontier *Frontier,
 	visibility VisibilityProfile,
@@ -1079,7 +1081,7 @@ func (s *SQLiteTraceStore) buildSlice(
 		fact  Record
 	}
 	for _, pe := range pathEntries {
-		fact, err := s.readFactAtPath(pe.recordID, pe.pathRef, pe.pathOrdinal)
+		fact, err := s.readFactAtPath(gctx, pe.recordID, pe.pathRef, pe.pathOrdinal)
 		if err != nil {
 			return Slice{}, err
 		}
@@ -1134,7 +1136,7 @@ func (s *SQLiteTraceStore) buildSlice(
 			} else if includeExternalAnchors {
 				if _, exists := externalAnchors[parent]; !exists {
 					externalAnchorOrder = append(externalAnchorOrder, parent)
-					externalAnchors[parent] = s.anchorForFact(parent, "outside_frontier")
+					externalAnchors[parent] = s.anchorForFact(gctx, parent, "outside_frontier")
 				}
 			}
 		}
@@ -1154,7 +1156,7 @@ func (s *SQLiteTraceStore) buildSlice(
 				}
 			} else {
 				if _, exists := contextsByID[ctxID]; !exists {
-					ctx, err := s.readContext(ctxID)
+					ctx, err := s.readContext(gctx, ctxID)
 					if err == nil {
 						contextsByID[ctxID] = ctx
 					}
@@ -1168,7 +1170,7 @@ func (s *SQLiteTraceStore) buildSlice(
 	for _, l := range loaded {
 		loadedRecords = append(loadedRecords, l.fact)
 	}
-	witnessSupport, err := s.witnessSupportClosure(loadedRecords)
+	witnessSupport, err := s.witnessSupportClosure(gctx, loadedRecords)
 	if err != nil {
 		return Slice{}, err
 	}
@@ -1201,8 +1203,8 @@ func (s *SQLiteTraceStore) buildSlice(
 	}, nil
 }
 
-func (s *SQLiteTraceStore) anchorForFact(factID, hiddenReason string) ExternalAnchor {
-	fact, err := s.readFact(factID)
+func (s *SQLiteTraceStore) anchorForFact(gctx context.Context, factID, hiddenReason string) ExternalAnchor {
+	fact, err := s.readFact(gctx, factID)
 	if err != nil {
 		return ExternalAnchor{Ref: factID, AnchorKind: externalAnchorKindFact, HiddenReason: "unknown"}
 	}
@@ -1270,7 +1272,7 @@ func (w *witnessSupport) records() []Record {
 	return out
 }
 
-func (s *SQLiteTraceStore) witnessSupportClosure(records []Record) ([]Record, error) {
+func (s *SQLiteTraceStore) witnessSupportClosure(gctx context.Context, records []Record) ([]Record, error) {
 	support := newWitnessSupport()
 	validatedToRoot := make(map[string]bool)
 
@@ -1282,7 +1284,7 @@ func (s *SQLiteTraceStore) witnessSupportClosure(records []Record) ([]Record, er
 
 	for _, record := range records {
 		if record.Envelope.WitnessRef != "" {
-			if err := s.validateWitnessChain(record.Envelope.WitnessRef, support, validatedToRoot); err != nil {
+			if err := s.validateWitnessChain(gctx, record.Envelope.WitnessRef, support, validatedToRoot); err != nil {
 				return nil, err
 			}
 		}
@@ -1291,7 +1293,7 @@ func (s *SQLiteTraceStore) witnessSupportClosure(records []Record) ([]Record, er
 	return support.records(), nil
 }
 
-func (s *SQLiteTraceStore) validateWitnessChain(startRef string, support *witnessSupport, validatedToRoot map[string]bool) error {
+func (s *SQLiteTraceStore) validateWitnessChain(gctx context.Context, startRef string, support *witnessSupport, validatedToRoot map[string]bool) error {
 	seenInChain := make(map[string]bool)
 	witnessRef := startRef
 
@@ -1307,7 +1309,7 @@ func (s *SQLiteTraceStore) validateWitnessChain(startRef string, support *witnes
 		witness, ok := support.get(witnessRef)
 		if !ok {
 			var err error
-			witness, err = s.readFact(witnessRef)
+			witness, err = s.readFact(gctx, witnessRef)
 			if err != nil {
 				return &TraceStoreError{fmt.Sprintf("witness ref does not resolve: %s", witnessRef)}
 			}
@@ -1336,7 +1338,7 @@ func (s *SQLiteTraceStore) validateWitnessChain(startRef string, support *witnes
 	}
 }
 
-func (s *SQLiteTraceStore) canonicalFactOrder(factIDs map[string]bool) []pathEntry {
+func (s *SQLiteTraceStore) canonicalFactOrder(gctx context.Context, factIDs map[string]bool) []pathEntry {
 	if len(factIDs) == 0 {
 		return nil
 	}
@@ -1356,7 +1358,7 @@ func (s *SQLiteTraceStore) canonicalFactOrder(factIDs map[string]bool) []pathEnt
 		ORDER BY path_ref ASC, path_ordinal ASC, record_id ASC`,
 		strings.Join(placeholders, ","))
 
-	rows, err := s.db.Query(query, ids...)
+	rows, err := s.db.QueryContext(gctx, query, ids...)
 	if err != nil {
 		return nil
 	}
@@ -1386,13 +1388,13 @@ func (s *SQLiteTraceStore) canonicalFactOrder(factIDs map[string]bool) []pathEnt
 // --- Context management ---
 
 func (s *SQLiteTraceStore) resolveGroupContext(
-	appendIntentID string, groupIndex int, group AppendGroup, ctx OperationContext,
+	gctx context.Context, appendIntentID string, groupIndex int, group AppendGroup, ctx OperationContext,
 ) (RetainedContext, error) {
 	if group.RetainedContext != nil && group.RetainedContext.ContextID != "" {
 		// Check if this is a reuse request
 		if group.RetainedContext.SubstrateRef == "" {
 			// It's a reuse reference
-			return s.readContext(group.RetainedContext.ContextID)
+			return s.readContext(gctx, group.RetainedContext.ContextID)
 		}
 	}
 
@@ -1417,7 +1419,7 @@ func (s *SQLiteTraceStore) resolveGroupContext(
 		Containment:             payload.Containment,
 	}
 
-	existing, err := s.readContext(contextID)
+	existing, err := s.readContext(gctx, contextID)
 	if err == nil {
 		if !contextEqual(existing, newCtx) {
 			return RetainedContext{}, &TraceStoreError{fmt.Sprintf("context id %q already names a different context", contextID)}
@@ -1428,14 +1430,14 @@ func (s *SQLiteTraceStore) resolveGroupContext(
 	return newCtx, nil
 }
 
-func (s *SQLiteTraceStore) contextExists(contextID string) bool {
+func (s *SQLiteTraceStore) contextExists(gctx context.Context, contextID string) bool {
 	var count int
-	s.db.QueryRow("SELECT 1 FROM contexts WHERE context_id = ?", contextID).Scan(&count)
+	s.db.QueryRowContext(gctx, "SELECT 1 FROM contexts WHERE context_id = ?", contextID).Scan(&count)
 	return count > 0
 }
 
-func (s *SQLiteTraceStore) readContext(contextID string) (RetainedContext, error) {
-	row := s.db.QueryRow("SELECT * FROM contexts WHERE context_id = ?", contextID)
+func (s *SQLiteTraceStore) readContext(gctx context.Context, contextID string) (RetainedContext, error) {
+	row := s.db.QueryRowContext(gctx, "SELECT * FROM contexts WHERE context_id = ?", contextID)
 	var ctx RetainedContext
 	var activeJSON, capJSON, semJSON, visJSON string
 	err := row.Scan(&ctx.ContextID, &activeJSON, &capJSON, &semJSON, &visJSON,
@@ -1453,18 +1455,18 @@ func (s *SQLiteTraceStore) readContext(contextID string) (RetainedContext, error
 	return ctx, nil
 }
 
-func (s *SQLiteTraceStore) insertContext(ctx RetainedContext, appendIntentID string) error {
-	_, err := s.db.Exec(`
+func (s *SQLiteTraceStore) insertContext(gctx context.Context, rc RetainedContext, appendIntentID string) error {
+	_, err := s.db.ExecContext(gctx, `
 		INSERT INTO contexts(context_id, active_binding_refs_json, capability_witness_refs_json,
 			semantic_environment_refs_json, visibility_policy_refs_json, substrate_ref, containment, append_intent_id)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		ctx.ContextID,
-		stringToJSON(ctx.ActiveBindingRefs),
-		stringToJSON(ctx.CapabilityWitnessRefs),
-		stringToJSON(ctx.SemanticEnvironmentRefs),
-		stringToJSON(ctx.VisibilityPolicyRefs),
-		ctx.SubstrateRef,
-		string(ctx.Containment),
+		rc.ContextID,
+		stringToJSON(rc.ActiveBindingRefs),
+		stringToJSON(rc.CapabilityWitnessRefs),
+		stringToJSON(rc.SemanticEnvironmentRefs),
+		stringToJSON(rc.VisibilityPolicyRefs),
+		rc.SubstrateRef,
+		string(rc.Containment),
 		appendIntentID,
 	)
 	return err
@@ -1472,9 +1474,9 @@ func (s *SQLiteTraceStore) insertContext(ctx RetainedContext, appendIntentID str
 
 // --- Witness management ---
 
-func (s *SQLiteTraceStore) insertWitnessRecordIfMissing(plan witnessPlan, appendIntentID string) error {
-	if s.factExists(plan.recordID) {
-		existing, err := s.readFact(plan.recordID)
+func (s *SQLiteTraceStore) insertWitnessRecordIfMissing(gctx context.Context, plan witnessPlan, appendIntentID string) error {
+	if s.factExists(gctx, plan.recordID) {
+		existing, err := s.readFact(gctx, plan.recordID)
 		if err != nil {
 			return err
 		}
@@ -1484,7 +1486,7 @@ func (s *SQLiteTraceStore) insertWitnessRecordIfMissing(plan witnessPlan, append
 		return nil
 	}
 
-	ordinal, err := s.nextOwnerOrdinal(witnessTraceOwnerID)
+	ordinal, err := s.nextOwnerOrdinal(gctx, witnessTraceOwnerID)
 	if err != nil {
 		return err
 	}
@@ -1505,11 +1507,11 @@ func (s *SQLiteTraceStore) insertWitnessRecordIfMissing(plan witnessPlan, append
 		},
 	}
 
-	if err := s.insertFactRow(fact, fmt.Sprintf("witness:%s", plan.recordID), appendIntentID); err != nil {
+	if err := s.insertFactRow(gctx, fact, fmt.Sprintf("witness:%s", plan.recordID), appendIntentID); err != nil {
 		return err
 	}
 
-	_, err = s.db.Exec(
+	_, err = s.db.ExecContext(gctx,
 		`INSERT INTO owner_ordinals(trace_owner_id, next_ordinal) VALUES (?, ?)
 		 ON CONFLICT(trace_owner_id) DO UPDATE SET next_ordinal = excluded.next_ordinal`,
 		witnessTraceOwnerID, ordinal+1,
@@ -1519,15 +1521,15 @@ func (s *SQLiteTraceStore) insertWitnessRecordIfMissing(plan witnessPlan, append
 
 // --- Record insertion ---
 
-func (s *SQLiteTraceStore) insertFactRow(fact Record, commitReceipt, appendIntentID string) error {
+func (s *SQLiteTraceStore) insertFactRow(gctx context.Context, fact Record, commitReceipt, appendIntentID string) error {
 	if fact.View == nil {
 		return &TraceStoreError{"path append requires record view metadata"}
 	}
-	if err := s.insertRecordIfMissing(fact, appendIntentID); err != nil {
+	if err := s.insertRecordIfMissing(gctx, fact, appendIntentID); err != nil {
 		return err
 	}
 
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(gctx, `
 		INSERT INTO path_entries(path_ref, path_ordinal, record_id, retained_context_ref, kind_label, append_intent_id, commit_receipt)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		fact.View.TraceOwnerID,
@@ -1541,12 +1543,12 @@ func (s *SQLiteTraceStore) insertFactRow(fact Record, commitReceipt, appendInten
 	return err
 }
 
-func (s *SQLiteTraceStore) insertRecordIfMissing(fact Record, appendIntentID string) error {
+func (s *SQLiteTraceStore) insertRecordIfMissing(gctx context.Context, fact Record, appendIntentID string) error {
 	if fact.Envelope.RecordID != fact.Envelope.Digest {
 		return &TraceStoreError{"record_id must equal digest"}
 	}
-	if s.factExists(fact.Envelope.RecordID) {
-		existing, err := s.readRecord(fact.Envelope.RecordID)
+	if s.factExists(gctx, fact.Envelope.RecordID) {
+		existing, err := s.readRecord(gctx, fact.Envelope.RecordID)
 		if err != nil {
 			return err
 		}
@@ -1556,7 +1558,7 @@ func (s *SQLiteTraceStore) insertRecordIfMissing(fact Record, appendIntentID str
 		return nil
 	}
 
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(gctx, `
 		INSERT INTO records(record_id, digest, schema_ref, mode, witness_ref, caused_by_json, body_json, append_intent_id)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		fact.Envelope.RecordID,
@@ -1573,7 +1575,7 @@ func (s *SQLiteTraceStore) insertRecordIfMissing(fact Record, appendIntentID str
 	}
 
 	for i, parent := range fact.Envelope.CausedByIDs {
-		_, err := s.db.Exec(
+		_, err := s.db.ExecContext(gctx,
 			"INSERT INTO record_edges(parent_record_id, child_record_id, parent_position) VALUES (?, ?, ?)",
 			parent, fact.Envelope.RecordID, i,
 		)
@@ -1585,17 +1587,17 @@ func (s *SQLiteTraceStore) insertRecordIfMissing(fact Record, appendIntentID str
 	return nil
 }
 
-func (s *SQLiteTraceStore) factExists(factID string) bool {
+func (s *SQLiteTraceStore) factExists(gctx context.Context, factID string) bool {
 	var count int
-	s.db.QueryRow("SELECT 1 FROM records WHERE record_id = ?", factID).Scan(&count)
+	s.db.QueryRowContext(gctx, "SELECT 1 FROM records WHERE record_id = ?", factID).Scan(&count)
 	return count > 0
 }
 
 // --- Ordinal management ---
 
-func (s *SQLiteTraceStore) nextOwnerOrdinal(ownerID string) (int, error) {
+func (s *SQLiteTraceStore) nextOwnerOrdinal(gctx context.Context, ownerID string) (int, error) {
 	var ordinal int
-	err := s.db.QueryRow("SELECT next_ordinal FROM owner_ordinals WHERE trace_owner_id = ?", ownerID).Scan(&ordinal)
+	err := s.db.QueryRowContext(gctx, "SELECT next_ordinal FROM owner_ordinals WHERE trace_owner_id = ?", ownerID).Scan(&ordinal)
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}
@@ -1605,9 +1607,9 @@ func (s *SQLiteTraceStore) nextOwnerOrdinal(ownerID string) (int, error) {
 	return ordinal, nil
 }
 
-func (s *SQLiteTraceStore) nextCommitSeq() (int, error) {
+func (s *SQLiteTraceStore) nextCommitSeq(gctx context.Context) (int, error) {
 	var seq int
-	err := s.db.QueryRow("SELECT value FROM meta WHERE key = 'next_commit_seq'").Scan(&seq)
+	err := s.db.QueryRowContext(gctx, "SELECT value FROM meta WHERE key = 'next_commit_seq'").Scan(&seq)
 	if err != nil {
 		return 0, fmt.Errorf("query commit seq: %w", err)
 	}
@@ -1735,12 +1737,12 @@ func resolvedCauses(group AppendGroup, draft RecordDraft, localFactIDs map[strin
 	return result, nil
 }
 
-func (s *SQLiteTraceStore) validateCausalParents(causedBy []string, stagedIDs map[string]bool) error {
+func (s *SQLiteTraceStore) validateCausalParents(gctx context.Context, causedBy []string, stagedIDs map[string]bool) error {
 	for _, id := range causedBy {
 		if stagedIDs[id] {
 			continue
 		}
-		if !s.factExists(id) {
+		if !s.factExists(gctx, id) {
 			return &UnknownFactError{fmt.Sprintf("causal parent does not exist: %s", id)}
 		}
 	}

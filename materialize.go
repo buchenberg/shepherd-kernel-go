@@ -100,12 +100,12 @@ func Materialize(ctx context.Context, store *SQLiteTraceStore, opCtx OperationCo
 		return receipt, nil
 	}
 
-	targets, err := readMaterializationTargets(store, req)
+	targets, err := readMaterializationTargets(ctx, store, req)
 	if err != nil {
 		return MaterializationReceipt{}, err
 	}
 
-	substrateRef, err := substrateRefForRecords(store, targets)
+	substrateRef, err := substrateRefForRecords(ctx, store, targets)
 	if err != nil {
 		return MaterializationReceipt{}, err
 	}
@@ -170,6 +170,7 @@ func Materialize(ctx context.Context, store *SQLiteTraceStore, opCtx OperationCo
 	var produced []string
 	if len(result.CaptureDrafts) > 0 {
 		appendReceipt, err := store.Append(
+			ctx,
 			AppendContext{
 				ActorRef:             opCtx.ActorRef,
 				PresentedWitnessRefs: append([]string{}, opCtx.PresentedAuthorityRefs...),
@@ -264,8 +265,8 @@ func validateMaterializationRequest(req MaterializationRequest) error {
 // ordinal <= the cutoff, and must be a declaration. A record id that exists
 // but is not visible on this owner path is rejected — that is the point of
 // the owner-path-explicit request shape.
-func readMaterializationTargets(store *SQLiteTraceStore, req MaterializationRequest) ([]Record, error) {
-	slice, err := store.ReadOwnerPrefix(materializeReadContext, req.TargetTraceOwnerID, req.TargetThroughOwnerOrdinal, ModeBoth)
+func readMaterializationTargets(ctx context.Context, store *SQLiteTraceStore, req MaterializationRequest) ([]Record, error) {
+	slice, err := store.ReadOwnerPrefix(ctx, materializeReadContext, req.TargetTraceOwnerID, req.TargetThroughOwnerOrdinal, ModeBoth)
 	if err != nil {
 		return nil, err
 	}
@@ -295,11 +296,11 @@ func readMaterializationTargets(store *SQLiteTraceStore, req MaterializationRequ
 // witness record and requires the whole batch to name exactly one
 // substrate. The witness is where the declaration's substrate was stamped at
 // append time; materialize does not guess from schemas.
-func substrateRefForRecords(store *SQLiteTraceStore, targets []Record) (string, error) {
+func substrateRefForRecords(ctx context.Context, store *SQLiteTraceStore, targets []Record) (string, error) {
 	refs := []string{}
 	seen := map[string]bool{}
 	for _, record := range targets {
-		visible, err := store.ReadFact(materializeReadContext, record.Envelope.WitnessRef)
+		visible, err := store.ReadFact(ctx, materializeReadContext, record.Envelope.WitnessRef)
 		if err != nil {
 			return "", &TraceStoreError{fmt.Sprintf("record witness %q is not payload-visible", record.Envelope.WitnessRef)}
 		}

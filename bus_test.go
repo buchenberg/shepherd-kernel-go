@@ -1,6 +1,7 @@
 package shepherd
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -251,7 +252,7 @@ func TestEffectBus_StoreIntegration(t *testing.T) {
 	ch := bus.Subscribe("store-watcher")
 
 	// Append a declaration
-	receipt, err := store.Append(TrustedAppendContext, AppendBatch{
+	receipt, err := store.Append(context.Background(), TrustedAppendContext, AppendBatch{
 		AppendIntentID: "test:intent:1",
 		Groups: []AppendGroup{{
 			TraceOwnerID: "sub:test-agent",
@@ -306,7 +307,7 @@ func TestEffectBus_StoreIntegration_MultipleDrafts(t *testing.T) {
 	ch := bus.Subscribe("multi-watcher")
 
 	// Append a batch with multiple drafts in one group
-	_, err := store.Append(TrustedAppendContext, AppendBatch{
+	_, err := store.Append(context.Background(), TrustedAppendContext, AppendBatch{
 		AppendIntentID: "test:multi:1",
 		Groups: []AppendGroup{{
 			TraceOwnerID: "sub:multi",
@@ -340,7 +341,7 @@ func TestEffectBus_StoreNoBus(t *testing.T) {
 	store := newMemStore(t)
 	// No bus attached — should work fine (no panic)
 
-	_, err := store.Append(TrustedAppendContext, AppendBatch{
+	_, err := store.Append(context.Background(), TrustedAppendContext, AppendBatch{
 		AppendIntentID: "test:no-bus:1",
 		Groups: []AppendGroup{{
 			TraceOwnerID: "sub:quiet",
@@ -380,13 +381,13 @@ func TestEffectBus_StoreIdempotentAppend(t *testing.T) {
 	}
 
 	// First append
-	_, err := store.Append(TrustedAppendContext, batch)
+	_, err := store.Append(context.Background(), TrustedAppendContext, batch)
 	if err != nil {
 		t.Fatalf("first append: %v", err)
 	}
 
 	// Second append (same intent ID — should be idempotent)
-	_, err = store.Append(TrustedAppendContext, batch)
+	_, err = store.Append(context.Background(), TrustedAppendContext, batch)
 	if err != nil {
 		t.Fatalf("second append: %v", err)
 	}

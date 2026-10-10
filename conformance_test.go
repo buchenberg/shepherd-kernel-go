@@ -29,6 +29,7 @@ package shepherd
 // and the cases are re-evaluated there.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -40,15 +41,15 @@ import (
 // counterpart of Python's TraceStore protocol, trimmed to the members the
 // ported cases call; it grows as cases are added.
 type ConformanceStore interface {
-	Append(ctx AppendContext, batch AppendBatch) (AppendReceipt, error)
-	PreviewRecordIDs(ctx AppendContext, batch AppendBatch) ([]string, error)
-	ReadOwnerPrefix(ctx ReadContext, ownerID string, through int, modeFilter ModeFilter) (Slice, error)
-	ReadCausalClosure(ctx ReadContext, roots []string, modeFilter ModeFilter, closurePolicy string) (Slice, error)
-	PublishCut(ctx AppendContext, spec FrontierSpec) (Frontier, error)
-	ResolveCut(ctx ReadContext, cutID string, modeFilter ModeFilter) (Slice, error)
-	ResolveFrontier(ctx ReadContext, frontierID string, modeFilter ModeFilter) (Slice, error)
-	ReadOwnerCutoff(frontierID string) (Frontier, error)
-	Close() error
+	Append(ctx context.Context, auth AppendContext, batch AppendBatch) (AppendReceipt, error)
+	PreviewRecordIDs(ctx context.Context, auth AppendContext, batch AppendBatch) ([]string, error)
+	ReadOwnerPrefix(ctx context.Context, auth ReadContext, ownerID string, through int, modeFilter ModeFilter) (Slice, error)
+	ReadCausalClosure(ctx context.Context, auth ReadContext, roots []string, modeFilter ModeFilter, closurePolicy string) (Slice, error)
+	PublishCut(ctx context.Context, auth AppendContext, spec FrontierSpec) (Frontier, error)
+	ResolveCut(ctx context.Context, auth ReadContext, cutID string, modeFilter ModeFilter) (Slice, error)
+	ResolveFrontier(ctx context.Context, auth ReadContext, frontierID string, modeFilter ModeFilter) (Slice, error)
+	ReadOwnerCutoff(ctx context.Context, frontierID string) (Frontier, error)
+	Close(ctx context.Context) error
 }
 
 // conformanceFactory opens (or reopens) the store at a fixed backing location
@@ -68,7 +69,7 @@ type conformanceOpener func(t *testing.T) ConformanceStore
 // the suite's _append helper in Python.
 func conformanceAppend(t *testing.T, store ConformanceStore, intent, owner string, drafts ...RecordDraft) AppendReceipt {
 	t.Helper()
-	receipt, err := store.Append(trustedAppend, AppendBatch{
+	receipt, err := store.Append(context.Background(), trustedAppend, AppendBatch{
 		AppendIntentID: intent,
 		Groups:         []AppendGroup{{TraceOwnerID: owner, FactDrafts: drafts}},
 	})
@@ -138,12 +139,12 @@ func TestSQLiteTraceStoreConformance(t *testing.T) {
 // conformanceAppendThenReadOwnerPrefix ports test_append_then_read_owner_prefix.
 func conformanceAppendThenReadOwnerPrefix(t *testing.T, open conformanceOpener) {
 	store := open(t)
-	defer store.Close()
+	defer store.Close(context.Background())
 
 	receipt := conformanceAppend(t, store, "intent:a", "exec:one",
 		draft("step", Capture, map[string]any{"value": 1}),
 	)
-	slice, err := store.ReadOwnerPrefix(reader, "exec:one", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), reader, "exec:one", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix: %v", err)
 	}
@@ -171,14 +172,14 @@ func conformanceAppendIntentIdempotentAcrossRestart(t *testing.T, open conforman
 	first := conformanceAppend(t, store, "intent:start", "exec:parent",
 		draft("execution_started", Capture, map[string]any{"execution_id": "exec:parent"}),
 	)
-	if err := store.Close(); err != nil {
+	if err := store.Close(context.Background()); err != nil {
 		t.Fatalf("Close before reopen: %v", err)
 	}
 
 	restarted := open(t)
-	defer restarted.Close()
+	defer restarted.Close(context.Background())
 
-	reopened, err := restarted.ReadOwnerPrefix(reader, "exec:parent", 99, ModeBoth)
+	reopened, err := restarted.ReadOwnerPrefix(context.Background(), reader, "exec:parent", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix after reopen, before retry: %v", err)
 	}
@@ -189,7 +190,7 @@ func conformanceAppendIntentIdempotentAcrossRestart(t *testing.T, open conforman
 	)
 	assertAppendReceiptsEqual(t, "retried receipt", second, first)
 
-	slice, err := restarted.ReadOwnerPrefix(reader, "exec:parent", 99, ModeBoth)
+	slice, err := restarted.ReadOwnerPrefix(context.Background(), reader, "exec:parent", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix after retry: %v", err)
 	}
@@ -253,12 +254,12 @@ func assertStringSlicesEqual(t *testing.T, label string, got, want []string) {
 // test_same_intent_different_batch_is_rejected.
 func conformanceSameIntentDifferentBatchIsRejected(t *testing.T, open conformanceOpener) {
 	store := open(t)
-	defer store.Close()
+	defer store.Close(context.Background())
 
 	conformanceAppend(t, store, "intent:once", "exec:one",
 		draft("step", Capture, map[string]any{"value": 1}),
 	)
-	_, err := store.Append(trustedAppend, AppendBatch{
+	_, err := store.Append(context.Background(), trustedAppend, AppendBatch{
 		AppendIntentID: "intent:once",
 		Groups: []AppendGroup{{
 			TraceOwnerID: "exec:one",
@@ -270,7 +271,7 @@ func conformanceSameIntentDifferentBatchIsRejected(t *testing.T, open conformanc
 		t.Fatalf("reused intent: got %v, want AppendIntentConflictError", err)
 	}
 
-	slice, err := store.ReadOwnerPrefix(reader, "exec:one", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), reader, "exec:one", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix: %v", err)
 	}
@@ -300,7 +301,7 @@ func conformanceSameIntentDifferentBatchIsRejected(t *testing.T, open conformanc
 // preview method, so that alias case is folded into this one.
 func conformancePreviewRecordIDsMatchAppend(t *testing.T, open conformanceOpener) {
 	store := open(t)
-	defer store.Close()
+	defer store.Close(context.Background())
 
 	batch := AppendBatch{
 		AppendIntentID: "intent:preview",
@@ -309,11 +310,11 @@ func conformancePreviewRecordIDsMatchAppend(t *testing.T, open conformanceOpener
 			FactDrafts:   []RecordDraft{draft("step", Capture, map[string]any{"value": 1})},
 		}},
 	}
-	previewed, err := store.PreviewRecordIDs(trustedAppend, batch)
+	previewed, err := store.PreviewRecordIDs(context.Background(), trustedAppend, batch)
 	if err != nil {
 		t.Fatalf("PreviewRecordIDs: %v", err)
 	}
-	receipt, err := store.Append(trustedAppend, batch)
+	receipt, err := store.Append(context.Background(), trustedAppend, batch)
 	if err != nil {
 		t.Fatalf("Append: %v", err)
 	}
@@ -324,7 +325,7 @@ func conformancePreviewRecordIDsMatchAppend(t *testing.T, open conformanceOpener
 // test_fact_id_is_content_addressed_across_intents.
 func conformanceFactIDIsContentAddressedAcrossIntents(t *testing.T, open conformanceOpener) {
 	store := open(t)
-	defer store.Close()
+	defer store.Close(context.Background())
 
 	d := draft("step", Capture, map[string]any{"value": 1})
 	first := conformanceAppend(t, store, "intent:first", "exec:one", d)
@@ -343,18 +344,18 @@ func conformanceFactIDIsContentAddressedAcrossIntents(t *testing.T, open conform
 // test_content_addressed_fact_spans_multiple_owner_paths.
 func conformanceContentAddressedFactSpansMultipleOwnerPaths(t *testing.T, open conformanceOpener) {
 	store := open(t)
-	defer store.Close()
+	defer store.Close(context.Background())
 
 	d := draft("step", Capture, map[string]any{"value": 1})
 	first := conformanceAppend(t, store, "intent:owner-a", "owner:a", d)
 	second := conformanceAppend(t, store, "intent:owner-b", "owner:b", d)
 	assertFactIDsEqual(t, "same content across owners", second.FactIDs, first.FactIDs)
 
-	sliceA, err := store.ReadOwnerPrefix(reader, "owner:a", 99, ModeBoth)
+	sliceA, err := store.ReadOwnerPrefix(context.Background(), reader, "owner:a", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix(owner:a): %v", err)
 	}
-	sliceB, err := store.ReadOwnerPrefix(reader, "owner:b", 99, ModeBoth)
+	sliceB, err := store.ReadOwnerPrefix(context.Background(), reader, "owner:b", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix(owner:b): %v", err)
 	}
@@ -379,13 +380,13 @@ func conformanceContentAddressedFactSpansMultipleOwnerPaths(t *testing.T, open c
 // test_cut_publish_resolve_roundtrip.
 func conformanceCutPublishResolveRoundtrip(t *testing.T, open conformanceOpener) {
 	store := open(t)
-	defer store.Close()
+	defer store.Close(context.Background())
 
 	receipt := conformanceAppend(t, store, "intent:cut", "exec:one",
 		draft("a", Capture, nil),
 		draft("b", Capture, nil),
 	)
-	cut, err := store.PublishCut(trustedAppend, FrontierSpec{
+	cut, err := store.PublishCut(context.Background(), trustedAppend, FrontierSpec{
 		FrontierID:         "frontier:cut",
 		TargetTraceOwnerID: "exec:one",
 		ThroughFactID:      receipt.FactIDs[len(receipt.FactIDs)-1],
@@ -394,7 +395,7 @@ func conformanceCutPublishResolveRoundtrip(t *testing.T, open conformanceOpener)
 		t.Fatalf("PublishCut: %v", err)
 	}
 
-	slice, err := store.ResolveCut(reader, cut.FrontierID, ModeBoth)
+	slice, err := store.ResolveCut(context.Background(), reader, cut.FrontierID, ModeBoth)
 	if err != nil {
 		t.Fatalf("ResolveCut: %v", err)
 	}
@@ -405,12 +406,12 @@ func conformanceCutPublishResolveRoundtrip(t *testing.T, open conformanceOpener)
 // test_read_owner_cutoff_roundtrips_a_published_cut.
 func conformanceReadOwnerCutoffRoundtripsAPublishedCut(t *testing.T, open conformanceOpener) {
 	store := open(t)
-	defer store.Close()
+	defer store.Close(context.Background())
 
 	receipt := conformanceAppend(t, store, "intent:cutoff", "exec:one",
 		draft("a", Capture, nil),
 	)
-	published, err := store.PublishCut(trustedAppend, FrontierSpec{
+	published, err := store.PublishCut(context.Background(), trustedAppend, FrontierSpec{
 		FrontierID:         "frontier:cutoff",
 		TargetTraceOwnerID: "exec:one",
 		ThroughFactID:      receipt.FactIDs[len(receipt.FactIDs)-1],
@@ -419,7 +420,7 @@ func conformanceReadOwnerCutoffRoundtripsAPublishedCut(t *testing.T, open confor
 		t.Fatalf("PublishCut: %v", err)
 	}
 
-	cutoff, err := store.ReadOwnerCutoff(published.FrontierID)
+	cutoff, err := store.ReadOwnerCutoff(context.Background(), published.FrontierID)
 	if err != nil {
 		t.Fatalf("ReadOwnerCutoff: %v", err)
 	}
@@ -430,7 +431,7 @@ func conformanceReadOwnerCutoffRoundtripsAPublishedCut(t *testing.T, open confor
 		t.Errorf("cutoff target_trace_owner_id = %q, want \"exec:one\"", cutoff.TargetTraceOwnerID)
 	}
 
-	slice, err := store.ResolveFrontier(reader, cutoff.FrontierID, ModeBoth)
+	slice, err := store.ResolveFrontier(context.Background(), reader, cutoff.FrontierID, ModeBoth)
 	if err != nil {
 		t.Fatalf("ResolveFrontier: %v", err)
 	}
@@ -441,7 +442,7 @@ func conformanceReadOwnerCutoffRoundtripsAPublishedCut(t *testing.T, open confor
 // test_causal_closure_includes_parents.
 func conformanceCausalClosureIncludesParents(t *testing.T, open conformanceOpener) {
 	store := open(t)
-	defer store.Close()
+	defer store.Close(context.Background())
 
 	parent := conformanceAppend(t, store, "intent:parent", "exec:parent",
 		draft("parent", Capture, nil),
@@ -452,7 +453,7 @@ func conformanceCausalClosureIncludesParents(t *testing.T, open conformanceOpene
 	)
 	childID := child.FactIDs[0]
 
-	closure, err := store.ReadCausalClosure(reader, []string{childID}, ModeBoth, "include_external_anchors")
+	closure, err := store.ReadCausalClosure(context.Background(), reader, []string{childID}, ModeBoth, "include_external_anchors")
 	if err != nil {
 		t.Fatalf("ReadCausalClosure: %v", err)
 	}
@@ -481,9 +482,9 @@ func conformanceCausalClosureIncludesParents(t *testing.T, open conformanceOpene
 // UnknownFactError, so that is what the suite pins.
 func conformanceCausalParentMustExist(t *testing.T, open conformanceOpener) {
 	store := open(t)
-	defer store.Close()
+	defer store.Close(context.Background())
 
-	_, err := store.Append(trustedAppend, AppendBatch{
+	_, err := store.Append(context.Background(), trustedAppend, AppendBatch{
 		AppendIntentID: "intent:orphan",
 		Groups: []AppendGroup{{
 			TraceOwnerID: "exec:one",

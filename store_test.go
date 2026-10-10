@@ -1,6 +1,7 @@
 package shepherd
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -14,7 +15,7 @@ func newTestStore(t *testing.T) *SQLiteTraceStore {
 	if err != nil {
 		t.Fatalf("NewSQLiteTraceStore: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { store.Close(context.Background()) })
 	return store
 }
 
@@ -24,7 +25,7 @@ func newMemStore(t *testing.T) *SQLiteTraceStore {
 	if err != nil {
 		t.Fatalf("NewSQLiteTraceStore: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { store.Close(context.Background()) })
 	return store
 }
 
@@ -49,7 +50,7 @@ func draft(kind string, mode RecordMode, payload map[string]any, causedBy ...str
 
 func appendDrafts(t *testing.T, store *SQLiteTraceStore, intent, owner string, drafts ...RecordDraft) AppendReceipt {
 	t.Helper()
-	receipt, err := store.Append(trustedAppend, AppendBatch{
+	receipt, err := store.Append(context.Background(), trustedAppend, AppendBatch{
 		AppendIntentID: intent,
 		Groups:         []AppendGroup{{TraceOwnerID: owner, FactDrafts: drafts}},
 	})
@@ -65,7 +66,7 @@ func TestAppendThenReadOwnerPrefix(t *testing.T) {
 		draft("step", Capture, map[string]any{"value": 1}),
 	)
 
-	slice, err := store.ReadOwnerPrefix(reader, "exec:one", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), reader, "exec:one", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix: %v", err)
 	}
@@ -113,11 +114,11 @@ func TestReadPathPrefixIsAnAliasForReadOwnerPrefix(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			want, err := store.ReadOwnerPrefix(reader, tc.pathRef, tc.through, tc.modeFilter)
+			want, err := store.ReadOwnerPrefix(context.Background(), reader, tc.pathRef, tc.through, tc.modeFilter)
 			if err != nil {
 				t.Fatalf("ReadOwnerPrefix: %v", err)
 			}
-			got, err := store.ReadPathPrefix(reader, tc.pathRef, tc.through, tc.modeFilter)
+			got, err := store.ReadPathPrefix(context.Background(), reader, tc.pathRef, tc.through, tc.modeFilter)
 			if err != nil {
 				t.Fatalf("ReadPathPrefix: %v", err)
 			}
@@ -145,7 +146,7 @@ func TestReadPathPrefixEmptyRefSpansOwners(t *testing.T) {
 	appendDrafts(t, store, "intent:b", "owner:b",
 		draft("step", Capture, map[string]any{"value": 2}))
 
-	all, err := store.ReadPathPrefix(reader, "", 99, ModeBoth)
+	all, err := store.ReadPathPrefix(context.Background(), reader, "", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadPathPrefix: %v", err)
 	}
@@ -186,7 +187,7 @@ func TestSliceOutputOrderIsDeterministic(t *testing.T) {
 	parent := appendDrafts(t, store, "intent:parent", "owner:parent",
 		draft("step", Capture, map[string]any{"value": 0}))
 
-	if _, err := store.Append(trustedAppend, AppendBatch{
+	if _, err := store.Append(context.Background(), trustedAppend, AppendBatch{
 		AppendIntentID: "intent:child",
 		Groups: []AppendGroup{{
 			TraceOwnerID:  "owner:child",
@@ -224,7 +225,7 @@ func TestSliceOutputOrderIsDeterministic(t *testing.T) {
 
 	for _, r := range reads {
 		t.Run(r.name, func(t *testing.T) {
-			first, err := store.ReadOwnerPrefix(r.ctx, r.owner, 99, ModeBoth)
+			first, err := store.ReadOwnerPrefix(context.Background(), r.ctx, r.owner, 99, ModeBoth)
 			if err != nil {
 				t.Fatalf("first read: %v", err)
 			}
@@ -240,7 +241,7 @@ func TestSliceOutputOrderIsDeterministic(t *testing.T) {
 			}
 
 			for i := 0; i < 20; i++ {
-				got, err := store.ReadOwnerPrefix(r.ctx, r.owner, 99, ModeBoth)
+				got, err := store.ReadOwnerPrefix(context.Background(), r.ctx, r.owner, 99, ModeBoth)
 				if err != nil {
 					t.Fatalf("read %d: %v", i, err)
 				}
@@ -367,7 +368,7 @@ func TestAppendIntentIdempotent(t *testing.T) {
 
 	first := appendDrafts(t, store, "intent:start", "exec:parent", d)
 
-	second, err := store.Append(trustedAppend, AppendBatch{
+	second, err := store.Append(context.Background(), trustedAppend, AppendBatch{
 		AppendIntentID: "intent:start",
 		Groups:         []AppendGroup{{TraceOwnerID: "exec:parent", FactDrafts: []RecordDraft{d}}},
 	})
@@ -391,7 +392,7 @@ func TestSameIntentDifferentBatchIsRejected(t *testing.T) {
 		draft("step", Capture, map[string]any{"value": 1}),
 	)
 
-	_, err := store.Append(trustedAppend, AppendBatch{
+	_, err := store.Append(context.Background(), trustedAppend, AppendBatch{
 		AppendIntentID: "intent:once",
 		Groups: []AppendGroup{{
 			TraceOwnerID: "exec:one",
@@ -406,7 +407,7 @@ func TestSameIntentDifferentBatchIsRejected(t *testing.T) {
 	}
 
 	// Verify original value is preserved
-	slice, err := store.ReadOwnerPrefix(reader, "exec:one", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), reader, "exec:one", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix: %v", err)
 	}
@@ -451,12 +452,12 @@ func TestPreviewRecordIDsMatchAppend(t *testing.T) {
 		}},
 	}
 
-	previewed, err := store.PreviewRecordIDs(trustedAppend, batch)
+	previewed, err := store.PreviewRecordIDs(context.Background(), trustedAppend, batch)
 	if err != nil {
 		t.Fatalf("PreviewRecordIDs: %v", err)
 	}
 
-	receipt, err := store.Append(trustedAppend, batch)
+	receipt, err := store.Append(context.Background(), trustedAppend, batch)
 	if err != nil {
 		t.Fatalf("Append: %v", err)
 	}
@@ -502,8 +503,8 @@ func TestContentAddressedFactSpansMultipleOwnerPaths(t *testing.T) {
 		t.Errorf("same content should produce same fact ID across owners")
 	}
 
-	sliceA, _ := store.ReadOwnerPrefix(reader, "owner:a", 99, ModeBoth)
-	sliceB, _ := store.ReadOwnerPrefix(reader, "owner:b", 99, ModeBoth)
+	sliceA, _ := store.ReadOwnerPrefix(context.Background(), reader, "owner:a", 99, ModeBoth)
+	sliceB, _ := store.ReadOwnerPrefix(context.Background(), reader, "owner:b", 99, ModeBoth)
 
 	factA, ok := sliceA.FactsByID[first.FactIDs[0]].(Record)
 	if !ok {
@@ -529,7 +530,7 @@ func TestCutPublishResolveRoundtrip(t *testing.T) {
 		draft("b", Capture, nil),
 	)
 
-	cut, err := store.PublishCut(trustedAppend, FrontierSpec{
+	cut, err := store.PublishCut(context.Background(), trustedAppend, FrontierSpec{
 		FrontierID:         "frontier:cut",
 		TargetTraceOwnerID: "exec:one",
 		ThroughFactID:      receipt.FactIDs[len(receipt.FactIDs)-1],
@@ -538,7 +539,7 @@ func TestCutPublishResolveRoundtrip(t *testing.T) {
 		t.Fatalf("PublishCut: %v", err)
 	}
 
-	slice, err := store.ResolveCut(reader, cut.FrontierID, ModeBoth)
+	slice, err := store.ResolveCut(context.Background(), reader, cut.FrontierID, ModeBoth)
 	if err != nil {
 		t.Fatalf("ResolveCut: %v", err)
 	}
@@ -559,7 +560,7 @@ func TestReadOwnerCutoffRoundtripsAPublishedCut(t *testing.T) {
 		draft("a", Capture, nil),
 	)
 
-	published, err := store.PublishCut(trustedAppend, FrontierSpec{
+	published, err := store.PublishCut(context.Background(), trustedAppend, FrontierSpec{
 		FrontierID:         "frontier:cutoff",
 		TargetTraceOwnerID: "exec:one",
 		ThroughFactID:      receipt.FactIDs[len(receipt.FactIDs)-1],
@@ -568,7 +569,7 @@ func TestReadOwnerCutoffRoundtripsAPublishedCut(t *testing.T) {
 		t.Fatalf("PublishCut: %v", err)
 	}
 
-	cutoff, err := store.ReadOwnerCutoff(published.FrontierID)
+	cutoff, err := store.ReadOwnerCutoff(context.Background(), published.FrontierID)
 	if err != nil {
 		t.Fatalf("ReadOwnerCutoff: %v", err)
 	}
@@ -580,7 +581,7 @@ func TestReadOwnerCutoffRoundtripsAPublishedCut(t *testing.T) {
 		t.Errorf("target_trace_owner_id = %q, want %q", cutoff.TargetTraceOwnerID, "exec:one")
 	}
 
-	resolved, err := store.ResolveFrontier(reader, cutoff.FrontierID, ModeBoth)
+	resolved, err := store.ResolveFrontier(context.Background(), reader, cutoff.FrontierID, ModeBoth)
 	if err != nil {
 		t.Fatalf("ResolveFrontier: %v", err)
 	}
@@ -601,7 +602,7 @@ func TestCausalClosureIncludesParents(t *testing.T) {
 	)
 	childID := child.FactIDs[0]
 
-	closure, err := store.ReadCausalClosure(reader, []string{childID}, ModeBoth, "include_external_anchors")
+	closure, err := store.ReadCausalClosure(context.Background(), reader, []string{childID}, ModeBoth, "include_external_anchors")
 	if err != nil {
 		t.Fatalf("ReadCausalClosure: %v", err)
 	}
@@ -627,7 +628,7 @@ func TestCausalClosureIncludesParents(t *testing.T) {
 
 func TestCausalParentMustExist(t *testing.T) {
 	store := newMemStore(t)
-	_, err := store.Append(trustedAppend, AppendBatch{
+	_, err := store.Append(context.Background(), trustedAppend, AppendBatch{
 		AppendIntentID: "intent:orphan",
 		Groups: []AppendGroup{{
 			TraceOwnerID: "exec:one",
@@ -649,7 +650,7 @@ func TestFactCountAndContextCount(t *testing.T) {
 		draft("step", Capture, map[string]any{"value": 2}),
 	)
 
-	factCount, err := store.FactCount()
+	factCount, err := store.FactCount(context.Background())
 	if err != nil {
 		t.Fatalf("FactCount: %v", err)
 	}
@@ -658,7 +659,7 @@ func TestFactCountAndContextCount(t *testing.T) {
 		t.Errorf("FactCount = %d, want >= 2", factCount)
 	}
 
-	ctxCount, err := store.ContextCount()
+	ctxCount, err := store.ContextCount(context.Background())
 	if err != nil {
 		t.Fatalf("ContextCount: %v", err)
 	}
@@ -674,7 +675,7 @@ func TestWitnessChainToRoot(t *testing.T) {
 	)
 
 	// Read the fact and verify it has a witness ref that chains to root
-	slice, err := store.ReadOwnerPrefix(reader, "exec:one", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), reader, "exec:one", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix: %v", err)
 	}
@@ -705,16 +706,16 @@ func TestAppendReadAcrossRestart(t *testing.T) {
 	receipt1 := appendDrafts(t, store1, "intent:persist", "exec:one",
 		draft("step", Capture, map[string]any{"value": 42}),
 	)
-	store1.Close()
+	store1.Close(context.Background())
 
 	// Second session: re-open and append same intent
 	store2, err := NewSQLiteTraceStore(path)
 	if err != nil {
 		t.Fatalf("second open: %v", err)
 	}
-	defer store2.Close()
+	defer store2.Close(context.Background())
 
-	receipt2, err := store2.Append(trustedAppend, AppendBatch{
+	receipt2, err := store2.Append(context.Background(), trustedAppend, AppendBatch{
 		AppendIntentID: "intent:persist",
 		Groups: []AppendGroup{{
 			TraceOwnerID: "exec:one",
@@ -736,7 +737,7 @@ func TestAppendReadAcrossRestart(t *testing.T) {
 	}
 
 	// Read should work
-	slice, err := store2.ReadOwnerPrefix(reader, "exec:one", 99, ModeBoth)
+	slice, err := store2.ReadOwnerPrefix(context.Background(), reader, "exec:one", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix after restart: %v", err)
 	}
@@ -747,7 +748,7 @@ func TestAppendReadAcrossRestart(t *testing.T) {
 
 func TestEmptyBatchRejected(t *testing.T) {
 	store := newMemStore(t)
-	_, err := store.Append(trustedAppend, AppendBatch{
+	_, err := store.Append(context.Background(), trustedAppend, AppendBatch{
 		AppendIntentID: "intent:empty",
 		Groups:         []AppendGroup{{TraceOwnerID: "exec:one"}},
 	})
@@ -769,7 +770,7 @@ func TestDeclarationAndCaptureModes(t *testing.T) {
 	)
 
 	// Read captures only
-	captSlice, err := store.ReadOwnerPrefix(reader, "exec:one", 99, ModeCapturesOnly)
+	captSlice, err := store.ReadOwnerPrefix(context.Background(), reader, "exec:one", 99, ModeCapturesOnly)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix captures_only: %v", err)
 	}
@@ -781,7 +782,7 @@ func TestDeclarationAndCaptureModes(t *testing.T) {
 	}
 
 	// Read declarations only
-	declSlice, err := store.ReadOwnerPrefix(reader, "exec:one", 99, ModeDeclarationsOnly)
+	declSlice, err := store.ReadOwnerPrefix(context.Background(), reader, "exec:one", 99, ModeDeclarationsOnly)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix declarations_only: %v", err)
 	}
@@ -793,7 +794,7 @@ func TestDeclarationAndCaptureModes(t *testing.T) {
 	}
 
 	// Read both
-	bothSlice, err := store.ReadOwnerPrefix(reader, "exec:one", 99, ModeBoth)
+	bothSlice, err := store.ReadOwnerPrefix(context.Background(), reader, "exec:one", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix both: %v", err)
 	}
@@ -813,7 +814,7 @@ func TestFrontierIsImmutable(t *testing.T) {
 	)
 
 	// Publish frontier at first fact
-	_, err := store.PublishCut(trustedAppend, FrontierSpec{
+	_, err := store.PublishCut(context.Background(), trustedAppend, FrontierSpec{
 		FrontierID:         "frontier:early",
 		TargetTraceOwnerID: "exec:one",
 		ThroughFactID:      receipt1.FactIDs[0],
@@ -823,7 +824,7 @@ func TestFrontierIsImmutable(t *testing.T) {
 	}
 
 	// Resolve should only see the first fact
-	slice, err := store.ResolveCut(reader, "frontier:early", ModeBoth)
+	slice, err := store.ResolveCut(context.Background(), reader, "frontier:early", ModeBoth)
 	if err != nil {
 		t.Fatalf("ResolveCut: %v", err)
 	}
@@ -832,7 +833,7 @@ func TestFrontierIsImmutable(t *testing.T) {
 	}
 
 	// Full prefix sees both user facts + the frontier_published record (same owner)
-	fullSlice, err := store.ReadOwnerPrefix(reader, "exec:one", 99, ModeBoth)
+	fullSlice, err := store.ReadOwnerPrefix(context.Background(), reader, "exec:one", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix: %v", err)
 	}
@@ -850,7 +851,7 @@ func TestAppendRequiresTrustedContext(t *testing.T) {
 		PresentedWitnessRefs: []string{},
 		TrustMode:            "",
 	}
-	_, err := store.Append(untrusted, AppendBatch{
+	_, err := store.Append(context.Background(), untrusted, AppendBatch{
 		AppendIntentID: "intent:untrusted",
 		Groups: []AppendGroup{{
 			TraceOwnerID: "exec:one",
@@ -877,7 +878,7 @@ func TestGoldenVectorsFromDisk(t *testing.T) {
 func TestExternalAnchorKindIsFact(t *testing.T) {
 	store := newMemStore(t)
 
-	parent, err := store.Append(TrustedAppendContext, AppendBatch{
+	parent, err := store.Append(context.Background(), TrustedAppendContext, AppendBatch{
 		AppendIntentID: "intent:anchor-parent",
 		Groups: []AppendGroup{{
 			TraceOwnerID: "owner:anchor-parent",
@@ -893,7 +894,7 @@ func TestExternalAnchorKindIsFact(t *testing.T) {
 		t.Fatalf("append parent: %v", err)
 	}
 
-	if _, err := store.Append(TrustedAppendContext, AppendBatch{
+	if _, err := store.Append(context.Background(), TrustedAppendContext, AppendBatch{
 		AppendIntentID: "intent:anchor-child",
 		Groups: []AppendGroup{{
 			TraceOwnerID:  "owner:anchor-child",
@@ -909,7 +910,7 @@ func TestExternalAnchorKindIsFact(t *testing.T) {
 		t.Fatalf("append child: %v", err)
 	}
 
-	slice, err := store.ReadOwnerPrefix(TrustedReadContext, "owner:anchor-child", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), TrustedReadContext, "owner:anchor-child", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix: %v", err)
 	}

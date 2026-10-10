@@ -96,7 +96,7 @@ func (r *Run) Wait(ctx context.Context) (*Execution, error) {
 	if err != nil {
 		return nil, err
 	}
-	slice, err := r.store.ResolveFrontier(trustedHandlesReadContext, cutoff.FrontierID, ModeBoth)
+	slice, err := r.store.ResolveFrontier(ctx, trustedHandlesReadContext, cutoff.FrontierID, ModeBoth)
 	if err != nil {
 		return nil, err
 	}
@@ -107,8 +107,8 @@ func (r *Run) Wait(ctx context.Context) (*Execution, error) {
 // terminal — without waiting for anything: it folds the owner prefix as it
 // stands. Unlike Wait it never blocks on the frontier.
 func (r *Run) Snapshot(ctx context.Context) (*Execution, error) {
-	_ = ctx // accepted for symmetry with Wait; no waiting happens here
-	slice, err := r.store.ReadOwnerPrefix(trustedHandlesReadContext, r.executionID, 99, ModeBoth)
+	// ctx threads into the owner-prefix read like every other store call.
+	slice, err := r.store.ReadOwnerPrefix(ctx, trustedHandlesReadContext, r.executionID, 99, ModeBoth)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func (r *Run) Cutoff(ctx context.Context) (Frontier, error) {
 // through the done channel.
 func (r *Run) waitForCutoff(ctx context.Context) (Frontier, error) {
 	for {
-		cutoff, err := r.store.ReadOwnerCutoff(r.frontierID)
+		cutoff, err := r.store.ReadOwnerCutoff(ctx, r.frontierID)
 		if err == nil {
 			return cutoff, nil
 		}
@@ -166,12 +166,11 @@ func (h *ChildHandle) RelationID() string          { return h.relationID }
 func (h *ChildHandle) Relation() ExecutionRelation { return h.relation }
 
 func (h *ChildHandle) Wait(ctx context.Context) (*Execution, error) {
-	_ = ctx // kept for symmetry with Run.Wait; children are terminal already
-	cutoff, err := h.store.ReadOwnerCutoff(h.frontierID)
+	cutoff, err := h.store.ReadOwnerCutoff(ctx, h.frontierID)
 	if err != nil {
 		return nil, err
 	}
-	slice, err := h.store.ResolveFrontier(trustedHandlesReadContext, cutoff.FrontierID, ModeBoth)
+	slice, err := h.store.ResolveFrontier(ctx, trustedHandlesReadContext, cutoff.FrontierID, ModeBoth)
 	if err != nil {
 		return nil, err
 	}
@@ -185,8 +184,7 @@ func (h *ChildHandle) Snapshot(ctx context.Context) (*Execution, error) {
 }
 
 func (h *ChildHandle) Cutoff(ctx context.Context) (Frontier, error) {
-	_ = ctx
-	return h.store.ReadOwnerCutoff(h.frontierID)
+	return h.store.ReadOwnerCutoff(ctx, h.frontierID)
 }
 
 // TaskControl is the parent-owned control surface available while a task
@@ -219,9 +217,9 @@ func (c *TaskControl) CausalTail() string { return c.causalTail }
 // advances the causal tail to it. Python returns the Fact; Go returns the
 // retained Record. A nil data map publishes {}, never JSON null — Python's
 // dict(data or {}) normalizes the same way.
-func (c *TaskControl) Publish(kind string, data map[string]any) (Record, error) {
+func (c *TaskControl) Publish(ctx context.Context, kind string, data map[string]any) (Record, error) {
 	c.publishIndex++
-	receipt, err := c.store.Append(TrustedAppendContext, AppendBatch{
+	receipt, err := c.store.Append(ctx, TrustedAppendContext, AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:publish:%d", c.runID, c.publishIndex),
 		Groups: []AppendGroup{{
 			TraceOwnerID:  c.executionID,
@@ -238,7 +236,7 @@ func (c *TaskControl) Publish(kind string, data map[string]any) (Record, error) 
 		return Record{}, err
 	}
 	c.causalTail = receipt.FactIDs[len(receipt.FactIDs)-1]
-	visible, err := c.store.ReadFact(trustedHandlesReadContext, c.causalTail)
+	visible, err := c.store.ReadFact(ctx, trustedHandlesReadContext, c.causalTail)
 	if err != nil {
 		return Record{}, err
 	}
@@ -258,7 +256,7 @@ func (c *TaskControl) Publish(kind string, data map[string]any) (Record, error) 
 // A child that cannot run records its own failure and still publishes a
 // terminal frontier, so the relation's child_frontier_id resolves unless
 // the store itself failed mid-spawn.
-func (c *TaskControl) Spawn(taskRef string, inputs map[string]any, reg *Registry) (*ChildHandle, error) {
+func (c *TaskControl) Spawn(ctx context.Context, taskRef string, inputs map[string]any, reg *Registry) (*ChildHandle, error) {
 	c.childIndex++
 	childRunID := fmt.Sprintf("%s:child:%d", c.runID, c.childIndex)
 	childCreateIntent := childRunID + ":create"
@@ -267,7 +265,7 @@ func (c *TaskControl) Spawn(taskRef string, inputs map[string]any, reg *Registry
 	relationIntent := childRunID + ":relation:spawned"
 	relationID := RelationIDFor(relationIntent, "relation")
 
-	relationReceipt, err := c.store.Append(TrustedAppendContext, CreateExecutionRelationBatch(
+	relationReceipt, err := c.store.Append(ctx, TrustedAppendContext, CreateExecutionRelationBatch(
 		relationIntent, relationID, RelationSpawned,
 		c.executionID, childExecutionID, childFrontierID,
 		[]string{c.causalTail},
@@ -275,20 +273,20 @@ func (c *TaskControl) Spawn(taskRef string, inputs map[string]any, reg *Registry
 	if err != nil {
 		return nil, err
 	}
-	relation, err := c.readRelation(relationReceipt.FactIDs[0])
+	relation, err := c.readRelation(ctx, relationReceipt.FactIDs[0])
 	if err != nil {
 		return nil, err
 	}
 	c.causalTail = relation.CreatedFactID
 
-	childRun, err := runTaskSync(c.store, reg, taskRef, childRunID, inputs,
+	childRun, err := runTaskSync(ctx, c.store, reg, taskRef, childRunID, inputs,
 		c.executionID, []string{relation.CreatedFactID},
 		c.executionID, []string{relation.CreatedFactID})
 	if err != nil {
 		return nil, err
 	}
 	c.frontiersByExecution[childRun.executionID] = childRun.frontierID
-	c.advanceToTerminalFact(childRun.frontierID)
+	c.advanceToTerminalFact(ctx, childRun.frontierID)
 	return &ChildHandle{
 		store:       c.store,
 		executionID: childRun.executionID,
@@ -316,16 +314,16 @@ func (c *TaskControl) AwaitTerminal(ctx context.Context, handle *ChildHandle) (*
 }
 
 // ReadExecution reads a known child execution from its retained frontier.
-func (c *TaskControl) ReadExecution(executionID string) (*Execution, error) {
+func (c *TaskControl) ReadExecution(ctx context.Context, executionID string) (*Execution, error) {
 	frontierID, ok := c.frontiersByExecution[executionID]
 	if !ok {
 		return nil, fmt.Errorf("execution is not known to this control: %s", executionID)
 	}
-	cutoff, err := c.store.ReadOwnerCutoff(frontierID)
+	cutoff, err := c.store.ReadOwnerCutoff(ctx, frontierID)
 	if err != nil {
 		return nil, err
 	}
-	slice, err := c.store.ResolveFrontier(trustedHandlesReadContext, cutoff.FrontierID, ModeBoth)
+	slice, err := c.store.ResolveFrontier(ctx, trustedHandlesReadContext, cutoff.FrontierID, ModeBoth)
 	if err != nil {
 		return nil, err
 	}
@@ -337,8 +335,8 @@ func (c *TaskControl) ReadExecution(executionID string) (*Execution, error) {
 // relation would make the parent's effective history unresolvable, so both
 // are checked before anything is appended. An empty relationID derives one
 // from the adopt intent.
-func (c *TaskControl) Adopt(executionID, frontierID, relationID string) (*ChildHandle, error) {
-	cutoff, err := c.store.ReadOwnerCutoff(frontierID)
+func (c *TaskControl) Adopt(ctx context.Context, executionID, frontierID, relationID string) (*ChildHandle, error) {
+	cutoff, err := c.store.ReadOwnerCutoff(ctx, frontierID)
 	if err != nil {
 		return nil, fmt.Errorf("adopt: frontier %s: %w", frontierID, err)
 	}
@@ -352,7 +350,7 @@ func (c *TaskControl) Adopt(executionID, frontierID, relationID string) (*ChildH
 	if relationID == "" {
 		relationID = RelationIDFor(relationIntent, "relation")
 	}
-	relationReceipt, err := c.store.Append(TrustedAppendContext, CreateExecutionRelationBatch(
+	relationReceipt, err := c.store.Append(ctx, TrustedAppendContext, CreateExecutionRelationBatch(
 		relationIntent, relationID, RelationAdopted,
 		c.executionID, executionID, frontierID,
 		[]string{c.causalTail},
@@ -360,7 +358,7 @@ func (c *TaskControl) Adopt(executionID, frontierID, relationID string) (*ChildH
 	if err != nil {
 		return nil, err
 	}
-	relation, err := c.readRelation(relationReceipt.FactIDs[0])
+	relation, err := c.readRelation(ctx, relationReceipt.FactIDs[0])
 	if err != nil {
 		return nil, err
 	}
@@ -381,8 +379,8 @@ func (c *TaskControl) Adopt(executionID, frontierID, relationID string) (*ChildH
 // without polling: Python's abandon reads handle.cutoff as a property, which
 // raises on a missing frontier — a child without a terminal cutoff cannot
 // be abandoned, it can only be left alone.
-func (c *TaskControl) Abandon(handle *ChildHandle) (ExecutionRelation, error) {
-	cutoff, err := c.store.ReadOwnerCutoff(handle.frontierID)
+func (c *TaskControl) Abandon(ctx context.Context, handle *ChildHandle) (ExecutionRelation, error) {
+	cutoff, err := c.store.ReadOwnerCutoff(ctx, handle.frontierID)
 	if err != nil {
 		return ExecutionRelation{}, fmt.Errorf("abandon: child has no terminal cutoff: %w", err)
 	}
@@ -397,7 +395,7 @@ func (c *TaskControl) Abandon(handle *ChildHandle) (ExecutionRelation, error) {
 	if terminal != causedBy[0] {
 		causedBy = append(causedBy, terminal)
 	}
-	relationReceipt, err := c.store.Append(TrustedAppendContext, CreateExecutionRelationBatch(
+	relationReceipt, err := c.store.Append(ctx, TrustedAppendContext, CreateExecutionRelationBatch(
 		fmt.Sprintf("%s:relation:abandoned:%d", c.runID, c.relationIndex),
 		handle.relationID, RelationAbandoned,
 		c.executionID, handle.executionID, handle.frontierID,
@@ -406,7 +404,7 @@ func (c *TaskControl) Abandon(handle *ChildHandle) (ExecutionRelation, error) {
 	if err != nil {
 		return ExecutionRelation{}, err
 	}
-	relation, err := c.readRelation(relationReceipt.FactIDs[0])
+	relation, err := c.readRelation(ctx, relationReceipt.FactIDs[0])
 	if err != nil {
 		return ExecutionRelation{}, err
 	}
@@ -414,8 +412,8 @@ func (c *TaskControl) Abandon(handle *ChildHandle) (ExecutionRelation, error) {
 	return relation, nil
 }
 
-func (c *TaskControl) readRelation(factID string) (ExecutionRelation, error) {
-	visible, err := c.store.ReadFact(trustedHandlesReadContext, factID)
+func (c *TaskControl) readRelation(ctx context.Context, factID string) (ExecutionRelation, error) {
+	visible, err := c.store.ReadFact(ctx, trustedHandlesReadContext, factID)
 	if err != nil {
 		return ExecutionRelation{}, err
 	}
@@ -429,8 +427,8 @@ func (c *TaskControl) readRelation(factID string) (ExecutionRelation, error) {
 // advanceToTerminalFact moves the causal tail to the frontier record a
 // terminal cutoff names, so subsequent appends chain after the child's
 // completion.
-func (c *TaskControl) advanceToTerminalFact(frontierID string) {
-	cutoff, err := c.store.ReadOwnerCutoff(frontierID)
+func (c *TaskControl) advanceToTerminalFact(ctx context.Context, frontierID string) {
+	cutoff, err := c.store.ReadOwnerCutoff(ctx, frontierID)
 	if err != nil {
 		return
 	}
@@ -443,7 +441,7 @@ func (c *TaskControl) advanceToTerminalFact(frontierID string) {
 // StartTaskSync runs a task synchronously — the faithful port of Python's
 // @task start. An empty runID generates one ("run:<32 hex>", the shape of
 // Python's uuid4().hex). The returned Run is terminal by the time it exists.
-func StartTaskSync(store *SQLiteTraceStore, reg *Registry, taskRef, runID string, inputs map[string]any) (*Run, error) {
+func StartTaskSync(ctx context.Context, store *SQLiteTraceStore, reg *Registry, taskRef, runID string, inputs map[string]any) (*Run, error) {
 	if runID == "" {
 		var err error
 		runID, err = generateRunID()
@@ -451,7 +449,7 @@ func StartTaskSync(store *SQLiteTraceStore, reg *Registry, taskRef, runID string
 			return nil, err
 		}
 	}
-	return runTaskSync(store, reg, taskRef, runID, inputs, "", nil, "", nil)
+	return runTaskSync(ctx, store, reg, taskRef, runID, inputs, "", nil, "", nil)
 }
 
 // StartTask runs a task in a goroutine and returns immediately with a live
@@ -475,7 +473,7 @@ func StartTask(ctx context.Context, store *SQLiteTraceStore, reg *Registry, task
 		done:        done,
 	}
 	go func() {
-		done <- runTaskSyncError(store, reg, taskRef, runID, inputs, "", nil, "", nil)
+		done <- runTaskSyncError(ctx, store, reg, taskRef, runID, inputs, "", nil, "", nil)
 	}()
 	return run, nil
 }
@@ -491,10 +489,10 @@ func generateRunID() (string, error) {
 // runTaskSync is the faithful port of Python's _run_task_sync: idempotent by
 // terminal-frontier existence, create → body → complete-or-fail → terminal
 // frontier, with the causal wiring the vectors record.
-func runTaskSync(store *SQLiteTraceStore, reg *Registry, taskRef, runID string, inputs map[string]any,
+func runTaskSync(ctx context.Context, store *SQLiteTraceStore, reg *Registry, taskRef, runID string, inputs map[string]any,
 	parentExecutionID string, createCausedBy []string,
 	frontierPublisherExecutionID string, frontierCausedBy []string) (*Run, error) {
-	if err := runTaskSyncError(store, reg, taskRef, runID, inputs,
+	if err := runTaskSyncError(ctx, store, reg, taskRef, runID, inputs,
 		parentExecutionID, createCausedBy, frontierPublisherExecutionID, frontierCausedBy); err != nil {
 		return nil, err
 	}
@@ -505,7 +503,7 @@ func runTaskSync(store *SQLiteTraceStore, reg *Registry, taskRef, runID string, 
 	}, nil
 }
 
-func runTaskSyncError(store *SQLiteTraceStore, reg *Registry, taskRef, runID string, inputs map[string]any,
+func runTaskSyncError(ctx context.Context, store *SQLiteTraceStore, reg *Registry, taskRef, runID string, inputs map[string]any,
 	parentExecutionID string, createCausedBy []string,
 	frontierPublisherExecutionID string, frontierCausedBy []string) error {
 	createIntent := runID + ":create"
@@ -519,7 +517,7 @@ func runTaskSyncError(store *SQLiteTraceStore, reg *Registry, taskRef, runID str
 	// — and without re-invoking the body, whose external side effects are not
 	// idempotent. Only the not-published condition counts as "run it"; any
 	// other read error is real and returns.
-	cutoff, err := store.ReadOwnerCutoff(frontierID)
+	cutoff, err := store.ReadOwnerCutoff(ctx, frontierID)
 	if err == nil {
 		_ = cutoff
 		return nil
@@ -528,7 +526,7 @@ func runTaskSyncError(store *SQLiteTraceStore, reg *Registry, taskRef, runID str
 		return err
 	}
 
-	createReceipt, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
+	createReceipt, err := store.Append(ctx, TrustedAppendContext, CreateExecutionBatch(
 		createIntent, executionID, taskRef, inputs, parentExecutionID, createCausedBy,
 	))
 	if err != nil {
@@ -544,11 +542,11 @@ func runTaskSyncError(store *SQLiteTraceStore, reg *Registry, taskRef, runID str
 
 	var terminalReceipt AppendReceipt
 	if runErr == nil {
-		terminalReceipt, err = store.Append(TrustedAppendContext, CompleteExecutionBatch(
+		terminalReceipt, err = store.Append(ctx, TrustedAppendContext, CompleteExecutionBatch(
 			completeIntent, executionID, outputs, []string{control.causalTail},
 		))
 	} else {
-		terminalReceipt, err = store.Append(TrustedAppendContext, FailExecutionBatch(
+		terminalReceipt, err = store.Append(ctx, TrustedAppendContext, FailExecutionBatch(
 			failIntent, executionID, runErr.Error(), []string{control.causalTail},
 		))
 	}
@@ -556,7 +554,7 @@ func runTaskSyncError(store *SQLiteTraceStore, reg *Registry, taskRef, runID str
 		return err
 	}
 
-	_, err = PublishExecutionFrontier(store, TrustedAppendContext,
+	_, err = PublishExecutionFrontier(ctx, store, TrustedAppendContext,
 		frontierID, executionID, terminalReceipt.FactIDs[len(terminalReceipt.FactIDs)-1],
 		frontierPublisherExecutionID, "", frontierCausedBy)
 	return err

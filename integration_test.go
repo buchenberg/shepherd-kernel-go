@@ -78,7 +78,7 @@ func TestIntegration_RollbackScenario(t *testing.T) {
 	}
 
 	// 9. Verify trace records both checkpoint.create and checkpoint.restore
-	slice, err := store.ReadOwnerPrefix(TrustedReadContext, "sub:worker", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), TrustedReadContext, "sub:worker", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read trace: %v", err)
 	}

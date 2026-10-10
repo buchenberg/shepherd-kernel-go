@@ -60,39 +60,39 @@ func TestHandlesIntegrationTree(t *testing.T) {
 		return map[string]any{"leaf": true}, nil
 	})
 	reg.Register("ParentTask", func(control *TaskControl) (map[string]any, error) {
-		if _, err := control.Publish("phase", map[string]any{"at": "start"}); err != nil {
+		if _, err := control.Publish(context.Background(), "phase", map[string]any{"at": "start"}); err != nil {
 			return nil, err
 		}
-		kept, err := control.Spawn("LeafTask", map[string]any{"x": json.Number("1")}, reg)
+		kept, err := control.Spawn(context.Background(), "LeafTask", map[string]any{"x": json.Number("1")}, reg)
 		if err != nil {
 			return nil, err
 		}
-		dropped, err := control.Spawn("LeafTask", map[string]any{"x": json.Number("2")}, reg)
+		dropped, err := control.Spawn(context.Background(), "LeafTask", map[string]any{"x": json.Number("2")}, reg)
 		if err != nil {
 			return nil, err
 		}
 		if _, err := control.AwaitTerminal(context.Background(), kept); err != nil {
 			return nil, err
 		}
-		if _, err := control.Abandon(dropped); err != nil {
+		if _, err := control.Abandon(context.Background(), dropped); err != nil {
 			return nil, err
 		}
 
 		// Adopt an execution created outside this tree.
-		external, err := StartTaskSync(store, reg, "LeafTask", "integ:external", map[string]any{"x": json.Number("3")})
+		external, err := StartTaskSync(context.Background(), store, reg, "LeafTask", "integ:external", map[string]any{"x": json.Number("3")})
 		if err != nil {
 			return nil, err
 		}
-		if _, err := control.Adopt(external.ExecutionID(), external.FrontierID(), ""); err != nil {
+		if _, err := control.Adopt(context.Background(), external.ExecutionID(), external.FrontierID(), ""); err != nil {
 			return nil, err
 		}
-		if _, err := control.Publish("phase", map[string]any{"at": "end"}); err != nil {
+		if _, err := control.Publish(context.Background(), "phase", map[string]any{"at": "end"}); err != nil {
 			return nil, err
 		}
 		return map[string]any{"children": json.Number("2")}, nil
 	})
 
-	run, err := StartTaskSync(store, reg, "ParentTask", "integ:parent", nil)
+	run, err := StartTaskSync(context.Background(), store, reg, "ParentTask", "integ:parent", nil)
 	if err != nil {
 		t.Fatalf("StartTaskSync: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestHandlesIntegrationTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Cutoff: %v", err)
 	}
-	history, err := ProjectEffectiveHistoryFromStore(store, reader, cutoff)
+	history, err := ProjectEffectiveHistoryFromStore(context.Background(), store, reader, cutoff)
 	if err != nil {
 		t.Fatalf("ProjectEffectiveHistoryFromStore: %v", err)
 	}
@@ -141,20 +141,20 @@ func TestHandlesIntegrationTree(t *testing.T) {
 
 	// The restart law: close the store, reopen the same file, re-project —
 	// the summary must be identical.
-	if err := store.Close(); err != nil {
+	if err := store.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	reopened, err := NewSQLiteTraceStore(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	defer reopened.Close(context.Background())
 
-	reopenedCutoff, err := reopened.ReadOwnerCutoff(run.FrontierID())
+	reopenedCutoff, err := reopened.ReadOwnerCutoff(context.Background(), run.FrontierID())
 	if err != nil {
 		t.Fatalf("ReadOwnerCutoff after restart: %v", err)
 	}
-	historyAfter, err := ProjectEffectiveHistoryFromStore(reopened, reader, reopenedCutoff)
+	historyAfter, err := ProjectEffectiveHistoryFromStore(context.Background(), reopened, reader, reopenedCutoff)
 	if err != nil {
 		t.Fatalf("re-project: %v", err)
 	}

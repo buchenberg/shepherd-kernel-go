@@ -4,7 +4,10 @@ package shepherd
 // per id wins, abandoned drops a child, adopted keeps it — are mirrored from
 // schemas/history.py's _active_relations, which relies on owner-path order.
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // historyFixture builds a parent with two published facts and three
 // children: one spawned and completed (active), one spawned then abandoned
@@ -15,7 +18,7 @@ func historyFixture(t *testing.T) (*SQLiteTraceStore, string) {
 	store := newMemStore(t)
 	parentID := ExecutionIDFor("hist:parent:create", "execution")
 
-	parentCreate, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
+	parentCreate, err := store.Append(context.Background(), TrustedAppendContext, CreateExecutionBatch(
 		"hist:parent:create", parentID, "ParentTask", nil, "", nil,
 	))
 	if err != nil {
@@ -25,7 +28,7 @@ func historyFixture(t *testing.T) (*SQLiteTraceStore, string) {
 
 	publish := func(intent, kind string) {
 		t.Helper()
-		receipt, err := store.Append(TrustedAppendContext, AppendBatch{
+		receipt, err := store.Append(context.Background(), TrustedAppendContext, AppendBatch{
 			AppendIntentID: intent,
 			Groups: []AppendGroup{{
 				TraceOwnerID:  parentID,
@@ -49,13 +52,13 @@ func historyFixture(t *testing.T) (*SQLiteTraceStore, string) {
 	child := func(runID, taskRef string) (string, string) {
 		t.Helper()
 		childID := ExecutionIDFor(runID+":create", "execution")
-		create, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
+		create, err := store.Append(context.Background(), TrustedAppendContext, CreateExecutionBatch(
 			runID+":create", childID, taskRef, nil, parentID, []string{tail},
 		))
 		if err != nil {
 			t.Fatalf("child %s create: %v", runID, err)
 		}
-		complete, err := store.Append(TrustedAppendContext, CompleteExecutionBatch(
+		complete, err := store.Append(context.Background(), TrustedAppendContext, CompleteExecutionBatch(
 			runID+":complete", childID, map[string]any{"who": taskRef},
 			create.FactIDs[len(create.FactIDs)-1:],
 		))
@@ -63,7 +66,7 @@ func historyFixture(t *testing.T) (*SQLiteTraceStore, string) {
 			t.Fatalf("child %s complete: %v", runID, err)
 		}
 		frontierID := "frontier:" + runID + ":terminal"
-		if _, err := PublishExecutionFrontier(store, TrustedAppendContext,
+		if _, err := PublishExecutionFrontier(context.Background(), store, TrustedAppendContext,
 			frontierID, childID, complete.FactIDs[len(complete.FactIDs)-1], parentID, "", nil); err != nil {
 			t.Fatalf("child %s frontier: %v", runID, err)
 		}
@@ -77,7 +80,7 @@ func historyFixture(t *testing.T) (*SQLiteTraceStore, string) {
 
 	relation := func(intent, relationID, kind, childID, frontierID string) {
 		t.Helper()
-		receipt, err := store.Append(TrustedAppendContext, CreateExecutionRelationBatch(
+		receipt, err := store.Append(context.Background(), TrustedAppendContext, CreateExecutionRelationBatch(
 			intent, relationID, RelationKind(kind), parentID, childID, frontierID, []string{tail},
 		))
 		if err != nil {
@@ -107,14 +110,14 @@ func historyFixture(t *testing.T) (*SQLiteTraceStore, string) {
 
 	// Terminate the parent through the last relation fact and publish its
 	// frontier, so the whole tree is covered by one cutoff.
-	complete, err := store.Append(TrustedAppendContext, CompleteExecutionBatch(
+	complete, err := store.Append(context.Background(), TrustedAppendContext, CompleteExecutionBatch(
 		"hist:parent:complete", parentID, map[string]any{"done": true}, []string{tail},
 	))
 	if err != nil {
 		t.Fatalf("parent complete: %v", err)
 	}
 	frontierID := "frontier:hist:parent:terminal"
-	if _, err := PublishExecutionFrontier(store, TrustedAppendContext,
+	if _, err := PublishExecutionFrontier(context.Background(), store, TrustedAppendContext,
 		frontierID, parentID, complete.FactIDs[len(complete.FactIDs)-1], "", "", nil); err != nil {
 		t.Fatalf("parent frontier: %v", err)
 	}
@@ -125,12 +128,12 @@ func historyFixture(t *testing.T) (*SQLiteTraceStore, string) {
 // projected, only the active children resolved, published facts in order.
 func TestProjectEffectiveHistory(t *testing.T) {
 	store, frontierID := historyFixture(t)
-	cutoff, err := store.ReadOwnerCutoff(frontierID)
+	cutoff, err := store.ReadOwnerCutoff(context.Background(), frontierID)
 	if err != nil {
 		t.Fatalf("ReadOwnerCutoff: %v", err)
 	}
 
-	history, err := ProjectEffectiveHistoryFromStore(store, reader, cutoff)
+	history, err := ProjectEffectiveHistoryFromStore(context.Background(), store, reader, cutoff)
 	if err != nil {
 		t.Fatalf("ProjectEffectiveHistoryFromStore: %v", err)
 	}

@@ -34,40 +34,40 @@ func TestHistoryVectorTreeReplay(t *testing.T) {
 		return map[string]any{"leaf": true}, nil
 	})
 	reg.Register(vec.TaskRefs["parent"], func(control *TaskControl) (map[string]any, error) {
-		if _, err := control.Publish("phase", map[string]any{"at": "start"}); err != nil {
+		if _, err := control.Publish(context.Background(), "phase", map[string]any{"at": "start"}); err != nil {
 			return nil, err
 		}
-		kept, err := control.Spawn(vec.TaskRefs["child"], nil, reg)
+		kept, err := control.Spawn(context.Background(), vec.TaskRefs["child"], nil, reg)
 		if err != nil {
 			return nil, err
 		}
 		_ = kept
-		dropped, err := control.Spawn(vec.TaskRefs["child"], nil, reg)
+		dropped, err := control.Spawn(context.Background(), vec.TaskRefs["child"], nil, reg)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := control.Abandon(dropped); err != nil {
+		if _, err := control.Abandon(context.Background(), dropped); err != nil {
 			return nil, err
 		}
-		external, err := StartTaskSync(store, reg, vec.TaskRefs["child"], vec.RunID+":external", nil)
+		external, err := StartTaskSync(context.Background(), store, reg, vec.TaskRefs["child"], vec.RunID+":external", nil)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := control.Adopt(external.ExecutionID(), external.FrontierID(), ""); err != nil {
+		if _, err := control.Adopt(context.Background(), external.ExecutionID(), external.FrontierID(), ""); err != nil {
 			return nil, err
 		}
-		if _, err := control.Publish("phase", map[string]any{"at": "end"}); err != nil {
+		if _, err := control.Publish(context.Background(), "phase", map[string]any{"at": "end"}); err != nil {
 			return nil, err
 		}
 		return map[string]any{"leaves": json.Number("2")}, nil
 	})
 
-	run, err := StartTaskSync(store, reg, vec.TaskRefs["parent"], vec.RunID, nil)
+	run, err := StartTaskSync(context.Background(), store, reg, vec.TaskRefs["parent"], vec.RunID, nil)
 	if err != nil {
 		t.Fatalf("StartTaskSync: %v", err)
 	}
 
-	slice, err := store.ReadOwnerPrefix(reader, vec.ExecutionID, 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), reader, vec.ExecutionID, 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestHistoryVectorTreeReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Cutoff: %v", err)
 	}
-	history, err := ProjectEffectiveHistoryFromStore(store, reader, cutoff)
+	history, err := ProjectEffectiveHistoryFromStore(context.Background(), store, reader, cutoff)
 	if err != nil {
 		t.Fatalf("ProjectEffectiveHistoryFromStore: %v", err)
 	}
@@ -136,19 +136,19 @@ func TestStartTaskSyncIdempotentRerunRunsBodyOnce(t *testing.T) {
 		return nil, nil
 	})
 
-	if _, err := StartTaskSync(store, reg, "SideEffectTask", "guard:run", nil); err != nil {
+	if _, err := StartTaskSync(context.Background(), store, reg, "SideEffectTask", "guard:run", nil); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if err := store.Close(); err != nil {
+	if err := store.Close(context.Background()); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 	reopened, err := NewSQLiteTraceStore(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	defer reopened.Close(context.Background())
 
-	if _, err := StartTaskSync(reopened, reg, "SideEffectTask", "guard:run", nil); err != nil {
+	if _, err := StartTaskSync(context.Background(), reopened, reg, "SideEffectTask", "guard:run", nil); err != nil {
 		t.Fatalf("rerun: %v", err)
 	}
 	if got := bodyRuns.Load(); got != 1 {
@@ -234,29 +234,29 @@ func TestAdoptRejectsInvalidFrontier(t *testing.T) {
 	store := newMemStore(t)
 	reg := NewRegistry()
 	reg.Register("AdopterTask", func(control *TaskControl) (map[string]any, error) {
-		if _, err := control.Adopt("exec:someone-else", "frontier:does-not-exist", ""); err == nil {
+		if _, err := control.Adopt(context.Background(), "exec:someone-else", "frontier:does-not-exist", ""); err == nil {
 			t.Error("Adopt accepted an unknown frontier")
 		}
 		return nil, nil
 	})
-	if _, err := StartTaskSync(store, reg, "AdopterTask", "adopt:bad", nil); err != nil {
+	if _, err := StartTaskSync(context.Background(), store, reg, "AdopterTask", "adopt:bad", nil); err != nil {
 		t.Fatalf("StartTaskSync: %v", err)
 	}
 
 	// A real frontier aimed at the wrong execution is also rejected. Build
 	// one execution, then try to adopt its frontier under another id.
 	reg.Register("AdopterTask2", func(control *TaskControl) (map[string]any, error) {
-		other, err := StartTaskSync(store, reg, "Leaf", "adopt:other", nil)
+		other, err := StartTaskSync(context.Background(), store, reg, "Leaf", "adopt:other", nil)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := control.Adopt("exec:not-the-target", other.FrontierID(), ""); err == nil {
+		if _, err := control.Adopt(context.Background(), "exec:not-the-target", other.FrontierID(), ""); err == nil {
 			t.Error("Adopt accepted a frontier that targets a different execution")
 		}
 		return nil, nil
 	})
 	reg.Register("Leaf", func(control *TaskControl) (map[string]any, error) { return nil, nil })
-	if _, err := StartTaskSync(store, reg, "AdopterTask2", "adopt:mismatch", nil); err != nil {
+	if _, err := StartTaskSync(context.Background(), store, reg, "AdopterTask2", "adopt:mismatch", nil); err != nil {
 		t.Fatalf("StartTaskSync: %v", err)
 	}
 }
@@ -267,7 +267,7 @@ func TestAbandonWithoutTerminalCutoffFails(t *testing.T) {
 	store := newMemStore(t)
 	handle := &ChildHandle{store: store, executionID: "exec:x", frontierID: "frontier:never", relationID: "rel:y"}
 	control := newTaskControl(store, "exec:parent", "abandon:run", "")
-	if _, err := control.Abandon(handle); err == nil {
+	if _, err := control.Abandon(context.Background(), handle); err == nil {
 		t.Fatal("Abandon of a child with no terminal cutoff succeeded, want a loud error")
 	}
 }

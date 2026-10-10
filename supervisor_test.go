@@ -1,6 +1,7 @@
 package shepherd
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -184,7 +185,7 @@ func TestSupervisor_Inject(t *testing.T) {
 	}
 
 	// Should be recorded in the trace
-	slice, err := store.ReadOwnerPrefix(TrustedReadContext, "sub:inject-target", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), TrustedReadContext, "sub:inject-target", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read trace: %v", err)
 	}
@@ -222,7 +223,7 @@ func TestSupervisor_Halt(t *testing.T) {
 	}
 
 	// Should be recorded in the trace
-	slice, err := store.ReadOwnerPrefix(TrustedReadContext, "sub:halt-target", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), TrustedReadContext, "sub:halt-target", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read trace: %v", err)
 	}

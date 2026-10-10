@@ -197,7 +197,7 @@ func TestWorkspace_CaptureRecordsInTrace(t *testing.T) {
 		t.Fatalf("ApplyWorkspace: %v", err)
 	}
 
-	slice, err := store.ReadOwnerPrefix(TrustedReadContext, "sub:ws-trace", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), TrustedReadContext, "sub:ws-trace", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read trace: %v", err)
 	}

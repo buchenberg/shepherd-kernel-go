@@ -219,7 +219,7 @@ func (s *Scope) Seal(ctx context.Context) (*RetainedOutput, error) {
 
 	stateDigest, _ := ws.Digest()
 	baselineDigest, _ := baseline.Digest()
-	receipt, err := s.store.Append(TrustedAppendContext, AppendBatch{
+	receipt, err := s.store.Append(ctx, TrustedAppendContext, AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:seal:%d", ownerID, seq),
 		Groups: []AppendGroup{{
 			TraceOwnerID: ownerID,
@@ -412,7 +412,7 @@ func (m *ScopeManager) Settle(ctx context.Context, outputID string, action Settl
 	out.state = terminal
 	out.action = action
 	out.settledAt = time.Now()
-	recordRunOutputSettled(scope, out, action)
+	recordRunOutputSettled(ctx, scope, out, action)
 	return nil
 }
 
@@ -462,7 +462,7 @@ func overlappingPaths(changes []ProposedChange, parentFiles []string) []string {
 // recordRunOutputSettled appends the settlement record on the sealing
 // scope's owner path, citing the sealed record. Advisory by design: the
 // settlement's physical effects have already happened when this runs.
-func recordRunOutputSettled(scope *Scope, out *RetainedOutput, action SettlementAction) {
+func recordRunOutputSettled(ctx context.Context, scope *Scope, out *RetainedOutput, action SettlementAction) {
 	scope.mu.RLock()
 	ownerID := scope.ownerID
 	scope.mu.RUnlock()
@@ -473,7 +473,7 @@ func recordRunOutputSettled(scope *Scope, out *RetainedOutput, action Settlement
 	}
 	stateDigest, _ := out.workspace.Digest()
 
-	_, err := scope.store.Append(TrustedAppendContext, AppendBatch{
+	_, err := scope.store.Append(ctx, TrustedAppendContext, AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:settle:%s:%d", ownerID, action, nextCheckpointSeq.Add(1)),
 		Groups: []AppendGroup{{
 			TraceOwnerID:  ownerID,

@@ -139,7 +139,7 @@ func (s *Scope) CreateCheckpoint(ctx context.Context, snapshot []byte) (*Checkpo
 		"state_digest":  digest,
 		"has_snapshot":  len(snapshot) > 0,
 	}
-	_, err = s.store.Append(TrustedAppendContext, AppendBatch{
+	_, err = s.store.Append(ctx, TrustedAppendContext, AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:checkpoint:%d", ownerID, seq),
 		Groups: []AppendGroup{{
 			TraceOwnerID: ownerID,
@@ -213,7 +213,7 @@ func (s *Scope) RestoreCheckpoint(ctx context.Context, cp *Checkpoint) ([]byte, 
 	cp.State = CheckpointUsed
 
 	digest, _ := cp.Workspace.Digest()
-	_, err := s.store.Append(TrustedAppendContext, AppendBatch{
+	_, err := s.store.Append(ctx, TrustedAppendContext, AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:restore:%d", ownerID, cp.Seq),
 		Groups: []AppendGroup{{
 			TraceOwnerID: ownerID,

@@ -51,7 +51,7 @@ func TestMaterializeDispatchesViaWitnessStampedSubstrate(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	declaration, err := store.Append(materializeAppend, declareBatch(
+	declaration, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:declare-write", "owner:materialize", "test.echo.v1",
 		RecordDraft{
 			Mode:      Declaration,
@@ -87,7 +87,7 @@ func TestMaterializeDispatchesViaWitnessStampedSubstrate(t *testing.T) {
 		t.Fatalf("produced ids = %v, want one", receipt.ProducedRecordIDs)
 	}
 
-	capture, err := store.ReadFact(reader, receipt.ProducedRecordIDs[0])
+	capture, err := store.ReadFact(context.Background(), reader, receipt.ProducedRecordIDs[0])
 	if err != nil {
 		t.Fatalf("read capture: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestMaterializeDispatchesViaWitnessStampedSubstrate(t *testing.T) {
 		t.Errorf("capture payload = %v", rec.Body.Payload)
 	}
 
-	witness, err := store.ReadFact(reader, rec.Envelope.WitnessRef)
+	witness, err := store.ReadFact(context.Background(), reader, rec.Envelope.WitnessRef)
 	if err != nil {
 		t.Fatalf("read witness: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestMaterializeRejectsCaptureTargets(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	capture, err := store.Append(materializeAppend, declareBatch(
+	capture, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:capture-only", "owner:materialize", "test.echo.v1",
 		RecordDraft{Mode: Capture, SchemaRef: "example.write.v1", KindLabel: "write", Payload: map[string]any{"path": "note.txt"}},
 	))
@@ -155,7 +155,7 @@ func TestMaterializeRejectsCaptureTargets(t *testing.T) {
 
 func TestMaterializeFailsClosedForUnregisteredSubstrate(t *testing.T) {
 	store := newMemStore(t)
-	declaration, err := store.Append(materializeAppend, declareBatch(
+	declaration, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:unknown-substrate", "owner:materialize", "missing.substrate.v1",
 		RecordDraft{Mode: Declaration, SchemaRef: "example.write.v1", KindLabel: "write", Payload: map[string]any{"path": "note.txt"}},
 	))
@@ -189,7 +189,7 @@ func TestMaterializeWithDeterministicSQLiteKVSubstrate(t *testing.T) {
 	if err := registry.Register(kv); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	declaration, err := store.Append(materializeAppend, declareBatch(
+	declaration, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:kv-put", "owner:kv", KVSQLiteSubstrateRef,
 		RecordDraft{
 			Mode:      Declaration,
@@ -231,7 +231,7 @@ func TestMaterializeWithDeterministicSQLiteKVSubstrate(t *testing.T) {
 		t.Errorf("anchors = %v, want %v", receipt.WorldSideAnchors, wantAnchors)
 	}
 
-	capture, err := store.ReadFact(reader, receipt.ProducedRecordIDs[0])
+	capture, err := store.ReadFact(context.Background(), reader, receipt.ProducedRecordIDs[0])
 	if err != nil {
 		t.Fatalf("read capture: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestMaterializeWithDeterministicSQLiteKVSubstrate(t *testing.T) {
 	if !reflect.DeepEqual(rec.Body.Payload, map[string]any{"key": "answer", "value": map[string]any{"n": jsonNumber(t, 42)}}) {
 		t.Errorf("capture payload = %v", rec.Body.Payload)
 	}
-	witness, err := store.ReadFact(reader, rec.Envelope.WitnessRef)
+	witness, err := store.ReadFact(context.Background(), reader, rec.Envelope.WitnessRef)
 	if err != nil {
 		t.Fatalf("read witness: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestMaterializeRetryReturnsReceiptWithoutRedispatchingSubstrate(t *testing.
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	declaration, err := store.Append(materializeAppend, declareBatch(
+	declaration, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:count-declaration", "owner:count", "test.count.v1",
 		RecordDraft{Mode: Declaration, SchemaRef: "example.write.v1", KindLabel: "write", Payload: map[string]any{"value": jsonNumber(t, 1)}},
 	))
@@ -315,7 +315,7 @@ func TestMaterializeRetryReturnsReceiptWithoutRedispatchingSubstrate(t *testing.
 	if err != nil {
 		t.Fatalf("second materialize: %v", err)
 	}
-	store.Close()
+	store.Close(context.Background())
 
 	// Restart: the ledger is durable, so a restarted process replays the
 	// stored receipt without redispatching the substrate.
@@ -323,7 +323,7 @@ func TestMaterializeRetryReturnsReceiptWithoutRedispatchingSubstrate(t *testing.
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	defer restarted.Close()
+	defer restarted.Close(context.Background())
 	third, err := Materialize(context.Background(), restarted, materializeContext(), req, registry)
 	if err != nil {
 		t.Fatalf("third materialize: %v", err)
@@ -380,7 +380,7 @@ func TestMaterializeReceiptReplayPreservesAnchorValueTypes(t *testing.T) {
 	if err := registry.Register(substrate); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	declaration, err := store.Append(materializeAppend, declareBatch(
+	declaration, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:anchor-declaration", "owner:anchor", "test.anchor.v1",
 		RecordDraft{Mode: Declaration, SchemaRef: "example.write.v1", Payload: map[string]any{"value": jsonNumber(t, 1)}},
 	))
@@ -422,14 +422,14 @@ func TestMaterializeIntentConflictIsRejectedBeforeSubstrateDispatch(t *testing.T
 		t.Fatalf("register: %v", err)
 	}
 
-	first, err := store.Append(materializeAppend, declareBatch(
+	first, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:count-conflict:first", "owner:count-conflict", "test.count.v1",
 		RecordDraft{Mode: Declaration, SchemaRef: "example.write.v1", Payload: map[string]any{"value": jsonNumber(t, 1)}},
 	))
 	if err != nil {
 		t.Fatalf("append first: %v", err)
 	}
-	second, err := store.Append(materializeAppend, declareBatch(
+	second, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:count-conflict:second", "owner:count-conflict", "test.count.v1",
 		RecordDraft{Mode: Declaration, SchemaRef: "example.write.v1", Payload: map[string]any{"value": jsonNumber(t, 2)}},
 	))
@@ -482,11 +482,11 @@ func TestMaterializeTargetsExplicitOwnerPathForSharedRecords(t *testing.T) {
 		KindLabel: "write",
 		Payload:   map[string]any{"path": "note.txt", "text": "hello"},
 	}
-	first, err := store.Append(materializeAppend, declareBatch("intent:shared:first", "owner:z", "test.echo.v1", draft))
+	first, err := store.Append(context.Background(), materializeAppend, declareBatch("intent:shared:first", "owner:z", "test.echo.v1", draft))
 	if err != nil {
 		t.Fatalf("append first: %v", err)
 	}
-	second, err := store.Append(materializeAppend, declareBatch("intent:shared:second", "owner:a", "test.echo.v1", draft))
+	second, err := store.Append(context.Background(), materializeAppend, declareBatch("intent:shared:second", "owner:a", "test.echo.v1", draft))
 	if err != nil {
 		t.Fatalf("append second: %v", err)
 	}
@@ -504,11 +504,11 @@ func TestMaterializeTargetsExplicitOwnerPathForSharedRecords(t *testing.T) {
 		t.Fatalf("materialize: %v", err)
 	}
 
-	zSlice, err := store.ReadOwnerPrefix(reader, "owner:z", 99, ModeBoth)
+	zSlice, err := store.ReadOwnerPrefix(context.Background(), reader, "owner:z", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read owner:z: %v", err)
 	}
-	aSlice, err := store.ReadOwnerPrefix(reader, "owner:a", 99, ModeBoth)
+	aSlice, err := store.ReadOwnerPrefix(context.Background(), reader, "owner:a", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read owner:a: %v", err)
 	}
@@ -527,7 +527,7 @@ func TestMaterializeRejectsRecordMissingFromTargetOwnerPath(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	declaration, err := store.Append(materializeAppend, declareBatch(
+	declaration, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:wrong-owner", "owner:right", "test.echo.v1",
 		RecordDraft{Mode: Declaration, SchemaRef: "example.write.v1", Payload: map[string]any{"value": jsonNumber(t, 1)}},
 	))
@@ -589,14 +589,14 @@ func TestMaterializeRejectsCleanFailureWithCaptures(t *testing.T) {
 	if err := registry.Register(&lyingSubstrate{}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	declaration, err := store.Append(materializeAppend, declareBatch(
+	declaration, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:lying-declaration", "owner:lying", "test.lying.v1",
 		RecordDraft{Mode: Declaration, SchemaRef: "example.write.v1", KindLabel: "write", Payload: map[string]any{"value": jsonNumber(t, 1)}},
 	))
 	if err != nil {
 		t.Fatalf("append declaration: %v", err)
 	}
-	factsBefore, _ := store.FactCount()
+	factsBefore, _ := store.FactCount(context.Background())
 
 	_, err = Materialize(context.Background(), store, materializeContext(), MaterializationRequest{
 		AppendIntentID:            "intent:lying-apply",
@@ -611,13 +611,13 @@ func TestMaterializeRejectsCleanFailureWithCaptures(t *testing.T) {
 		t.Errorf("error = %q, want it to name the clean_failure contradiction", err.Error())
 	}
 
-	factsAfter, _ := store.FactCount()
+	factsAfter, _ := store.FactCount(context.Background())
 	if factsBefore != factsAfter {
 		t.Errorf("fact count = %d after rejection, want %d — nothing may be appended", factsAfter, factsBefore)
 	}
 	// No ledger entry either, so the same intent can be retried with a
 	// consistent result.
-	slice, err := store.ReadOwnerPrefix(reader, "owner:lying", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), reader, "owner:lying", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read owner: %v", err)
 	}
@@ -630,7 +630,7 @@ func TestMaterializeRejectsCleanFailureWithCaptures(t *testing.T) {
 
 func TestMaterializeRejectsNonMaterializeOperationContext(t *testing.T) {
 	store := newMemStore(t)
-	declaration, err := store.Append(materializeAppend, declareBatch(
+	declaration, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:op-gate", "owner:gate", "test.echo.v1",
 		RecordDraft{Mode: Declaration, SchemaRef: "example.write.v1", Payload: map[string]any{"value": jsonNumber(t, 1)}},
 	))
@@ -690,7 +690,7 @@ func TestMaterializeCrashWindowReplayIsConsistent(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	declaration, err := store.Append(materializeAppend, declareBatch(
+	declaration, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:crash-declaration", "owner:crash", "test.echo.v1",
 		RecordDraft{Mode: Declaration, SchemaRef: "example.write.v1", KindLabel: "write", Payload: map[string]any{"value": jsonNumber(t, 1)}},
 	))
@@ -708,7 +708,7 @@ func TestMaterializeCrashWindowReplayIsConsistent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("materialize: %v", err)
 	}
-	factsBefore, err := store.FactCount()
+	factsBefore, err := store.FactCount(context.Background())
 	if err != nil {
 		t.Fatalf("fact count: %v", err)
 	}
@@ -723,7 +723,7 @@ func TestMaterializeCrashWindowReplayIsConsistent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replay after crash window: %v", err)
 	}
-	factsAfter, err := store.FactCount()
+	factsAfter, err := store.FactCount(context.Background())
 	if err != nil {
 		t.Fatalf("fact count: %v", err)
 	}
@@ -753,7 +753,7 @@ func TestMaterializeCaptureOwnerOverride(t *testing.T) {
 	if err := registry.Register(NewEchoSubstrate("test.echo.v1", "example.write.v1")); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	declaration, err := store.Append(materializeAppend, declareBatch(
+	declaration, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:owner-override", "owner:decl", "test.echo.v1",
 		RecordDraft{Mode: Declaration, SchemaRef: "example.write.v1", Payload: map[string]any{"value": jsonNumber(t, 1)}},
 	))
@@ -772,7 +772,7 @@ func TestMaterializeCaptureOwnerOverride(t *testing.T) {
 		t.Fatalf("materialize: %v", err)
 	}
 
-	slice, err := store.ReadOwnerPrefix(reader, "owner:captures", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), reader, "owner:captures", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read capture owner: %v", err)
 	}
@@ -790,7 +790,7 @@ func TestMaterializeRejectsTargetBeyondOrdinalCutoff(t *testing.T) {
 	if err := registry.Register(NewEchoSubstrate("test.echo.v1", "example.write.v1")); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	declaration, err := store.Append(materializeAppend, declareBatch(
+	declaration, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:cutoff", "owner:cutoff", "test.echo.v1",
 		RecordDraft{Mode: Declaration, SchemaRef: "example.write.v1", Payload: map[string]any{"value": jsonNumber(t, 1)}},
 	))
@@ -800,14 +800,14 @@ func TestMaterializeRejectsTargetBeyondOrdinalCutoff(t *testing.T) {
 
 	// The declaration sits at ordinal 0; a cutoff of -1 is impossible, so
 	// use a store with a second fact and a cutoff of 0 targeting it.
-	_, err = store.Append(materializeAppend, declareBatch(
+	_, err = store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:cutoff:second", "owner:cutoff", "test.echo.v1",
 		RecordDraft{Mode: Declaration, SchemaRef: "example.write.v1", Payload: map[string]any{"value": jsonNumber(t, 2)}},
 	))
 	if err != nil {
 		t.Fatalf("append second: %v", err)
 	}
-	secondSlice, err := store.ReadOwnerPrefix(reader, "owner:cutoff", 99, ModeBoth)
+	secondSlice, err := store.ReadOwnerPrefix(context.Background(), reader, "owner:cutoff", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read owner: %v", err)
 	}
@@ -844,14 +844,14 @@ func TestMaterializeRejectsMixedSubstrateBatch(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	first, err := store.Append(materializeAppend, declareBatch(
+	first, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:mixed:one", "owner:mixed", "test.echo.v1",
 		RecordDraft{Mode: Declaration, SchemaRef: "example.write.v1", Payload: map[string]any{"value": jsonNumber(t, 1)}},
 	))
 	if err != nil {
 		t.Fatalf("append first: %v", err)
 	}
-	second, err := store.Append(materializeAppend, declareBatch(
+	second, err := store.Append(context.Background(), materializeAppend, declareBatch(
 		"intent:mixed:two", "owner:mixed", "kv.sqlite.local.v1",
 		RecordDraft{Mode: Declaration, SchemaRef: "example.write.v1", Payload: map[string]any{"value": jsonNumber(t, 2)}},
 	))

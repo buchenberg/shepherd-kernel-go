@@ -158,7 +158,7 @@ func TestCheckpoint_CreateRecordsInTrace(t *testing.T) {
 		t.Fatalf("CreateCheckpoint: %v", err)
 	}
 
-	slice, err := store.ReadOwnerPrefix(TrustedReadContext, "sub:trace-cp", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), TrustedReadContext, "sub:trace-cp", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read trace: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestCheckpoint_CreateRecordsBackendNeutralPayload(t *testing.T) {
 		t.Fatalf("CreateCheckpoint: %v", err)
 	}
 
-	slice, err := store.ReadOwnerPrefix(TrustedReadContext, "sub:trace-payload", 99, ModeDeclarationsOnly)
+	slice, err := store.ReadOwnerPrefix(context.Background(), TrustedReadContext, "sub:trace-payload", 99, ModeDeclarationsOnly)
 	if err != nil {
 		t.Fatalf("read trace: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestCheckpoint_RestoreRecordsInTrace(t *testing.T) {
 		t.Fatalf("RestoreCheckpoint: %v", err)
 	}
 
-	slice, err := store.ReadOwnerPrefix(TrustedReadContext, "sub:trace-restore", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), TrustedReadContext, "sub:trace-restore", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read trace: %v", err)
 	}
