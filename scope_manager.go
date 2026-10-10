@@ -63,23 +63,37 @@ func (m *ScopeManager) Get(id string) (*Scope, bool) {
 // automatically registered with the manager. The snapshot parameter
 // captures execution state at fork time (pass nil if not needed).
 //
+// The fork baseline (the parent's workspace state) is captured BEFORE the
+// manager's write lock is taken: a capture is a backend subprocess bounded
+// only by its own timeout (git: up to 30s), and the registry must not block
+// every other operation on it. The parent is re-validated inside
+// forkWithBaseline, so a parent discarded during the capture still fails
+// the fork.
+//
 // Returns an error if the parent doesn't exist or a scope with the
 // child owner ID already exists.
 func (m *ScopeManager) Fork(parentID, childOwnerID string, snapshot any) (*Scope, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	m.mu.RLock()
 	parent, ok := m.scopes[parentID]
+	m.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("parent scope %s not found", parentID)
 	}
+
+	baseline, err := parent.forkBaseline()
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	childID := fmt.Sprintf("scope:%s", childOwnerID)
 	if _, exists := m.scopes[childID]; exists {
 		return nil, fmt.Errorf("scope %s already exists", childID)
 	}
 
-	child, err := parent.Fork(childOwnerID, snapshot)
+	child, err := parent.forkWithBaseline(childOwnerID, snapshot, baseline)
 	if err != nil {
 		return nil, err
 	}
@@ -185,12 +199,12 @@ func (m *ScopeManager) Seal(ctx context.Context, scopeID string) (*RetainedOutpu
 	}
 
 	m.mu.Lock()
-	if existing, exists := m.outputs[out.ID]; exists {
+	if existing, exists := m.outputs[out.id]; exists {
 		m.mu.Unlock()
-		return nil, fmt.Errorf("output ID collision: %s already exists (scope %s)", out.ID, existing.ScopeID)
+		return nil, fmt.Errorf("output ID collision: %s already exists (scope %s)", out.id, existing.scopeID)
 	}
 	out.mgr = m
-	m.outputs[out.ID] = out
+	m.outputs[out.id] = out
 	m.mu.Unlock()
 
 	return out, nil
@@ -212,12 +226,12 @@ func (m *ScopeManager) OutputsForScope(scopeID string) []*RetainedOutput {
 
 	var outs []*RetainedOutput
 	for _, out := range m.outputs {
-		if out.ScopeID == scopeID {
+		if out.scopeID == scopeID {
 			outs = append(outs, out)
 		}
 	}
 	sort.Slice(outs, func(i, j int) bool {
-		return outs[i].SealedAt.Before(outs[j].SealedAt)
+		return outs[i].sealedAt.Before(outs[j].sealedAt)
 	})
 	return outs
 }

@@ -61,32 +61,28 @@ var ErrApplyConflict = errors.New("shepherd: apply conflict")
 // frozen at seal time, settle-able exactly once. It outlives the scope that
 // sealed it — sealing does not merge — so a supervisor can compare sealed
 // outputs and choose, the fork-and-choose rhythm.
+//
+// All fields are unexported behind lock-taking getters: Settle mutates the
+// lifecycle fields under mu, and exported fields would let any caller race
+// that write.
 type RetainedOutput struct {
-	// mu guards State, Action, and SettledAt across concurrent settle
-	// attempts: the whole validate → act → mark sequence holds it, so two
-	// settles cannot both claim the unconsumed state.
+	// mu guards the lifecycle fields (state, action, settledAt) across
+	// concurrent settle attempts: the whole validate → act → mark sequence
+	// holds it, so two settles cannot both claim the unconsumed state.
 	mu sync.Mutex
 
-	// ID is the output's unique identifier ("out:<owner>:<seq>").
-	ID string
-	// ScopeID is the scope that sealed this output.
-	ScopeID string
-	// Workspace is the sealed sandbox state.
-	Workspace WorkspaceState
-	// Baseline is the parent's fork-time state the changes are against.
-	Baseline WorkspaceState
-	// Changes are the sealed output's proposed changes, frozen at seal time.
-	Changes []ProposedChange
-	// Diff is the sealed output's full diff against the baseline.
-	Diff string
-	// State is the consume-once lifecycle state.
-	State OutputState
-	// Action is the settlement that consumed the output; zero until settled.
-	Action SettlementAction
-	// SealedAt is when the output was sealed.
-	SealedAt time.Time
-	// SettledAt is when the output was settled; zero until settled.
-	SettledAt time.Time
+	id        string
+	scopeID   string
+	workspace WorkspaceState
+	// baseline is the parent's fork-time state the changes are against.
+	baseline WorkspaceState
+	changes  []ProposedChange
+	diff     string
+	state    OutputState
+	// action is the settlement that consumed the output; zero until settled.
+	action    SettlementAction
+	sealedAt  time.Time
+	settledAt time.Time
 
 	// mgr is set when the output is registered with a ScopeManager, which is
 	// what makes Settle usable. Scope.Seal alone does not register.
@@ -95,14 +91,77 @@ type RetainedOutput struct {
 	sealedFactID string
 }
 
+// ID returns the output's unique identifier ("out:<owner>:<seq>").
+func (o *RetainedOutput) ID() string { return o.id }
+
+// ScopeID returns the scope that sealed this output.
+func (o *RetainedOutput) ScopeID() string { return o.scopeID }
+
+// Workspace returns the sealed sandbox state.
+func (o *RetainedOutput) Workspace() WorkspaceState {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.workspace
+}
+
+// Baseline returns the parent's fork-time state the sealed changes are
+// against.
+func (o *RetainedOutput) Baseline() WorkspaceState {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.baseline
+}
+
+// Changes returns the sealed output's proposed changes, frozen at seal time.
+func (o *RetainedOutput) Changes() []ProposedChange {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	// Copy: the caller must not be able to mutate the frozen record.
+	cp := make([]ProposedChange, len(o.changes))
+	copy(cp, o.changes)
+	return cp
+}
+
+// Diff returns the sealed output's full diff against the baseline.
+func (o *RetainedOutput) Diff() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.diff
+}
+
+// State returns the consume-once lifecycle state.
+func (o *RetainedOutput) State() OutputState {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.state
+}
+
+// Action returns the settlement that consumed the output; the zero value
+// until settled.
+func (o *RetainedOutput) Action() SettlementAction {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.action
+}
+
+// SealedAt returns when the output was sealed.
+func (o *RetainedOutput) SealedAt() time.Time { return o.sealedAt }
+
+// SettledAt returns when the output was settled; the zero time until then.
+func (o *RetainedOutput) SettledAt() time.Time {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.settledAt
+}
+
 // Settle consumes the output with the given action. It requires the output
 // to be registered with a ScopeManager (ScopeManager.Seal registers;
 // Scope.Seal alone does not) — use the manager's Settle directly otherwise.
 func (o *RetainedOutput) Settle(ctx context.Context, action SettlementAction) error {
 	if o.mgr == nil {
-		return fmt.Errorf("retained output %s is not registered with a scope manager; settle through the manager that sealed it", o.ID)
+		return fmt.Errorf("retained output %s is not registered with a scope manager; settle through the manager that sealed it", o.id)
 	}
-	return o.mgr.Settle(ctx, o.ID, action)
+	return o.mgr.Settle(ctx, o.id, action)
 }
 
 // Seal captures the scope's workspace as a retained output and freezes its
@@ -148,14 +207,14 @@ func (s *Scope) Seal(ctx context.Context) (*RetainedOutput, error) {
 
 	seq := nextCheckpointSeq.Add(1)
 	out := &RetainedOutput{
-		ID:        fmt.Sprintf("out:%s:%d", ownerID, seq),
-		ScopeID:   scopeID,
-		Workspace: ws,
-		Baseline:  baseline,
-		Changes:   classifyChanges(diff, files),
-		Diff:      diff,
-		State:     OutputUnconsumed,
-		SealedAt:  time.Now(),
+		id:        fmt.Sprintf("out:%s:%d", ownerID, seq),
+		scopeID:   scopeID,
+		workspace: ws,
+		baseline:  baseline,
+		changes:   classifyChanges(diff, files),
+		diff:      diff,
+		state:     OutputUnconsumed,
+		sealedAt:  time.Now(),
 	}
 
 	stateDigest, _ := ws.Digest()
@@ -169,13 +228,13 @@ func (s *Scope) Seal(ctx context.Context) (*RetainedOutput, error) {
 				SchemaRef: SchemaRunOutputSealed,
 				KindLabel: "run_output:sealed",
 				Payload: map[string]any{
-					"output_id":       out.ID,
+					"output_id":       out.id,
 					"scope":           scopeID,
 					"backend":         ws.Backend,
 					"revision":        ws.Revision,
 					"state_digest":    stateDigest,
 					"baseline_digest": baselineDigest,
-					"change_count":    len(out.Changes),
+					"change_count":    len(out.changes),
 				},
 			}},
 		}},
@@ -232,6 +291,13 @@ func stateFor(action SettlementAction) (OutputState, error) {
 // Records shepherd.run_output.settled.v1 on the sealing scope's owner path.
 // The append is advisory, checkpoint-style: by the time it runs the
 // settlement's physical effects have happened and cannot be rolled back.
+//
+// Select and apply are not transactional across the two systems they touch:
+// the workspace effect lands first, and the causal merge (trace append plus
+// scope teardown) runs after. If that recording fails, the parent already
+// holds the output's changes and the error says so; the output stays
+// unconsumed, so the caller can end its lifecycle with SettleRelease or
+// SettleDiscard rather than retry a physical effect that already happened.
 func (m *ScopeManager) Settle(ctx context.Context, outputID string, action SettlementAction) error {
 	m.mu.RLock()
 	out, ok := m.outputs[outputID]
@@ -246,8 +312,8 @@ func (m *ScopeManager) Settle(ctx context.Context, outputID string, action Settl
 	out.mu.Lock()
 	defer out.mu.Unlock()
 
-	if out.State != OutputUnconsumed {
-		return fmt.Errorf("%w: output %s is %s", ErrOutputConsumed, out.ID, out.State)
+	if out.state != OutputUnconsumed {
+		return fmt.Errorf("%w: output %s is %s", ErrOutputConsumed, out.id, out.state)
 	}
 	terminal, err := stateFor(action)
 	if err != nil {
@@ -255,10 +321,10 @@ func (m *ScopeManager) Settle(ctx context.Context, outputID string, action Settl
 	}
 
 	m.mu.RLock()
-	scope, scopeOK := m.scopes[out.ScopeID]
+	scope, scopeOK := m.scopes[out.scopeID]
 	m.mu.RUnlock()
 	if !scopeOK {
-		return fmt.Errorf("scope %s for output %s not found", out.ScopeID, out.ID)
+		return fmt.Errorf("scope %s for output %s not found", out.scopeID, out.id)
 	}
 
 	switch action {
@@ -270,10 +336,10 @@ func (m *ScopeManager) Settle(ctx context.Context, outputID string, action Settl
 	case SettleDiscard:
 		parent := scope.Parent()
 		if parent == nil {
-			return fmt.Errorf("scope %s for output %s has no parent to discard from", out.ScopeID, out.ID)
+			return fmt.Errorf("scope %s for output %s has no parent to discard from", out.scopeID, out.id)
 		}
 		if err := parent.Discard(scope); err != nil {
-			return fmt.Errorf("settle %s (discard): %w", out.ID, err)
+			return fmt.Errorf("settle %s (discard): %w", out.id, err)
 		}
 
 	case SettleSelect:
@@ -289,24 +355,27 @@ func (m *ScopeManager) Settle(ctx context.Context, outputID string, action Settl
 		// silently losing that content to ApplyWorkspace's reset.
 		parentNow, err := parentSb.Capture(ctx)
 		if err != nil {
-			return fmt.Errorf("settle %s (select): capture parent: %w", out.ID, err)
+			return fmt.Errorf("settle %s (select): capture parent: %w", out.id, err)
 		}
-		baseDigest, err := out.Baseline.Digest()
+		baseDigest, err := out.baseline.Digest()
 		if err != nil {
-			return fmt.Errorf("settle %s (select): digest baseline: %w", out.ID, err)
+			return fmt.Errorf("settle %s (select): digest baseline: %w", out.id, err)
 		}
 		nowDigest, err := parentNow.Digest()
 		if err != nil {
-			return fmt.Errorf("settle %s (select): digest parent: %w", out.ID, err)
+			return fmt.Errorf("settle %s (select): digest parent: %w", out.id, err)
 		}
 		if nowDigest != baseDigest {
-			return fmt.Errorf("settle %s (select): parent workspace has moved since the fork baseline; use SettleApply", out.ID)
+			return fmt.Errorf("settle %s (select): parent workspace has moved since the fork baseline; use SettleApply", out.id)
 		}
-		if err := parent.ApplyWorkspace(ctx, out.Workspace); err != nil {
-			return fmt.Errorf("settle %s (select): %w", out.ID, err)
+		if err := parent.ApplyWorkspace(ctx, out.workspace); err != nil {
+			return fmt.Errorf("settle %s (select): %w", out.id, err)
 		}
 		if err := parent.Merge(scope); err != nil {
-			return fmt.Errorf("settle %s (select): %w", out.ID, err)
+			// The parent's workspace already holds this output's changes;
+			// the causal merge is what failed. Say both, so the caller does
+			// not retry a physical effect that already happened.
+			return fmt.Errorf("settle %s (select): the parent's workspace now holds this output's changes, but recording the causal merge failed: %w (the output stays unconsumed; end it with SettleRelease or SettleDiscard)", out.id, err)
 		}
 
 	case SettleApply:
@@ -317,32 +386,32 @@ func (m *ScopeManager) Settle(ctx context.Context, outputID string, action Settl
 		// The parent's concurrent changes are what it holds now that the
 		// baseline does not. Path overlap with the output's own changes
 		// means the three-way merge would clobber, so refuse before trying.
-		_, parentFiles, err := parentSb.Diff(ctx, out.Baseline, 0)
+		_, parentFiles, err := parentSb.Diff(ctx, out.baseline, 0)
 		if err != nil {
-			return fmt.Errorf("settle %s (apply): diff parent against baseline: %w", out.ID, err)
+			return fmt.Errorf("settle %s (apply): diff parent against baseline: %w", out.id, err)
 		}
-		if overlap := overlappingPaths(out.Changes, parentFiles); len(overlap) > 0 {
+		if overlap := overlappingPaths(out.changes, parentFiles); len(overlap) > 0 {
 			return fmt.Errorf("%w: parent changed %v since the baseline, which the sealed output also changes", ErrApplyConflict, overlap)
 		}
 		da, canDelta := parentSb.(DeltaApplier)
 		if !canDelta {
 			return fmt.Errorf("settle %s (apply): parent sandbox backend %s does not implement DeltaApplier: %w",
-				out.ID, parentSb.Backend(), ErrUnsupported)
+				out.id, parentSb.Backend(), ErrUnsupported)
 		}
-		if err := da.ApplyDelta(ctx, out.Workspace); err != nil {
-			return fmt.Errorf("settle %s (apply): %w", out.ID, err)
+		if err := da.ApplyDelta(ctx, out.workspace); err != nil {
+			return fmt.Errorf("settle %s (apply): %w", out.id, err)
 		}
 		if err := parent.Merge(scope); err != nil {
-			return fmt.Errorf("settle %s (apply): %w", out.ID, err)
+			return fmt.Errorf("settle %s (apply): the parent's workspace now holds this output's changes, but recording the causal merge failed: %w (the output stays unconsumed; end it with SettleRelease or SettleDiscard)", out.id, err)
 		}
 
 	default:
 		return fmt.Errorf("unknown settlement action %q", action)
 	}
 
-	out.State = terminal
-	out.Action = action
-	out.SettledAt = time.Now()
+	out.state = terminal
+	out.action = action
+	out.settledAt = time.Now()
 	recordRunOutputSettled(scope, out, action)
 	return nil
 }
@@ -354,19 +423,19 @@ func (m *ScopeManager) Settle(ctx context.Context, outputID string, action Settl
 func settleParent(scope *Scope, out *RetainedOutput, verb string) (*Scope, Sandbox, error) {
 	if scope.State() != ScopeActive {
 		return nil, nil, fmt.Errorf("settle %s (%s): scope %s is %s",
-			out.ID, verb, scope.ID(), scope.State())
+			out.id, verb, scope.ID(), scope.State())
 	}
 	parent := scope.Parent()
 	if parent == nil {
-		return nil, nil, fmt.Errorf("settle %s (%s): scope %s has no parent", out.ID, verb, scope.ID())
+		return nil, nil, fmt.Errorf("settle %s (%s): scope %s has no parent", out.id, verb, scope.ID())
 	}
 	if parent.State() != ScopeActive {
 		return nil, nil, fmt.Errorf("settle %s (%s): parent %s is %s",
-			out.ID, verb, parent.ID(), parent.State())
+			out.id, verb, parent.ID(), parent.State())
 	}
 	parentSb := parent.Sandbox()
 	if parentSb == nil {
-		return nil, nil, fmt.Errorf("settle %s (%s): parent %s has no sandbox", out.ID, verb, parent.ID())
+		return nil, nil, fmt.Errorf("settle %s (%s): parent %s has no sandbox", out.id, verb, parent.ID())
 	}
 	return parent, parentSb, nil
 }
@@ -402,7 +471,7 @@ func recordRunOutputSettled(scope *Scope, out *RetainedOutput, action Settlement
 	if out.sealedFactID != "" {
 		causedBy = []string{out.sealedFactID}
 	}
-	stateDigest, _ := out.Workspace.Digest()
+	stateDigest, _ := out.workspace.Digest()
 
 	_, err := scope.store.Append(TrustedAppendContext, AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:settle:%s:%d", ownerID, action, nextCheckpointSeq.Add(1)),
@@ -414,7 +483,7 @@ func recordRunOutputSettled(scope *Scope, out *RetainedOutput, action Settlement
 				SchemaRef: SchemaRunOutputSettled,
 				KindLabel: "run_output:settled",
 				Payload: map[string]any{
-					"output_id":    out.ID,
+					"output_id":    out.id,
 					"action":       string(action),
 					"state_digest": stateDigest,
 				},
@@ -422,6 +491,6 @@ func recordRunOutputSettled(scope *Scope, out *RetainedOutput, action Settlement
 		}},
 	})
 	if err != nil {
-		slog.Warn("settlement: record settle in trace failed (advisory)", "output", out.ID, "action", action, "err", err)
+		slog.Warn("settlement: record settle in trace failed (advisory)", "output", out.id, "action", action, "err", err)
 	}
 }

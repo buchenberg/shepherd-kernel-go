@@ -170,6 +170,33 @@ func (s *Scope) Children() []*Scope {
 	return cp
 }
 
+// Capture the fork baseline: the parent's workspace state at fork time.
+// It is the diff base for merge review (ProposeMerge) and the fast-forward
+// reference for settlement's select verb. Capture is non-mutating for the
+// backends the kernel ships (the git backend stages into a scratch index),
+// so forking leaves the parent's workspace exactly as it was. A scope
+// without a sandbox is pure-causal and forks without a baseline; its
+// children cannot propose merges, which ProposeMerge and Seal report
+// loudly rather than silently reviewing against nothing.
+//
+// A capture failure fails the fork: a child that claims to be reviewable
+// but has no baseline would hand its reviewer a diff against an unknown
+// state.
+func (s *Scope) forkBaseline() (WorkspaceState, error) {
+	s.mu.RLock()
+	inheritedSandbox := s.sandbox
+	s.mu.RUnlock()
+
+	if inheritedSandbox == nil {
+		return WorkspaceState{}, nil
+	}
+	ws, err := inheritedSandbox.Capture(context.Background())
+	if err != nil {
+		return WorkspaceState{}, fmt.Errorf("capture fork baseline for scope %s: %w", s.id, err)
+	}
+	return ws, nil
+}
+
 // Fork creates a child scope branched from the current scope's state.
 // The child gets a new trace owner ID and inherits the parent's causal
 // context — its first record cites the parent's head as a causal parent.
@@ -178,8 +205,22 @@ func (s *Scope) Children() []*Scope {
 // (typically the conversation history). It's stored opaquely — the
 // scope doesn't inspect it. Pass nil if no snapshot is needed.
 //
-// A "scope.forked" declaration is recorded in the parent's trace.
+// When the parent has a sandbox, its workspace state is captured as the
+// fork baseline (see Baseline). A "scope.forked" declaration is recorded in
+// the parent's trace.
 func (s *Scope) Fork(childOwnerID string, snapshot any) (*Scope, error) {
+	baseline, err := s.forkBaseline()
+	if err != nil {
+		return nil, err
+	}
+	return s.forkWithBaseline(childOwnerID, snapshot, baseline)
+}
+
+// forkWithBaseline is Fork after the baseline decision, so the scope
+// manager can capture the baseline outside its own lock (a git capture is
+// a subprocess bounded by gitTimeout; the registry must not wait on it)
+// and still register atomically.
+func (s *Scope) forkWithBaseline(childOwnerID string, snapshot any, baseline WorkspaceState) (*Scope, error) {
 	s.mu.Lock()
 	if s.state != ScopeActive {
 		s.mu.Unlock()
@@ -188,28 +229,14 @@ func (s *Scope) Fork(childOwnerID string, snapshot any) (*Scope, error) {
 	// The child inherits the parent's substrate but never owns it: destroying an
 	// inherited sandbox would tear down the parent's workspace.
 	inheritedSandbox := s.sandbox
+	// A baseline handed in for a parent with no sandbox would be a lie; an
+	// empty one for a sandboxed parent means the caller skipped the
+	// capture, which the manager never does.
+	if inheritedSandbox == nil {
+		baseline = WorkspaceState{}
+	}
 	s.mu.Unlock()
 
-	// Capture the fork baseline: the parent's workspace state at fork time.
-	// It is the diff base for merge review (ProposeMerge) and the fast-forward
-	// reference for settlement's select verb. Capture is non-mutating for the
-	// backends the kernel ships (the git backend stages into a scratch index),
-	// so forking leaves the parent's workspace exactly as it was. A scope
-	// without a sandbox is pure-causal and forks without a baseline; its
-	// children cannot propose merges, which ProposeMerge and Seal report
-	// loudly rather than silently reviewing against nothing.
-	//
-	// A capture failure fails the fork: a child that claims to be reviewable
-	// but has no baseline would hand its reviewer a diff against an unknown
-	// state.
-	var baseline WorkspaceState
-	if inheritedSandbox != nil {
-		ws, err := inheritedSandbox.Capture(context.Background())
-		if err != nil {
-			return nil, fmt.Errorf("capture fork baseline for scope %s: %w", s.id, err)
-		}
-		baseline = ws
-	}
 	forkPayload := map[string]any{
 		"child_owner": childOwnerID,
 	}

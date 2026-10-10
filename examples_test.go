@@ -46,21 +46,21 @@ func TestExample_BestOfN(t *testing.T) {
 			t.Fatalf("seal attempt %d: %v", i, err)
 		}
 		// The supervisor inspects each sealed output's frozen changes.
-		if len(out.Changes) != 1 || out.Changes[0].Path != fmt.Sprintf("result-%d.txt", i) {
-			t.Fatalf("attempt %d sealed changes: %+v, want exactly its result file", i, out.Changes)
+		if len(out.Changes()) != 1 || out.Changes()[0].Path != fmt.Sprintf("result-%d.txt", i) {
+			t.Fatalf("attempt %d sealed changes: %+v, want exactly its result file", i, out.Changes())
 		}
 		outs = append(outs, out)
 	}
 
 	// Choose attempt 1: select its output, discard the losers.
-	if err := mgr.Settle(ctx, outs[1].ID, SettleSelect); err != nil {
+	if err := mgr.Settle(ctx, outs[1].ID(), SettleSelect); err != nil {
 		t.Fatalf("select winner: %v", err)
 	}
 	for i, out := range outs {
 		if i == 1 {
 			continue
 		}
-		if err := mgr.Settle(ctx, out.ID, SettleDiscard); err != nil {
+		if err := mgr.Settle(ctx, out.ID(), SettleDiscard); err != nil {
 			t.Fatalf("discard loser %d: %v", i, err)
 		}
 	}
@@ -82,7 +82,7 @@ func TestExample_BestOfN(t *testing.T) {
 	}
 
 	// Consume-once: the winner cannot be settled again.
-	if err := mgr.Settle(ctx, outs[1].ID, SettleSelect); !errors.Is(err, ErrOutputConsumed) {
+	if err := mgr.Settle(ctx, outs[1].ID(), SettleSelect); !errors.Is(err, ErrOutputConsumed) {
 		t.Errorf("second settle of winner: %v, want ErrOutputConsumed", err)
 	}
 }
@@ -254,7 +254,7 @@ func TestExample_ApplyOntoMovedWorkspace(t *testing.T) {
 	mustGit(t, repo, "commit", "-m", "parent advances")
 
 	// Disjoint output applies onto the moved workspace.
-	if err := mgr.Settle(ctx, out1.ID, SettleApply); err != nil {
+	if err := mgr.Settle(ctx, out1.ID(), SettleApply); err != nil {
 		t.Fatalf("apply disjoint output onto moved parent: %v", err)
 	}
 	if got := readRepoFile(t, repo, "feature.txt"); got != "feature" {
@@ -265,22 +265,22 @@ func TestExample_ApplyOntoMovedWorkspace(t *testing.T) {
 	}
 
 	// Overlapping output is refused without consuming.
-	err = mgr.Settle(ctx, out2.ID, SettleApply)
+	err = mgr.Settle(ctx, out2.ID(), SettleApply)
 	if !errors.Is(err, ErrApplyConflict) {
 		t.Fatalf("overlapping apply: %v, want ErrApplyConflict", err)
 	}
 	if !strings.Contains(err.Error(), "shared.txt") {
 		t.Errorf("conflict text = %q, want it to name shared.txt", err.Error())
 	}
-	if out2.State != OutputUnconsumed {
-		t.Errorf("conflicting output state = %s, want unconsumed", out2.State)
+	if out2.State() != OutputUnconsumed {
+		t.Errorf("conflicting output state = %s, want unconsumed", out2.State())
 	}
 	if got := readRepoFile(t, repo, "shared.txt"); got != "parent's edit" {
 		t.Errorf("shared.txt = %q, want the parent's version untouched by the refusal", got)
 	}
 
 	// Clean up the refused output's scope.
-	if err := mgr.Settle(ctx, out2.ID, SettleDiscard); err != nil {
+	if err := mgr.Settle(ctx, out2.ID(), SettleDiscard); err != nil {
 		t.Fatalf("discard refused output: %v", err)
 	}
 }

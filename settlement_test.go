@@ -29,14 +29,14 @@ func TestSeal_FreezesChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
-	if out.ID == "" || out.ScopeID != child.ID() {
+	if out.ID() == "" || out.ScopeID() != child.ID() {
 		t.Errorf("output identity: %+v", out)
 	}
-	if len(out.Changes) != 1 || out.Changes[0].Path != "result.txt" || out.Changes[0].Kind != ChangeCreate {
-		t.Errorf("changes: %+v, want one create of result.txt", out.Changes)
+	if len(out.Changes()) != 1 || out.Changes()[0].Path != "result.txt" || out.Changes()[0].Kind != ChangeCreate {
+		t.Errorf("changes: %+v, want one create of result.txt", out.Changes())
 	}
-	if out.State != OutputUnconsumed {
-		t.Errorf("state = %s, want unconsumed", out.State)
+	if out.State() != OutputUnconsumed {
+		t.Errorf("state = %s, want unconsumed", out.State())
 	}
 
 	// Sealing does not merge: the scope stays active, the parent is untouched.
@@ -48,8 +48,8 @@ func TestSeal_FreezesChanges(t *testing.T) {
 	}
 
 	// Registry lookup paths.
-	if got, ok := mgr.Output(out.ID); !ok || got != out {
-		t.Errorf("Output(%s) = %p, %v; want the sealed output", out.ID, got, ok)
+	if got, ok := mgr.Output(out.ID()); !ok || got != out {
+		t.Errorf("Output(%s) = %p, %v; want the sealed output", out.ID(), got, ok)
 	}
 	outs := mgr.OutputsForScope(child.ID())
 	if len(outs) != 1 || outs[0] != out {
@@ -61,16 +61,16 @@ func TestSeal_FreezesChanges(t *testing.T) {
 	if len(sealed) != 1 {
 		t.Fatalf("sealed records: %d, want 1", len(sealed))
 	}
-	if fmt.Sprint(sealed[0].Body.Payload["output_id"]) != out.ID {
-		t.Errorf("sealed payload output_id = %v, want %s", sealed[0].Body.Payload["output_id"], out.ID)
+	if fmt.Sprint(sealed[0].Body.Payload["output_id"]) != out.ID() {
+		t.Errorf("sealed payload output_id = %v, want %s", sealed[0].Body.Payload["output_id"], out.ID())
 	}
 
 	// Later writes do not leak into the frozen output.
 	if err := os.WriteFile(filepath.Join(wtPath, "extra.txt"), []byte("late"), 0o644); err != nil {
 		t.Fatalf("write extra: %v", err)
 	}
-	if len(out.Changes) != 1 {
-		t.Errorf("changes after later writes: %d, want still 1 (frozen at seal)", len(out.Changes))
+	if len(out.Changes()) != 1 {
+		t.Errorf("changes after later writes: %d, want still 1 (frozen at seal)", len(out.Changes()))
 	}
 
 	// A scope without a fork baseline cannot seal.
@@ -112,7 +112,7 @@ func TestSettle_SelectOnUnmovedParent(t *testing.T) {
 		t.Fatalf("Seal: %v", err)
 	}
 
-	if err := mgr.Settle(ctx, out.ID, SettleSelect); err != nil {
+	if err := mgr.Settle(ctx, out.ID(), SettleSelect); err != nil {
 		t.Fatalf("SettleSelect: %v", err)
 	}
 	if got := readRepoFile(t, repo, "result.txt"); got != "winner" {
@@ -124,12 +124,12 @@ func TestSettle_SelectOnUnmovedParent(t *testing.T) {
 	if _, statErr := os.Stat(wtPath); !os.IsNotExist(statErr) {
 		t.Errorf("child worktree should be destroyed after select, stat err = %v", statErr)
 	}
-	if out.State != OutputSelected || out.Action != SettleSelect {
-		t.Errorf("output state/action = %s/%s, want selected", out.State, out.Action)
+	if out.State() != OutputSelected || out.Action() != SettleSelect {
+		t.Errorf("output state/action = %s/%s, want selected", out.State(), out.Action())
 	}
 
 	// Consume-once.
-	err = mgr.Settle(ctx, out.ID, SettleSelect)
+	err = mgr.Settle(ctx, out.ID(), SettleSelect)
 	if !errors.Is(err, ErrOutputConsumed) {
 		t.Errorf("second settle: %v, want ErrOutputConsumed", err)
 	}
@@ -161,15 +161,15 @@ func TestSettle_SelectRefusesMovedParent(t *testing.T) {
 	// The parent advances after the seal.
 	mustGit(t, repo, "commit", "--allow-empty", "-m", "advance")
 
-	err = mgr.Settle(ctx, out.ID, SettleSelect)
+	err = mgr.Settle(ctx, out.ID(), SettleSelect)
 	if err == nil || !strings.Contains(err.Error(), "SettleApply") {
 		t.Fatalf("select on moved parent: %v, want an error pointing at SettleApply", err)
 	}
-	if out.State != OutputUnconsumed {
-		t.Errorf("refused select consumed the output: state = %s", out.State)
+	if out.State() != OutputUnconsumed {
+		t.Errorf("refused select consumed the output: state = %s", out.State())
 	}
 	// The refusal is not consumption: apply still works on the moved parent.
-	if err := mgr.Settle(ctx, out.ID, SettleApply); err != nil {
+	if err := mgr.Settle(ctx, out.ID(), SettleApply); err != nil {
 		t.Fatalf("SettleApply after refused select: %v", err)
 	}
 }
@@ -199,7 +199,7 @@ func TestSettle_ApplyDisjointSucceeds(t *testing.T) {
 	mustGit(t, repo, "add", "-A")
 	mustGit(t, repo, "commit", "-m", "parent work")
 
-	if err := mgr.Settle(ctx, out.ID, SettleApply); err != nil {
+	if err := mgr.Settle(ctx, out.ID(), SettleApply); err != nil {
 		t.Fatalf("SettleApply (disjoint): %v", err)
 	}
 	if got := readRepoFile(t, repo, "feature.txt"); got != "from child" {
@@ -211,8 +211,8 @@ func TestSettle_ApplyDisjointSucceeds(t *testing.T) {
 	if child.State() != ScopeMerged {
 		t.Errorf("child state = %s, want merged", child.State())
 	}
-	if out.State != OutputApplied {
-		t.Errorf("output state = %s, want applied", out.State)
+	if out.State() != OutputApplied {
+		t.Errorf("output state = %s, want applied", out.State())
 	}
 	if recs := findRecords(t, store, "set:app-child", SchemaRunOutputSettled); len(recs) != 1 {
 		t.Errorf("settled records: %d, want 1", len(recs))
@@ -245,22 +245,22 @@ func TestSettle_ApplyConflictKeepsUnconsumed(t *testing.T) {
 	mustGit(t, repo, "add", "-A")
 	mustGit(t, repo, "commit", "-m", "parent moves shared")
 
-	err = mgr.Settle(ctx, out.ID, SettleApply)
+	err = mgr.Settle(ctx, out.ID(), SettleApply)
 	if !errors.Is(err, ErrApplyConflict) {
 		t.Fatalf("SettleApply (overlap): %v, want ErrApplyConflict", err)
 	}
 	if !strings.Contains(err.Error(), "shared.txt") {
 		t.Errorf("conflict text = %q, want it to name the overlapping path", err.Error())
 	}
-	if out.State != OutputUnconsumed {
-		t.Errorf("conflicting apply consumed the output: state = %s", out.State)
+	if out.State() != OutputUnconsumed {
+		t.Errorf("conflicting apply consumed the output: state = %s", out.State())
 	}
 	// The parent's version is untouched by the refusal.
 	if got := readRepoFile(t, repo, "shared.txt"); got != "parent's version" {
 		t.Errorf("shared.txt = %q, want the parent's version", got)
 	}
 	// Still unconsumed, the output can be discarded instead.
-	if err := mgr.Settle(ctx, out.ID, SettleDiscard); err != nil {
+	if err := mgr.Settle(ctx, out.ID(), SettleDiscard); err != nil {
 		t.Fatalf("SettleDiscard after conflict: %v", err)
 	}
 	if child.State() != ScopeDiscarded {
@@ -285,11 +285,11 @@ func TestSettle_ReleaseAndUnknownAction(t *testing.T) {
 		t.Fatalf("Seal: %v", err)
 	}
 
-	if err := mgr.Settle(ctx, out.ID, SettleRelease); err != nil {
+	if err := mgr.Settle(ctx, out.ID(), SettleRelease); err != nil {
 		t.Fatalf("SettleRelease: %v", err)
 	}
-	if out.State != OutputReleased {
-		t.Errorf("state = %s, want released", out.State)
+	if out.State() != OutputReleased {
+		t.Errorf("state = %s, want released", out.State())
 	}
 	// Release changed nothing: the child is still active with its worktree.
 	if child.State() != ScopeActive {
@@ -312,11 +312,11 @@ func TestSettle_ReleaseAndUnknownAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Seal 2: %v", err)
 	}
-	if err := mgr.Settle(ctx, out2.ID, SettlementAction("teleport")); err == nil {
+	if err := mgr.Settle(ctx, out2.ID(), SettlementAction("teleport")); err == nil {
 		t.Error("unknown action must be rejected")
 	}
-	if out2.State != OutputUnconsumed {
-		t.Errorf("unknown action consumed the output: state = %s", out2.State)
+	if out2.State() != OutputUnconsumed {
+		t.Errorf("unknown action consumed the output: state = %s", out2.State())
 	}
 }
 
@@ -337,7 +337,7 @@ func TestSettle_DiscardDestroysChild(t *testing.T) {
 		t.Fatalf("Seal: %v", err)
 	}
 
-	if err := mgr.Settle(ctx, out.ID, SettleDiscard); err != nil {
+	if err := mgr.Settle(ctx, out.ID(), SettleDiscard); err != nil {
 		t.Fatalf("SettleDiscard: %v", err)
 	}
 	if child.State() != ScopeDiscarded {
@@ -350,8 +350,8 @@ func TestSettle_DiscardDestroysChild(t *testing.T) {
 		t.Error("discard must not touch the parent workspace")
 	}
 	// The sealed state is retained as a record.
-	if out.State != OutputDiscarded {
-		t.Errorf("output state = %s, want discarded", out.State)
+	if out.State() != OutputDiscarded {
+		t.Errorf("output state = %s, want discarded", out.State())
 	}
 }
 

@@ -387,7 +387,10 @@ func (s diffSection) newPathIsDevNull() bool { return s.newPath == "/dev/null" }
 // parseUnifiedDiff splits a unified diff into per-file sections, extracting
 // the old and new path from each section's headers. The git header
 // ("diff --git a/x b/x") starts a section; backends without it start one at
-// a ---/+++ pair. Path prefixes "a/" and "b/" are stripped.
+// a ---/+++ pair, including after a previous file's hunks: a "--- " line
+// inside a hunk whose next line is a "+++ " header is the next file, not
+// content — anything else would be indistinguishable to every consumer of
+// unified diffs.
 func parseUnifiedDiff(diff string) []diffSection {
 	if strings.TrimSpace(diff) == "" {
 		return nil
@@ -397,7 +400,8 @@ func parseUnifiedDiff(diff string) []diffSection {
 	var cur *diffSection
 	inHunk := false
 
-	for _, line := range strings.Split(diff, "\n") {
+	lines := strings.Split(diff, "\n")
+	for i, line := range lines {
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
 			if cur != nil {
@@ -408,27 +412,40 @@ func parseUnifiedDiff(diff string) []diffSection {
 			cur.oldPath, cur.newPath = old, newp
 			inHunk = false
 		case strings.HasPrefix(line, "--- "):
-			if cur == nil {
+			if inHunk {
+				// Inside a hunk this is usually deleted-line content. The
+				// exception above: a +++ on the next line means a
+				// header-less backend started the next file.
+				if !(i+1 < len(lines) && strings.HasPrefix(lines[i+1], "+++ ")) {
+					if cur != nil {
+						cur.lines = append(cur.lines, line)
+					}
+					continue
+				}
+				if cur != nil {
+					sections = append(sections, *cur)
+				}
 				cur = &diffSection{}
-			} else if inHunk {
-				// A "---" inside a hunk body (deleted-line content that
-				// itself starts with --- followed by a space): hunk lines
-				// only reach here as content, so keep it in the body.
-				cur.lines = append(cur.lines, line)
-				continue
+				inHunk = false
+			} else if cur == nil {
+				// A header-less backend's first file.
+				cur = &diffSection{}
 			}
+			// In a git-headered section the pair belongs to this section
+			// and simply refines the header's guess, which cannot say
+			// create or delete.
 			cur.lines = append(cur.lines, line)
 			// The ---/+++ pair is authoritative for old/new presence — it
 			// is how a unified diff says "no old side" (a create) or "no
 			// new side" (a delete). The "diff --git" header names both
 			// sides for every kind, so it cannot carry that signal and
 			// must not win.
-			cur.oldPath = stripDiffPath(strings.TrimSpace(strings.TrimPrefix(line, "--- ")))
+			cur.oldPath = stripDiffPath(strings.TrimSpace(strings.TrimPrefix(line, "--- ")), oldSidePrefix)
 		case strings.HasPrefix(line, "+++ "):
 			if cur == nil {
-				cur = &diffSection{}
 				// A +++ without a preceding --- cannot be classified; treat
 				// it as a malformed section and start collecting anyway.
+				cur = &diffSection{}
 				cur.lines = append(cur.lines, line)
 				continue
 			}
@@ -437,7 +454,7 @@ func parseUnifiedDiff(diff string) []diffSection {
 				continue
 			}
 			cur.lines = append(cur.lines, line)
-			cur.newPath = stripDiffPath(strings.TrimSpace(strings.TrimPrefix(line, "+++ ")))
+			cur.newPath = stripDiffPath(strings.TrimSpace(strings.TrimPrefix(line, "+++ ")), newSidePrefix)
 		default:
 			if cur != nil {
 				if strings.HasPrefix(line, "@@ ") {
@@ -463,18 +480,25 @@ func parseDiffGitPaths(header string) (oldPath, newPath string) {
 	if len(parts) != 2 {
 		return "", ""
 	}
-	return stripDiffPath(parts[0]), stripDiffPath(parts[1])
+	return stripDiffPath(parts[0], oldSidePrefix), stripDiffPath(parts[1], newSidePrefix)
 }
 
-// stripDiffPath removes the a/ or b/ prefix git adds to diff header paths.
-func stripDiffPath(p string) string {
+// Diff header side prefixes: git prefixes the old side with "a/" and the new
+// side with "b/".
+const (
+	oldSidePrefix = "a/"
+	newSidePrefix = "b/"
+)
+
+// stripDiffPath removes the one side prefix git adds to a diff header path —
+// "a/" for the old side, "b/" for the new. Stripping by side rather than
+// trying both keeps a legitimate top-level "b/" directory intact: the old
+// side of "a/b/foo.go" is "b/foo.go", not "foo.go".
+func stripDiffPath(p, prefix string) string {
 	if p == "/dev/null" {
 		return p
 	}
-	if strings.HasPrefix(p, "a/") || strings.HasPrefix(p, "b/") {
-		return strings.TrimPrefix(strings.TrimPrefix(p, "a/"), "b/")
-	}
-	return p
+	return strings.TrimPrefix(p, prefix)
 }
 
 // --- Built-in reviewers ---

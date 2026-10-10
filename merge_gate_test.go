@@ -77,6 +77,54 @@ index 8b13789..0000000
 	if len(changes) != 1 || changes[0].Path != "unparsed.bin" || changes[0].Kind != ChangeModify {
 		t.Errorf("list-only file: %+v, want one unclassified modify", changes)
 	}
+
+	// A legitimate top-level "b/" directory survives side-aware stripping.
+	diff = `diff --git a/b/real.go b/b/real.go
+index 8b13789..c16a5f0 100644
+--- a/b/real.go
++++ b/b/real.go
+@@ -1 +1 @@
+-old
++new
+`
+	changes = classifyChanges(diff, nil)
+	if len(changes) != 1 || changes[0].Path != "b/real.go" {
+		t.Errorf("b/ directory path: %+v, want b/real.go intact", changes)
+	}
+
+	// A header-less backend's multi-file diff: the second ---/+++ pair
+	// inside the first file's hunks starts the next section.
+	diff = `--- a/first.txt
++++ b/first.txt
+@@ -1 +1 @@
+-one
++two
+--- a/second.txt
++++ b/second.txt
+@@ -1 +1 @@
+-uno
++dos
+`
+	changes = classifyChanges(diff, nil)
+	if len(changes) != 2 || changes[0].Path != "first.txt" || changes[1].Path != "second.txt" {
+		t.Errorf("header-less multi-file diff: %+v, want first.txt and second.txt", changes)
+	}
+
+	// Deleted-line content that merely starts with "--- " stays content when
+	// the next line is not a +++ header.
+	diff = `diff --git a/notes.txt b/notes.txt
+index 8b13789..c16a5f0 100644
+--- a/notes.txt
++++ b/notes.txt
+@@ -1,2 +1 @@
+-note
+--- marker line
++condensed
+`
+	changes = classifyChanges(diff, nil)
+	if len(changes) != 1 || changes[0].Path != "notes.txt" || changes[0].Kind != ChangeModify {
+		t.Errorf("--- content line misparsed as a section boundary: %+v", changes)
+	}
 }
 
 // TestFork_RecordsBaselineDigest covers T3.1: a sandboxed parent's fork
