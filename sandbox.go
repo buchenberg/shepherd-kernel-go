@@ -258,18 +258,40 @@ func (r *sandboxRegistry) register(backend string, f SandboxFactory) {
 }
 
 func (r *sandboxRegistry) open(backend string, cfg any) (Sandbox, error) {
+	// The failed-lookup path snapshots the available names in the same
+	// critical section as the lookup: reading them after releasing the
+	// lock could race a concurrent registration into a contradictory
+	// error ("unknown backend x (available: x)"). The factory itself runs
+	// unlocked — construction is backend work, not registry work.
 	r.mu.Lock()
 	f, ok := r.factories[backend]
+	available := r.backendsLocked()
 	r.mu.Unlock()
 	if !ok {
-		return nil, &UnknownSandboxBackendError{Backend: backend, Available: r.backends()}
+		return nil, &UnknownSandboxBackendError{Backend: backend, Available: available}
 	}
-	return f(cfg)
+	sb, err := f(cfg)
+	if err != nil {
+		return nil, err
+	}
+	// A factory returning (nil, nil) is a misconfiguration that would
+	// otherwise surface as a nil-pointer dereference at the first
+	// Create/Capture — far from the seam that exists to catch exactly
+	// this. Fail at the seam.
+	if sb == nil {
+		return nil, fmt.Errorf("shepherd: sandbox backend %q returned a nil sandbox without an error (misconfigured factory)", backend)
+	}
+	return sb, nil
 }
 
 func (r *sandboxRegistry) backends() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.backendsLocked()
+}
+
+// backendsLocked is backends for callers already holding mu.
+func (r *sandboxRegistry) backendsLocked() []string {
 	names := make([]string, 0, len(r.factories))
 	for name := range r.factories {
 		names = append(names, name)
@@ -279,10 +301,11 @@ func (r *sandboxRegistry) backends() []string {
 }
 
 // defaultSandboxRegistry is the package-level registry. The built-in git
-// backend self-registers from sandbox_git.go; the containerd adapter
-// registers when the host imports it — a host that never imports a backend
-// cannot select it, which keeps the dependency tree honest: config can name
-// a backend, only imports can provide one.
+// backend self-registers from sandbox_git.go; the nested containerd module
+// cannot self-register until it repins to a core release carrying this
+// registry, so hosts register it at wiring time — a host that never imports
+// a backend cannot select it, which keeps the dependency tree honest:
+// config can name a backend, only imports can provide one.
 var defaultSandboxRegistry = &sandboxRegistry{factories: map[string]SandboxFactory{}}
 
 // RegisterSandbox registers a backend for OpenSandbox. Intended for

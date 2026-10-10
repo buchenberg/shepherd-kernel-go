@@ -123,3 +123,13 @@ func TestSandboxRegistry_ConfigValidation(t *testing.T) {
 		t.Errorf("empty RepoPath: %v, want a required-field error", err)
 	}
 }
+
+func TestSandboxRegistry_NilFactoryResultFailsAtTheSeam(t *testing.T) {
+	r := &sandboxRegistry{factories: map[string]SandboxFactory{}}
+	r.register("broken", func(any) (Sandbox, error) { return nil, nil })
+
+	_, err := r.open("broken", nil)
+	if err == nil || !strings.Contains(err.Error(), "nil sandbox") {
+		t.Fatalf("open with a (nil, nil) factory: %v, want it to fail at the construction seam", err)
+	}
+}

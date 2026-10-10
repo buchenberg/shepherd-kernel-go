@@ -325,11 +325,12 @@ store separate from the trace, and the echo substrate is the test fixture.
 ```
 
 \* `git` is built into the core module; the containerd backend is a nested
-module (`sandbox/containerd`) that runs anywhere a containerd daemon runs —
-native Linux, **WSL2**, or a Linux server. "Linux-only" is a build-tag
-statement about the daemon client, not a hardware statement. Any
-implementation of the `Sandbox` interface is swappable in, and
-`OpenSandbox` resolves a configured backend name to a constructed sandbox.
+module (`sandbox/containerd`) that needs a Linux environment at runtime —
+native Linux, **WSL2**, or a Linux server — because containerd and overlayfs
+are Linux. The module itself cross-compiles (it builds on Windows and macOS;
+the daemon it talks to does not run there). Any implementation of the
+`Sandbox` interface is swappable in, and `OpenSandbox` resolves a configured
+backend name to a constructed sandbox.
 
 ## Core Concepts
 
@@ -419,8 +420,8 @@ live runs are green**. The harness needs a Linux environment with a running
 containerd daemon — native Linux, WSL2, or a server all qualify (the harness
 was designed with a WSL2 host in mind: the FIFODir knob exists precisely so a
 non-root WSL2 client can drive the daemon); a stock image and the overlayfs
-snapshotter suffice. The module is Linux-gated at build time and can never be
-this module's default.
+snapshotter suffice. The module needs that Linux environment at runtime and
+can never be this module's default.
 
 **State durability.** A first run against a *cold* daemon (fresh namespace, no
 image) found an eleventh defect the warm-daemon runs had masked, and a twelfth
@@ -547,10 +548,10 @@ Two implementations exist, packaged differently on purpose:
   kernel's own test suite rides on.
 - **containerd** — a nested module (`sandbox/containerd`) so its
   dependency tree stays out of the core. It runs **anywhere a containerd
-  daemon runs: native Linux, WSL2, or a Linux server** — "Linux-only" is a
-  build-tag statement about the daemon client (`//go:build linux`), not a
-  hardware statement, and the module compiles out politely on other
-  platforms.
+  daemon runs: native Linux, WSL2, or a Linux server** — Linux is a runtime
+  requirement (containerd and overlayfs are Linux), not a build-tag fact;
+  the module cross-compiles on Windows and macOS even though the daemon
+  does not run there.
 
 Any type implementing the `Sandbox` interface is swappable in — the
 kernel never inspects a backend beyond the opaque
@@ -559,18 +560,18 @@ register factories and the host resolves a configured name:
 
 ```go
 // Config-driven construction: the git backend self-registers; a host
-// that imports the containerd module registers it the same way.
+// registers the containerd backend at wiring time (shepherd.RegisterSandbox
+// with a factory over the nested module's constructor).
 sb, err := shepherd.OpenSandbox("git", shepherd.GitSandboxConfig{RepoPath: repoPath})
-// (containerd, once imported and registered: its own config struct)
 
-_, err := shepherd.OpenSandbox("podman", nil)   // -> ErrUnknownSandboxBackend, listing what IS registered
+_, err = shepherd.OpenSandbox("podman", nil)    // -> ErrUnknownSandboxBackend, listing what IS registered
 backends := shepherd.SandboxBackends()          // sorted names, for config diagnostics
 
 // Direct constructors remain available:
-sb := shepherd.NewLocalGitSandbox(repoPath)      // in-place: materializes on your repository. Destroy is a no-op.
-sb = shepherd.NewWorktreeSandbox(repoPath, wt)    // worktree: a detached git worktree this scope owns
+inPlace := shepherd.NewLocalGitSandbox(repoPath) // materializes on your repository. Destroy is a no-op.
+worktree := shepherd.NewWorktreeSandbox(repoPath, wt) // a detached git worktree this scope owns
 
-err := sb.Create(ctx, shepherd.SandboxSpec{})    // OpenSandbox does NOT provision; Create is the lifecycle step
+err = sb.Create(ctx, shepherd.SandboxSpec{})    // OpenSandbox does NOT provision; Create is the lifecycle step
 defer sb.Destroy(ctx)
 
 ws, err := sb.Capture(ctx)

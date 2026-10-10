@@ -20,10 +20,14 @@ contain breaking changes, which are called out below.
 
 ### Changed (docs)
 - README: the containerd backend's framing is now "runs anywhere a
-  containerd daemon runs — native Linux, WSL2, or a Linux server";
-  "Linux-only" is stated as the build-tag fact it is. The backend section
-  documents why git is in-module and containerd is nested (dependency
-  weight and the test carrier, not modularity), and the sandbox registry.
+  containerd daemon runs — native Linux, WSL2, or a Linux server". Linux
+  is stated as what it is — a runtime requirement of containerd and
+  overlayfs — not a build-tag fact (the module cross-compiles; its daemon
+  does not run off-Linux). The backend section documents why git is
+  in-module and containerd is nested (dependency weight and the test
+  carrier, not modularity), and the sandbox registry; containerd
+  registration is host wiring until the nested module repins to a
+  registry-carrying core.
 
 ## [v0.9.0] - 2026-10-10
 
