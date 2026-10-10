@@ -168,3 +168,26 @@ type Sandbox interface {
 	// WriteFile writes a file inside the sandbox workspace.
 	WriteFile(ctx context.Context, path string, data []byte, perm fs.FileMode) error
 }
+
+// DeltaApplier is an optional Sandbox capability: applying a captured
+// state's changes onto a workspace that has moved past the state's base,
+// without resetting it. Sandbox.Apply is a full reset and is wrong for that
+// case — it would roll the workspace back to the state's HEAD. Settlement's
+// apply verb (plan 04 §2) needs the merge instead.
+//
+// A delta state records its own base (the git backend's stash commit carries
+// its parent), so one argument is enough: the backend merges the delta onto
+// whatever the workspace holds now. A conflict fails the call and must
+// leave the workspace untouched.
+//
+// Backends that cannot merge a delta return ErrUnsupported from the
+// assertion's absence — callers detect the capability with a type
+// assertion, the same pattern the containerd adapter's StateReleaser uses.
+// Keeping this off the Sandbox interface means adding it is a backend
+// decision, not a kernel-wide breaking change.
+type DeltaApplier interface {
+	// ApplyDelta merges the changes captured in delta onto the current
+	// workspace. A delta with no changes (a clean capture) is a no-op.
+	// A conflicting delta returns an error and consumes nothing.
+	ApplyDelta(ctx context.Context, delta WorkspaceState) error
+}

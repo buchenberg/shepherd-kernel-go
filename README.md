@@ -155,6 +155,54 @@ for iv := range sup.Interventions() {
 }
 ```
 
+### Review before merge / settle outputs
+
+Nothing from a child reaches the parent without passing a review gate.
+`CommitMerge` proposes the child's diff (against the baseline captured at
+fork time), records it, runs your reviewer, and either merges or discards —
+a denial returns `*SupervisorDeniedError` and never touches the parent:
+
+```go
+// Commit-time review: shared-sandbox child, rollback via checkpoint restore.
+err := mgr.CommitMerge(ctx, child.ID(), shepherd.DraftsOnlyReviewer("drafts"))
+var denied *shepherd.SupervisorDeniedError
+if errors.As(err, &denied) {
+    _, _ = mgr.RestoreCheckpoint(ctx, cp.ID) // roll the shared workspace back
+    // retry with the denial reason injected as guidance
+}
+```
+
+For isolated children (worktrees), physical propagation belongs to
+settlement: seal each output, compare the frozen `Changes`, then settle
+exactly one — best-of-n in a dozen lines:
+
+```go
+var outs []*shepherd.RetainedOutput
+for i := 0; i < n; i++ {
+    child, _ := mgr.ForkIsolated(parent.ID(), fmt.Sprintf("try-%d", i), nil, worktreeFor(repo, i))
+    // ... the attempt does its work in the worktree ...
+    out, _ := mgr.Seal(ctx, child.ID())
+    outs = append(outs, out) // out.Changes and out.Diff are frozen at seal time
+}
+
+if err := mgr.Settle(ctx, outs[winner].ID, shepherd.SettleSelect); err != nil { // parent unmoved: fast-forward
+    // parent moved since the fork? three-way instead:
+    //   disjoint paths  -> mgr.Settle(ctx, outs[winner].ID, shepherd.SettleApply)
+    //   path overlap    -> ErrApplyConflict, output stays unconsumed
+}
+for _, out := range losers {
+    _ = mgr.Settle(ctx, out.ID, shepherd.SettleDiscard)
+}
+```
+
+Every settlement is consume-once (`ErrOutputConsumed` on a second settle);
+`selected` requires the parent to be exactly at the fork baseline, `applied`
+requires path-disjoint parent changes, `released` keeps the sealed state
+addressable without integrating it, and `discarded` tears the child down
+keeping the sealed state as a record. Rule engines join the same gate via
+`Supervisor.ReviewMerge`, which presents proposals to the rules as
+`merge:proposed` events.
+
 ### Inspect execution history
 
 Read back traces by owner, causal closure, or frontier checkpoint:
@@ -418,6 +466,17 @@ cp, err := mgr.CreateCheckpoint(ctx, "scope-id", snapshot)          // single-us
 snapshot, err := mgr.RestoreCheckpoint(ctx, cp.ID)
 latest := mgr.LatestCheckpoint("scope-id")
 mgr.PruneCheckpoints("scope-id")
+
+// Merge gate (plan 04): propose, review, commit-or-discard
+proposal, err := mgr.ProposeMerge(ctx, "child-scope-id", 2000)      // query; classifies create/modify/delete
+err = mgr.CommitMerge(ctx, "child-scope-id", shepherd.DraftsOnlyReviewer("drafts"))
+// deny -> *SupervisorDeniedError, child discarded; isolated children are refused (use Seal + Settle)
+
+// Retained outputs: seal, then settle exactly once
+out, err := mgr.Seal(ctx, "scope-id")                              // scope stays active
+got, ok := mgr.Output(out.ID)
+outs := mgr.OutputsForScope("scope-id")
+err = mgr.Settle(ctx, out.ID, shepherd.SettleSelect)               // or SettleApply / SettleRelease / SettleDiscard
 ```
 
 ### Scope workspace and checkpoint operations

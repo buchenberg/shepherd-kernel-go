@@ -195,6 +195,7 @@ type GitSandbox struct {
 }
 
 var _ Sandbox = (*GitSandbox)(nil)
+var _ DeltaApplier = (*GitSandbox)(nil)
 
 // NewLocalGitSandbox returns an in-place sandbox over repoPath.
 func NewLocalGitSandbox(repoPath string) *GitSandbox {
@@ -452,6 +453,36 @@ func (g *GitSandbox) Diff(ctx context.Context, ws WorkspaceState, maxLines int) 
 // Exec is not implemented: the git backend owns git state, not processes.
 func (g *GitSandbox) Exec(context.Context, ExecRequest) (ExecResult, error) {
 	return ExecResult{}, ErrUnsupported
+}
+
+// ApplyDelta merges a captured state's changes onto the current workspace
+// without resetting it — the three-way path for settlement's apply verb.
+//
+// The delta's stash commit records its own base, and git worktrees share the
+// object store, so a stash captured in one worktree applies in any checkout
+// of the same repository. `git stash apply` performs the merge: a delta
+// whose paths conflict with the workspace's current content fails and
+// leaves the tree untouched; a clean delta lands as working-tree changes.
+//
+// A delta with an empty stash_sha (a clean capture) is a no-op: there is
+// nothing to merge.
+func (g *GitSandbox) ApplyDelta(ctx context.Context, delta WorkspaceState) error {
+	if delta.Backend != "git" {
+		return fmt.Errorf("git sandbox: cannot apply delta from backend %q", delta.Backend)
+	}
+	stashSHA, _ := delta.Data["stash_sha"].(string)
+	if stashSHA == "" {
+		return nil // clean capture: nothing to apply
+	}
+
+	w := g.work()
+	if !w.isRepo(ctx) {
+		return fmt.Errorf("git sandbox: %s is not a git working tree", g.workDir())
+	}
+	if err := w.stashApply(ctx, stashSHA); err != nil {
+		return fmt.Errorf("git sandbox: apply delta %s: %w", stashSHA, err)
+	}
+	return nil
 }
 
 // ReadFile is not implemented.

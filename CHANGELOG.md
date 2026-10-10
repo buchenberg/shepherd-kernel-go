@@ -6,6 +6,51 @@ contain breaking changes, which are called out below.
 
 ## [Unreleased]
 
+Supervision & settlement (plan 04, Phase 3): nothing from a child scope
+reaches the parent without passing a review gate, and child results are
+sealed as retained outputs settled exactly once. Purely additive to the API
+surface; the one behavior-relevant note is that `Fork` now captures the
+parent's workspace state as a fork baseline (a git capture per fork — and a
+failed capture fails the fork rather than handing out an unreviewable child).
+
+### Added
+- **Check-at-commit merge gate**: `ScopeManager.ProposeMerge` diffs a child
+  against its fork baseline and classifies the unified diff into
+  `ProposedChange`s (`create`/`modify`/`delete`); `CommitMerge` records
+  `shepherd.merge.proposed.v1`, runs a `MergeReviewer`, records
+  `shepherd.supervisor.decision.v1`, and merges or discards — a denial
+  returns `*SupervisorDeniedError` (reason + paths) and never merges.
+  Built-in reviewers: `DraftsOnlyReviewer` (the reference
+  `drafts_only_supervisor` analogue), `DestructivePathReviewer`.
+  `Supervisor.ReviewMerge` presents proposals to the rule engine as
+  `merge:proposed` effect events; `InterventionDiscard` gains its first
+  emitter.
+- **Fork baselines (breaking for fork, deliberately)**: `Fork` on a
+  sandboxed parent captures the parent's workspace state and records its
+  digest in the `shepherd.scope.forked.v1` payload (additive key); the child
+  exposes it via `Scope.Baseline`. Children without a baseline (pure-causal
+  forks) are refused by `ProposeMerge` and `Seal`.
+- **Consume-once settlement**: `Scope.Seal` freezes a child's captured
+  workspace plus its classified changes into a `RetainedOutput` and records
+  `shepherd.run_output.sealed.v1`; the `ScopeManager` registry
+  (`Seal`/`Output`/`OutputsForScope`/`Settle`) settles exactly once —
+  `selected` (fast-forward-only: parent must digest-match the fork
+  baseline), `applied` (three-way via the new optional `DeltaApplier`
+  sandbox capability; path overlap → `ErrApplyConflict`, unconsumed),
+  `released`, `discarded`. Second settle → `ErrOutputConsumed`.
+- **`DeltaApplier`** optional `Sandbox` capability, implemented by the git
+  backend (stash-apply across the shared object store): merge a captured
+  state's changes onto a workspace that moved past the state's base.
+- The three reference recipes as executable documentation
+  (`examples_test.go`): best-of-n, retry-until-acceptable, apply-onto-moved-
+  workspace.
+
+### Changed
+- `CommitMerge` refuses isolated-sandbox children: `Merge` is causal-only,
+  so approving one would record the approval and then destroy the worktree
+  holding the approved work. Settlement owns physical propagation for
+  isolated children; the error says so.
+
 > Everything in this section shipped 2026-10-10 as the nested-module release
 > `sandbox/containerd/v0.1.4`, tagged at `ce07f36` (the PR #25 merge). Core is
 > unchanged and stays at `v0.7.0`; `go get …/sandbox/containerd@v0.1.4` pulls

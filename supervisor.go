@@ -221,6 +221,48 @@ func (s *Supervisor) Halt(scopeID string) error {
 	return scope.Halt()
 }
 
+// ReviewMerge evaluates the supervisor's rules against a merge proposal and
+// returns the intervention a rule produced, or nil for approval. It is how a
+// rule engine participates in the check-at-commit gate: the caller passes
+// the result to CommitMerge's reviewer, typically denying on
+// InterventionDiscard or InterventionDeny.
+//
+// The proposal is presented to the rules as a synthetic effect event — Mode
+// Declaration, SchemaRef shepherd.merge.proposed.v1, KindLabel
+// "merge:proposed" — carrying the changed paths, so the same rule set that
+// watches tool calls can watch merges. This is the emitter that makes
+// InterventionDiscard reachable: before it, nothing in the kernel produced
+// one.
+//
+// The returned intervention is the rules' verdict only; acting on it is the
+// caller's decision, unlike Halt which executes immediately.
+func (s *Supervisor) ReviewMerge(scopeID string, proposal MergeProposal) *Intervention {
+	paths := make([]string, 0, len(proposal.Changes))
+	for _, c := range proposal.Changes {
+		paths = append(paths, c.Path)
+	}
+
+	event := EffectEvent{
+		TraceOwnerID: strings.TrimPrefix(proposal.ChildScopeID, "scope:"),
+		Mode:         Declaration,
+		SchemaRef:    SchemaMergeProposed,
+		KindLabel:    "merge:proposed",
+		Payload: map[string]any{
+			"child_scope":     proposal.ChildScopeID,
+			"baseline_digest": proposal.BaselineDigest,
+			"paths":           paths,
+			"change_count":    len(proposal.Changes),
+		},
+		Timestamp: time.Now(),
+	}
+
+	iv := s.CheckCall(event)
+	if iv != nil && iv.ScopeID == "" {
+		iv.ScopeID = scopeID
+	}
+	return iv
+}
+
 // --- Built-in rules ---
 
 // DestructiveToolRule intervenes before potentially destructive file
