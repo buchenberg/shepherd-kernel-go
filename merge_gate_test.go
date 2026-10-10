@@ -15,7 +15,7 @@ import (
 // schema ref, in record order.
 func findRecords(t *testing.T, store *SQLiteTraceStore, ownerID, schemaRef string) []Record {
 	t.Helper()
-	slice, err := store.ReadOwnerPrefix(TrustedReadContext, ownerID, 999, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), TrustedReadContext, ownerID, 999, ModeBoth)
 	if err != nil {
 		t.Fatalf("read trace for %s: %v", ownerID, err)
 	}

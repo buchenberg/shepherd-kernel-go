@@ -112,7 +112,7 @@ func (s *Scope) recordWorkspaceEvent(
 	seq := nextCheckpointSeq.Add(1)
 	digest, _ := ws.Digest()
 
-	_, err := s.store.Append(TrustedAppendContext, AppendBatch{
+	_, err := s.store.Append(ctx, TrustedAppendContext, AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:workspace:%s:%d", ownerID, kindLabel, seq),
 		Groups: []AppendGroup{{
 			TraceOwnerID: ownerID,

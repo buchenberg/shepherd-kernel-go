@@ -5,7 +5,10 @@ package shepherd
 // view — root execution, active children, parent-published facts, resolved
 // from a frontier.
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 const SchemaRuntimePublishedFact = "shepherd2.runtime.published_fact.v1"
 
@@ -96,8 +99,8 @@ func ProjectEffectiveHistory(rootSlice Slice, rootTraceOwnerID string, childSlic
 
 // ProjectEffectiveHistoryFromStore resolves the root frontier and each
 // active child's frontier, then projects.
-func ProjectEffectiveHistoryFromStore(store *SQLiteTraceStore, readContext ReadContext, cutoff Frontier) (*EffectiveHistory, error) {
-	rootSlice, err := store.ResolveFrontier(readContext, cutoff.FrontierID, ModeBoth)
+func ProjectEffectiveHistoryFromStore(ctx context.Context, store *SQLiteTraceStore, readContext ReadContext, cutoff Frontier) (*EffectiveHistory, error) {
+	rootSlice, err := store.ResolveFrontier(ctx, readContext, cutoff.FrontierID, ModeBoth)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +113,7 @@ func ProjectEffectiveHistoryFromStore(store *SQLiteTraceStore, readContext ReadC
 		if relation.ChildFrontierID == "" {
 			continue
 		}
-		slice, err := store.ResolveFrontier(readContext, relation.ChildFrontierID, ModeBoth)
+		slice, err := store.ResolveFrontier(ctx, readContext, relation.ChildFrontierID, ModeBoth)
 		if err != nil {
 			return nil, fmt.Errorf("resolve child frontier %s: %w", relation.ChildFrontierID, err)
 		}

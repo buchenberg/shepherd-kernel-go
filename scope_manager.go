@@ -3,6 +3,7 @@ package shepherd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 )
@@ -73,6 +74,26 @@ func (m *ScopeManager) Get(id string) (*Scope, bool) {
 // Returns an error if the parent doesn't exist or a scope with the
 // child owner ID already exists.
 func (m *ScopeManager) Fork(parentID, childOwnerID string, snapshot any) (*Scope, error) {
+	return m.forkScope(parentID, childOwnerID, snapshot, false, nil)
+}
+
+// ForkIsolated creates a child scope with its own execution substrate instead of
+// inheriting the parent's. The child owns sb, so Discard, Merge, and Halt
+// destroy it — this is what makes a discard a physical rollback for an
+// isolating backend such as a git worktree. The isolation is recorded in the
+// fork payload, which is what recovery uses to decide that a re-adopted
+// sandbox belongs to this child alone.
+//
+// Returns an error if the parent doesn't exist or a scope with the child owner
+// ID already exists.
+func (m *ScopeManager) ForkIsolated(parentID, childOwnerID string, snapshot any, sb Sandbox) (*Scope, error) {
+	return m.forkScope(parentID, childOwnerID, snapshot, true, sb)
+}
+
+// forkScope is the shared fork path: resolve the parent, capture the fork
+// baseline outside the registry lock, then register atomically. isolated
+// forks record their own substrate (sb may be nil for shared forks).
+func (m *ScopeManager) forkScope(parentID, childOwnerID string, snapshot any, isolated bool, sb Sandbox) (*Scope, error) {
 	m.mu.RLock()
 	parent, ok := m.scopes[parentID]
 	m.mu.RUnlock()
@@ -85,6 +106,11 @@ func (m *ScopeManager) Fork(parentID, childOwnerID string, snapshot any) (*Scope
 		return nil, err
 	}
 
+	backend := ""
+	if isolated && sb != nil {
+		backend = sb.Backend()
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -93,28 +119,16 @@ func (m *ScopeManager) Fork(parentID, childOwnerID string, snapshot any) (*Scope
 		return nil, fmt.Errorf("scope %s already exists", childID)
 	}
 
-	child, err := parent.forkWithBaseline(childOwnerID, snapshot, baseline)
+	child, err := parent.forkWithBaseline(childOwnerID, snapshot, baseline, isolated, backend)
 	if err != nil {
 		return nil, err
+	}
+	if isolated && sb != nil {
+		child.WithSandbox(sb, true)
 	}
 
 	m.scopes[child.id] = child
 	return child, nil
-}
-
-// ForkIsolated creates a child scope with its own execution substrate instead of
-// inheriting the parent's. The child owns sb, so Discard, Merge, and Halt
-// destroy it — this is what makes a discard a physical rollback for an
-// isolating backend such as a git worktree.
-//
-// Returns an error if the parent doesn't exist or a scope with the child owner
-// ID already exists.
-func (m *ScopeManager) ForkIsolated(parentID, childOwnerID string, snapshot any, sb Sandbox) (*Scope, error) {
-	child, err := m.Fork(parentID, childOwnerID, snapshot)
-	if err != nil {
-		return nil, err
-	}
-	return child.WithSandbox(sb, true), nil
 }
 
 // Merge propagates a child scope's effects into its parent.
@@ -344,20 +358,54 @@ func (m *ScopeManager) LatestCheckpoint(scopeID string) *Checkpoint {
 	return latest
 }
 
-// PruneCheckpoints removes all checkpoints belonging to a scope. Call this
-// when a scope is discarded or merged so consumed checkpoint metadata (and
-// any still-retained snapshot) is not held for the process lifetime.
+// PruneCheckpoints removes all checkpoints belonging to a scope and deletes
+// their persisted blobs. Call this when a scope is discarded or merged so
+// consumed checkpoint metadata (and any still-retained snapshot) is not held
+// for the process lifetime — or in the database — after the scope is gone.
 // RestoreCheckpoint already releases the snapshot on use; this handles
 // checkpoints that were never restored.
-func (m *ScopeManager) PruneCheckpoints(scopeID string) {
+func (m *ScopeManager) PruneCheckpoints(ctx context.Context, scopeID string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	var pruned []*Checkpoint
 	for id, cp := range m.checkpoints {
 		if cp.ScopeID == scopeID {
+			pruned = append(pruned, cp)
 			cp.mu.Lock()
 			cp.Snapshot = nil
 			cp.mu.Unlock()
 			delete(m.checkpoints, id)
 		}
 	}
+	m.mu.Unlock()
+
+	// Blob deletion runs outside the registry lock (database I/O) and is
+	// advisory: a failed delete must not resurrect an in-memory prune.
+	for _, cp := range pruned {
+		if err := m.store.deleteCheckpointBlob(ctx, cp.ID); err != nil {
+			slog.Warn("prune checkpoints: delete persisted blob failed (advisory)", "checkpoint", cp.ID, "err", err)
+		}
+	}
+}
+
+// PruneTerminal removes merged and discarded scopes from the registry
+// (plan 05 §4). Terminal scopes stay lookupable until pruned — their state
+// is settled data a supervisor may still read — but a long-lived host that
+// accumulates them grows the map without bound.
+//
+// Pruning a scope does not touch its checkpoints or retained outputs:
+// those have their own registries and lifecycles (PruneCheckpoints,
+// Settle). The trace records survive either way. Returns the number of
+// scopes pruned.
+func (m *ScopeManager) PruneTerminal() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	pruned := 0
+	for id, scope := range m.scopes {
+		if state := scope.State(); state == ScopeMerged || state == ScopeDiscarded {
+			delete(m.scopes, id)
+			pruned++
+		}
+	}
+	return pruned
 }

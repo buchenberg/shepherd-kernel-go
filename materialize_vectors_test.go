@@ -202,7 +202,7 @@ func TestMaterializeEchoSequenceMatchesPython(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	declaration, err := store.Append(vectorAppendContext(), vectorDeclarationBatch(seq.Declaration))
+	declaration, err := store.Append(context.Background(), vectorAppendContext(), vectorDeclarationBatch(seq.Declaration))
 	if err != nil {
 		t.Fatalf("append declaration: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestMaterializeKVSequenceMatchesPython(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	declaration, err := store.Append(vectorAppendContext(), vectorDeclarationBatch(seq.Declaration))
+	declaration, err := store.Append(context.Background(), vectorAppendContext(), vectorDeclarationBatch(seq.Declaration))
 	if err != nil {
 		t.Fatalf("append declaration: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestMaterializeLedgerReplayAcrossRestartMatchesPython(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	declaration, err := store.Append(vectorAppendContext(), AppendBatch{
+	declaration, err := store.Append(context.Background(), vectorAppendContext(), AppendBatch{
 		AppendIntentID: "vector:replay:declare",
 		Groups: []AppendGroup{{
 			TraceOwnerID: "owner:vector-replay",
@@ -310,13 +310,13 @@ func TestMaterializeLedgerReplayAcrossRestartMatchesPython(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first materialize: %v", err)
 	}
-	store.Close()
+	store.Close(context.Background())
 
 	restarted, err := NewSQLiteTraceStore(dbPath)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	defer restarted.Close()
+	defer restarted.Close(context.Background())
 	second, err := Materialize(context.Background(), restarted, vectorMaterializeContext(), req, registry)
 	if err != nil {
 		t.Fatalf("second materialize: %v", err)
@@ -434,7 +434,7 @@ func assertReceiptEquals(t *testing.T, got MaterializationReceipt, want material
 
 func assertCaptureEquals(t *testing.T, store *SQLiteTraceStore, factID string, want materializeRecordVector, wantWitness materializeWitnessVector) {
 	t.Helper()
-	visible, err := store.ReadFact(reader, factID)
+	visible, err := store.ReadFact(context.Background(), reader, factID)
 	if err != nil {
 		t.Fatalf("read capture: %v", err)
 	}
@@ -461,7 +461,7 @@ func assertCaptureEquals(t *testing.T, store *SQLiteTraceStore, factID string, w
 		t.Errorf("capture payload = %v, want %v", rec.Body.Payload, want.Payload)
 	}
 
-	witnessVisible, err := store.ReadFact(reader, rec.Envelope.WitnessRef)
+	witnessVisible, err := store.ReadFact(context.Background(), reader, rec.Envelope.WitnessRef)
 	if err != nil {
 		t.Fatalf("read witness: %v", err)
 	}

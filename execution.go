@@ -1,5 +1,7 @@
 package shepherd
 
+import "context"
+
 // Execution fact helpers and projection folds (plan 02 §1), mirroring
 // shepherd2/schemas/execution.py. Schema refs, payload keys, modes and the ID
 // derivation are cross-language contract surface: testdata/
@@ -185,8 +187,8 @@ func FailExecutionBatch(appendIntentID, executionID, errMsg string, causedBy []s
 // over the Ring 0 frontier ABI. The terminal-frontier law is enforced here:
 // the through-fact must be payload-visible and must carry a completed or
 // failed schema; anything else fails before the frontier exists.
-func PublishExecutionFrontier(store *SQLiteTraceStore, ctx AppendContext, frontierID, targetExecutionID, throughFactID, publisherExecutionID, appendIntentID string, causedBy []string) (Frontier, error) {
-	visible, err := store.ReadFact(executionReadContext, throughFactID)
+func PublishExecutionFrontier(ctx context.Context, store *SQLiteTraceStore, auth AppendContext, frontierID, targetExecutionID, throughFactID, publisherExecutionID, appendIntentID string, causedBy []string) (Frontier, error) {
+	visible, err := store.ReadFact(ctx, executionReadContext, throughFactID)
 	if err != nil {
 		return Frontier{}, fmt.Errorf("read through fact: %w", err)
 	}
@@ -197,7 +199,7 @@ func PublishExecutionFrontier(store *SQLiteTraceStore, ctx AppendContext, fronti
 	if through.Envelope.SchemaRef != SchemaExecutionCompleted && through.Envelope.SchemaRef != SchemaExecutionFailed {
 		return Frontier{}, fmt.Errorf("terminal execution frontier must target a terminal lifecycle fact, got %s", through.Envelope.SchemaRef)
 	}
-	return store.PublishFrontier(ctx, FrontierSpec{
+	return store.PublishFrontier(ctx, auth, FrontierSpec{
 		FrontierID:         frontierID,
 		TargetTraceOwnerID: targetExecutionID,
 		ThroughFactID:      throughFactID,
@@ -267,8 +269,8 @@ func ProjectExecution(traceSlice Slice, targetTraceOwnerID string, cutoff *Front
 }
 
 // ProjectExecutionFromStore resolves a frontier and projects an execution.
-func ProjectExecutionFromStore(store *SQLiteTraceStore, readContext ReadContext, cutoff Frontier) (*Execution, error) {
-	slice, err := store.ResolveFrontier(readContext, cutoff.FrontierID, ModeBoth)
+func ProjectExecutionFromStore(ctx context.Context, store *SQLiteTraceStore, readContext ReadContext, cutoff Frontier) (*Execution, error) {
+	slice, err := store.ResolveFrontier(ctx, readContext, cutoff.FrontierID, ModeBoth)
 	if err != nil {
 		return nil, err
 	}

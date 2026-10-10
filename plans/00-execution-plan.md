@@ -188,7 +188,10 @@ Echo/KV substrates and reproduce ID-for-ID through the Go dispatch.
 was inverted exactly as its comment predicted — and the PR review's five
 findings were addressed in-tree (plan 03 §8), including the honest-outcome
 rule that world-touched failures report `split_state`, never `clean_failure`.
-Phase 4 remains ⬜.
+**Phase 4 is complete** (2026-10-10; branch `parity/p4-durability-idioms`,
+release `v0.9.0` post-merge). `RecoverScopes` rebuilds the registry from the
+trace, checkpoint blobs persist restorably with staleness detection, and
+the ctx sweep made `context.Context` the first parameter on every store API.
 
 **Phase 3 is complete** (2026-10-10; merged as PR #27 at `3c4bda1`, released
 as `v0.8.0` — the fix commit that addressed the review's five findings is
@@ -526,15 +529,19 @@ change. Detailed spec: `plans/05-persistence-hygiene-release.md` §4, §6–8.
 **Deliverable**: v0.9.0 — **breaking**: `context.Context` becomes the first
 parameter across store APIs.
 
-| ID | Task | Files | Est | Deps |
+**Status (2026-10-10): complete — T4.1–T4.7 ✅ on branch
+`parity/p4-durability-idioms`; v0.9.0 is the post-merge tag (the PR #19
+pattern: ticked in the follow-up once it resolves).**
+
+| ID | Task | Status | Evidence |
 |---|---|---|---|---|
-| T4.1 | `RecoverScopes(store, opts)`: rebuild scope tree + terminal states from lifecycle records; sandbox re-adoption via `opts.Resolver(scopeID, backend)`; orphan policy | `scope_manager.go`, new `recovery.go` (+tests) | 2d | — |
-| T4.2 | Checkpoint durability: `checkpoint_snapshots(checkpoint_id, snapshot BLOB)` table + size guard; recovery marks checkpoints `Invalid` when `state_digest` ≠ fresh `Capture()`; `PruneCheckpoints` deletes blobs | `checkpoint.go`, `store.go` (+tests) | 1.5d | T4.1 |
-| T4.3 | Output recovery from sealed/settled records (state_digest+backend+revision sufficient) | `settlement.go`, `recovery.go` | 1d | T4.1, phase 3 |
-| T4.4 | `PruneTerminal()` for long-lived hosts (terminal scopes stay lookupable until pruned) | `scope_manager.go` | 0.25d | T4.1 |
-| T4.5 | `context.Context` sweep: first-param ctx on all store `Append/Preview/Read/Resolve/Publish/Close`; `database/sql` ctx variants; mechanical yaah call-site updates scheduled alongside | `store.go`, all callers in-repo | 2d | all prior |
-| T4.6 | Tag-time verification job: clean-checkout module build, no `replace` in tagged modules (gorelease or equivalent) | CI | 0.5d | T0.7 |
-| T4.7 | Docs pass: README claims audit (drop rot-prone exact test counts; document ctx APIs, durability), PARITY-PLAN status table ✅ per landed item | `README.md`, `PARITY-PLAN.md` | 0.5d | T4.5 |
+| T4.1 | `RecoverScopes(store, opts)`: rebuild scope tree + terminal states from lifecycle records; sandbox re-adoption via `opts.Resolver(scopeID, backend)`; orphan policy | ✅ | `recovery.go` — fork records carry `isolated` + full `baseline` (scope.go/scope_manager.go payload additions); a never-forked root is introduced by its checkpoint/output records as a bare active root; resolver nil-sandbox = orphan-clean, error = fail recovery. `recovery_test.go`: round trip, terminal states, orphan-clean |
+| T4.2 | Checkpoint durability: `checkpoint_snapshots(checkpoint_id, snapshot BLOB)` table + size guard; recovery marks checkpoints `Invalid` when stale; `PruneCheckpoints` deletes blobs | ✅ | `checkpoint.go` — blob table carries full `WorkspaceState` + snapshot (`state_json`, `snapshot`), bounded by `WithCheckpointBlobLimit` (default 1 MiB, hard-fail over); restore consumes the blob. Staleness is **revision**, not digest, comparison — git mints a fresh stash SHA per capture, a digest rule would invalidate every dirty-tree checkpoint (deviation from plan-05 wording, documented in `recovery.go`). `TestRecover_CheckpointStaleness`, `TestRecover_CheckpointConsumedAcrossRestart`, `TestCheckpointBlobLimit` |
+| T4.3 | Output recovery from sealed/settled records | ✅ | sealed payloads extended with full `state`/`baseline` maps + `changes` list (digests alone cannot restore a `WorkspaceState`); `recoverOutputs` rebuilds settle-able outputs, settled records enforce consume-once across restart. `TestRecover_OutputsSettleAcrossRestart` |
+| T4.4 | `PruneTerminal()` for long-lived hosts (terminal scopes stay lookupable until pruned) | ✅ | `scope_manager.go`; `PruneCheckpoints` also deletes blobs and takes a ctx. `TestRecover_TerminalStatesAndPrune` |
+| T4.5 | `context.Context` sweep: first-param ctx on all store `Append/Preview/Read/Resolve/Publish/Close`; `database/sql` ctx variants; mechanical yaah call-site updates scheduled alongside | ✅ | all 14 store methods + the runtime facade (`StartTaskSync`, `TaskControl`, projectors); `BeginTx(ctx)` for writes, `QueryContext`/`ExecContext` through the read/insert helper chain; lifecycle records deliberately on `context.Background()` (same rationale as `destroyOwnedSandbox`). In-repo callers swept (30 files); yaah updates scheduled alongside its pin bump |
+| T4.6 | Tag-time verification job: clean-checkout module build, no `replace` in tagged modules (gorelease or equivalent) | ✅ | `ci.yml` `release-verify` job: on `v*`/`sandbox/**` tags, no-`replace` grep on both `go.mod`s + clean-consumer `go get` of the tag (nested tags also verify the pinned core) |
+| T4.7 | Docs pass: README claims audit (drop rot-prone exact test counts; document ctx APIs, durability), PARITY-PLAN status table ✅ per landed item | ✅ | README: test-count table dropped, store examples carry ctx+auth, "Recover after a restart" section, ctx-first API note; PARITY-PLAN: 17 stale matrix rows ticked to landed state with versions |
 
 **Exit criteria**: restart round-trip suite green (fork→checkpoint→close→
 recover→restore; moved-workspace staleness → invalid; outputs recovered);

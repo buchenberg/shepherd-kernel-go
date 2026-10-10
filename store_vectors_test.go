@@ -2,6 +2,7 @@ package shepherd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -199,7 +200,7 @@ func replayStoreVector(t *testing.T, v storeVector) {
 				batchIndex, gotDigest, want.BatchDigest)
 		}
 
-		receipt, err := store.Append(trustedAppend, batch)
+		receipt, err := store.Append(context.Background(), trustedAppend, batch)
 		if err != nil {
 			t.Fatalf("batch %d (%s): %v", batchIndex, batchSpec.AppendIntentID, err)
 		}
@@ -214,7 +215,7 @@ func replayStoreVector(t *testing.T, v storeVector) {
 			if f.AfterBatch != batchIndex {
 				continue
 			}
-			cut, err := store.PublishFrontier(trustedAppend, FrontierSpec{
+			cut, err := store.PublishFrontier(context.Background(), trustedAppend, FrontierSpec{
 				FrontierID:         f.FrontierID,
 				TargetTraceOwnerID: f.TargetTraceOwnerID,
 				ThroughFactID:      receipt.FactIDs[f.ThroughLastFactOf],
@@ -325,7 +326,7 @@ func compareOwnerPaths(t *testing.T, store *SQLiteTraceStore, v storeVector) {
 		}
 		want := vectorStrings(raw)
 
-		slice, err := store.ReadOwnerPrefix(reader, owner, 9999, ModeBoth)
+		slice, err := store.ReadOwnerPrefix(context.Background(), reader, owner, 9999, ModeBoth)
 		if err != nil {
 			t.Fatalf("read owner %q: %v", owner, err)
 		}
@@ -376,7 +377,7 @@ func TestLegacyBatchDigestStillReplaysAsIdempotent(t *testing.T) {
 		}},
 	}
 
-	original, err := store.Append(trustedAppend, batch)
+	original, err := store.Append(context.Background(), trustedAppend, batch)
 	if err != nil {
 		t.Fatalf("first append: %v", err)
 	}
@@ -401,7 +402,7 @@ func TestLegacyBatchDigestStillReplaysAsIdempotent(t *testing.T) {
 	}
 
 	// The retry must be recognised as the same batch, not as a conflict.
-	replayed, err := store.Append(trustedAppend, batch)
+	replayed, err := store.Append(context.Background(), trustedAppend, batch)
 	if err != nil {
 		t.Fatalf("retry against a legacy digest failed: %v\n"+
 			"An upgraded database must keep replaying already-committed intents "+
@@ -415,7 +416,7 @@ func TestLegacyBatchDigestStillReplaysAsIdempotent(t *testing.T) {
 
 	// Accepting the legacy value must not weaken conflict detection: a genuinely
 	// different batch under the same intent is still a conflict.
-	_, err = store.Append(trustedAppend, AppendBatch{
+	_, err = store.Append(context.Background(), trustedAppend, AppendBatch{
 		AppendIntentID: batch.AppendIntentID,
 		Groups: []AppendGroup{{
 			TraceOwnerID: "exec:legacy",

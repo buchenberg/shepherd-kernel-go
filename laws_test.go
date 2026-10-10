@@ -15,6 +15,7 @@ package shepherd
 // run could catch.
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,7 +38,7 @@ var lawShapeReader = ReadContext{ActorRef: "reader", VisibilityProfile: Visibili
 // lawAppendDrafts appends one group under one intent with the law context.
 func lawAppendDrafts(t *testing.T, store *SQLiteTraceStore, intent, owner string, drafts ...RecordDraft) AppendReceipt {
 	t.Helper()
-	receipt, err := store.Append(lawAppend, AppendBatch{
+	receipt, err := store.Append(context.Background(), lawAppend, AppendBatch{
 		AppendIntentID: intent,
 		Groups:         []AppendGroup{{TraceOwnerID: owner, FactDrafts: drafts}},
 	})
@@ -84,11 +85,11 @@ func TestLawRecordDigestExcludesLegacyKindLabel(t *testing.T) {
 		t.Errorf("kind label leaked into the digest: %q vs %q", first.FactIDs[0], second.FactIDs[0])
 	}
 
-	firstSlice, err := store.ReadOwnerPrefix(lawReader, "owner:label:first", 99, ModeBoth)
+	firstSlice, err := store.ReadOwnerPrefix(context.Background(), lawReader, "owner:label:first", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read owner:label:first: %v", err)
 	}
-	secondSlice, err := store.ReadOwnerPrefix(lawReader, "owner:label:second", 99, ModeBoth)
+	secondSlice, err := store.ReadOwnerPrefix(context.Background(), lawReader, "owner:label:second", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read owner:label:second: %v", err)
 	}
@@ -114,7 +115,7 @@ func TestLawWitnessRecordsAreRetainedAndNonRootRecordsHaveWitnesses(t *testing.T
 	store := newMemStore(t)
 	receipt := lawAppendDrafts(t, store, "law:witness", "owner:witness", draft("step", Capture, nil))
 
-	recordVisible, err := store.ReadFact(lawReader, receipt.FactIDs[0])
+	recordVisible, err := store.ReadFact(context.Background(), lawReader, receipt.FactIDs[0])
 	if err != nil {
 		t.Fatalf("ReadFact(record): %v", err)
 	}
@@ -122,7 +123,7 @@ func TestLawWitnessRecordsAreRetainedAndNonRootRecordsHaveWitnesses(t *testing.T
 	if !ok {
 		t.Fatalf("record is %T, want Record", recordVisible)
 	}
-	rootVisible, err := store.ReadFact(lawReader, RootWitnessRecordIDMust())
+	rootVisible, err := store.ReadFact(context.Background(), lawReader, RootWitnessRecordIDMust())
 	if err != nil {
 		t.Fatalf("ReadFact(root): %v", err)
 	}
@@ -141,7 +142,7 @@ func TestLawWitnessRecordsAreRetainedAndNonRootRecordsHaveWitnesses(t *testing.T
 		t.Errorf("root witness_ref = %q, want the empty sentinel", root.Envelope.WitnessRef)
 	}
 
-	witnessVisible, err := store.ReadFact(lawReader, record.Envelope.WitnessRef)
+	witnessVisible, err := store.ReadFact(context.Background(), lawReader, record.Envelope.WitnessRef)
 	if err != nil {
 		t.Fatalf("ReadFact(witness): %v", err)
 	}
@@ -187,13 +188,13 @@ func TestLawWitnessBodyValidationIsEnforcedOnAppendAndPreview(t *testing.T) {
 		}},
 	}
 
-	_, err := store.Append(lawAppend, emptySubstrate)
+	_, err := store.Append(context.Background(), lawAppend, emptySubstrate)
 	wantErrorContaining(t, err, "substrate_ref")
-	_, err = store.PreviewRecordIDs(lawAppend, emptySubstrate)
+	_, err = store.PreviewRecordIDs(context.Background(), lawAppend, emptySubstrate)
 	wantErrorContaining(t, err, "substrate_ref")
-	_, err = store.Append(lawAppend, invalidContainment)
+	_, err = store.Append(context.Background(), lawAppend, invalidContainment)
 	wantErrorContaining(t, err, "containment")
-	_, err = store.PreviewRecordIDs(lawAppend, invalidContainment)
+	_, err = store.PreviewRecordIDs(context.Background(), lawAppend, invalidContainment)
 	wantErrorContaining(t, err, "containment")
 
 	// An unknown but non-empty substrate is retained verbatim: the kernel
@@ -206,11 +207,11 @@ func TestLawWitnessBodyValidationIsEnforcedOnAppendAndPreview(t *testing.T) {
 			FactDrafts:      []RecordDraft{draft("step", Capture, nil)},
 		}},
 	}
-	receipt, err := store.Append(lawAppend, unknownSubstrate)
+	receipt, err := store.Append(context.Background(), lawAppend, unknownSubstrate)
 	if err != nil {
 		t.Fatalf("Append(unknown substrate): %v", err)
 	}
-	retained, err := store.ReadFact(lawReader, receipt.FactIDs[0])
+	retained, err := store.ReadFact(context.Background(), lawReader, receipt.FactIDs[0])
 	if err != nil {
 		t.Fatalf("ReadFact: %v", err)
 	}
@@ -218,7 +219,7 @@ func TestLawWitnessBodyValidationIsEnforcedOnAppendAndPreview(t *testing.T) {
 	if !ok {
 		t.Fatalf("retained record is %T, want Record", retained)
 	}
-	witnessVisible, err := store.ReadFact(lawReader, fact.Envelope.WitnessRef)
+	witnessVisible, err := store.ReadFact(context.Background(), lawReader, fact.Envelope.WitnessRef)
 	if err != nil {
 		t.Fatalf("ReadFact(witness): %v", err)
 	}
@@ -246,7 +247,7 @@ func TestLawOrderedCausalityRejectsDuplicateParents(t *testing.T) {
 	store := newMemStore(t)
 	parent := lawAppendDrafts(t, store, "law:parent", "owner:causal", draft("parent", Capture, nil))
 
-	_, err := store.Append(lawAppend, AppendBatch{
+	_, err := store.Append(context.Background(), lawAppend, AppendBatch{
 		AppendIntentID: "law:duplicate-parent",
 		Groups: []AppendGroup{{
 			TraceOwnerID:  "owner:causal",
@@ -261,7 +262,7 @@ func TestLawOrderedCausalityRejectsDuplicateParents(t *testing.T) {
 // test_append_local_refs_are_resolved_before_retention.
 func TestLawAppendLocalRefsAreResolvedBeforeRetention(t *testing.T) {
 	store := newMemStore(t)
-	receipt, err := store.Append(lawAppend, AppendBatch{
+	receipt, err := store.Append(context.Background(), lawAppend, AppendBatch{
 		AppendIntentID: "law:local-refs",
 		Groups: []AppendGroup{{
 			TraceOwnerID: "owner:local-refs",
@@ -287,7 +288,7 @@ func TestLawAppendLocalRefsAreResolvedBeforeRetention(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	childVisible, err := store.ReadFact(lawReader, receipt.FactIDs[1])
+	childVisible, err := store.ReadFact(context.Background(), lawReader, receipt.FactIDs[1])
 	if err != nil {
 		t.Fatalf("ReadFact(child): %v", err)
 	}
@@ -318,7 +319,7 @@ func TestLawShapeOnlyHidesPayloadsAndPreservesContextAnchor(t *testing.T) {
 	receipt := lawAppendDrafts(t, store, "law:shape-only", "owner:shape-only",
 		draft("step", Capture, map[string]any{"secret": true}),
 	)
-	cut, err := store.PublishCut(lawAppend, FrontierSpec{
+	cut, err := store.PublishCut(context.Background(), lawAppend, FrontierSpec{
 		FrontierID:         "law:cut:shape-only",
 		TargetTraceOwnerID: "owner:shape-only",
 		ThroughFactID:      receipt.FactIDs[len(receipt.FactIDs)-1],
@@ -327,7 +328,7 @@ func TestLawShapeOnlyHidesPayloadsAndPreservesContextAnchor(t *testing.T) {
 		t.Fatalf("PublishCut: %v", err)
 	}
 
-	view, err := store.ResolveCut(lawShapeReader, cut.FrontierID, ModeBoth)
+	view, err := store.ResolveCut(context.Background(), lawShapeReader, cut.FrontierID, ModeBoth)
 	if err != nil {
 		t.Fatalf("ResolveCut(shape_only): %v", err)
 	}
@@ -358,7 +359,7 @@ func TestLawSliceExposesVisibleWitnessRecordsUnderPayloadVisibility(t *testing.T
 	store := newMemStore(t)
 	receipt := lawAppendDrafts(t, store, "law:visible-witnesses", "owner:visible-witnesses", draft("step", Capture, nil))
 
-	view, err := store.ReadOwnerPrefix(lawReader, "owner:visible-witnesses", 99, ModeBoth)
+	view, err := store.ReadOwnerPrefix(context.Background(), lawReader, "owner:visible-witnesses", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix: %v", err)
 	}
@@ -395,7 +396,7 @@ func TestLawSliceWitnessSupportIsClosedToRootUnderShapeVisibility(t *testing.T) 
 	store := newMemStore(t)
 	receipt := lawAppendDrafts(t, store, "law:witness-closure-shape", "owner:witness-closure-shape", draft("step", Capture, nil))
 
-	view, err := store.ReadOwnerPrefix(lawShapeReader, "owner:witness-closure-shape", 99, ModeBoth)
+	view, err := store.ReadOwnerPrefix(context.Background(), lawShapeReader, "owner:witness-closure-shape", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix(shape_only): %v", err)
 	}
@@ -427,7 +428,7 @@ func TestLawSliceWitnessSupportIsClosedToRootUnderShapeVisibility(t *testing.T) 
 func TestLawWitnessSupportRejectsWitnessCycles(t *testing.T) {
 	store := newMemStore(t)
 	receipt := lawAppendDrafts(t, store, "law:witness-cycle", "owner:witness-cycle", draft("step", Capture, nil))
-	recordVisible, err := store.ReadFact(lawReader, receipt.FactIDs[0])
+	recordVisible, err := store.ReadFact(context.Background(), lawReader, receipt.FactIDs[0])
 	if err != nil {
 		t.Fatalf("ReadFact: %v", err)
 	}
@@ -440,7 +441,7 @@ func TestLawWitnessSupportRejectsWitnessCycles(t *testing.T) {
 		t.Fatalf("induce witness cycle: %v", err)
 	}
 
-	_, err = store.ReadOwnerPrefix(lawReader, "owner:witness-cycle", 99, ModeBoth)
+	_, err = store.ReadOwnerPrefix(context.Background(), lawReader, "owner:witness-cycle", 99, ModeBoth)
 	wantErrorContaining(t, err, "cycle")
 }
 
@@ -452,7 +453,7 @@ func TestLawShapeOnlyWitnessAnchorPreservesWitnessRefShape(t *testing.T) {
 	store := newMemStore(t)
 	receipt := lawAppendDrafts(t, store, "law:witness-anchor-shape", "owner:witness-anchor-shape", draft("step", Capture, nil))
 
-	view, err := store.ReadOwnerPrefix(lawShapeReader, "owner:witness-anchor-shape", 99, ModeBoth)
+	view, err := store.ReadOwnerPrefix(context.Background(), lawShapeReader, "owner:witness-anchor-shape", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix(shape_only): %v", err)
 	}
@@ -492,7 +493,7 @@ func TestLawWitnessSupportIgnoresModeFilterAndDoesNotChangeSelectedGraph(t *test
 	declaration := lawAppendDrafts(t, store, "law:witness-mode:declaration", "owner:witness-mode",
 		draft("intent", Declaration, nil),
 	)
-	capture, err := store.Append(lawAppend, AppendBatch{
+	capture, err := store.Append(context.Background(), lawAppend, AppendBatch{
 		AppendIntentID: "law:witness-mode:capture",
 		Groups: []AppendGroup{{
 			TraceOwnerID:  "owner:witness-mode",
@@ -504,7 +505,7 @@ func TestLawWitnessSupportIgnoresModeFilterAndDoesNotChangeSelectedGraph(t *test
 		t.Fatalf("Append(capture): %v", err)
 	}
 
-	view, err := store.ReadOwnerPrefix(lawReader, "owner:witness-mode", 99, ModeCapturesOnly)
+	view, err := store.ReadOwnerPrefix(context.Background(), lawReader, "owner:witness-mode", 99, ModeCapturesOnly)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix(captures_only): %v", err)
 	}
@@ -557,7 +558,7 @@ func TestLawWitnessSupportIsDedupedByRecordID(t *testing.T) {
 		draft("second", Capture, nil),
 	)
 
-	view, err := store.ReadOwnerPrefix(lawReader, "owner:witness-dedupe", 99, ModeBoth)
+	view, err := store.ReadOwnerPrefix(context.Background(), lawReader, "owner:witness-dedupe", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix: %v", err)
 	}
@@ -597,7 +598,7 @@ func TestLawMissingWitnessSupportFailsLoudly(t *testing.T) {
 		t.Fatalf("point record at a missing witness: %v", err)
 	}
 
-	_, err := store.ReadOwnerPrefix(lawReader, "owner:missing-witness", 99, ModeBoth)
+	_, err := store.ReadOwnerPrefix(context.Background(), lawReader, "owner:missing-witness", 99, ModeBoth)
 	if err == nil {
 		t.Fatal("read with a dangling witness_ref succeeded, want a loud failure")
 	}
@@ -614,7 +615,7 @@ func TestLawExternalAnchorPreservesOutOfCutParent(t *testing.T) {
 	parent := lawAppendDrafts(t, store, "law:external-parent", "owner:parent",
 		draft("parent", Capture, nil, child.FactIDs[0]),
 	)
-	cut, err := store.PublishCut(lawAppend, FrontierSpec{
+	cut, err := store.PublishCut(context.Background(), lawAppend, FrontierSpec{
 		FrontierID:         "law:cut:external-parent",
 		TargetTraceOwnerID: "owner:parent",
 		ThroughFactID:      parent.FactIDs[len(parent.FactIDs)-1],
@@ -623,7 +624,7 @@ func TestLawExternalAnchorPreservesOutOfCutParent(t *testing.T) {
 		t.Fatalf("PublishCut: %v", err)
 	}
 
-	view, err := store.ResolveCut(lawReader, cut.FrontierID, ModeBoth)
+	view, err := store.ResolveCut(context.Background(), lawReader, cut.FrontierID, ModeBoth)
 	if err != nil {
 		t.Fatalf("ResolveCut: %v", err)
 	}
@@ -652,7 +653,7 @@ func TestLawCausalClosurePolicyControlsFilteredParentAnchors(t *testing.T) {
 	declaration := lawAppendDrafts(t, store, "law:closure-policy:declaration", "owner:closure-policy",
 		draft("intent", Declaration, nil),
 	)
-	capture, err := store.Append(lawAppend, AppendBatch{
+	capture, err := store.Append(context.Background(), lawAppend, AppendBatch{
 		AppendIntentID: "law:closure-policy:capture",
 		Groups: []AppendGroup{{
 			TraceOwnerID:  "owner:closure-policy",
@@ -664,7 +665,7 @@ func TestLawCausalClosurePolicyControlsFilteredParentAnchors(t *testing.T) {
 		t.Fatalf("Append(capture): %v", err)
 	}
 
-	anchored, err := store.ReadCausalClosure(lawReader, capture.FactIDs, ModeCapturesOnly, "include_external_anchors")
+	anchored, err := store.ReadCausalClosure(context.Background(), lawReader, capture.FactIDs, ModeCapturesOnly, "include_external_anchors")
 	if err != nil {
 		t.Fatalf("ReadCausalClosure(include_external_anchors): %v", err)
 	}
@@ -675,7 +676,7 @@ func TestLawCausalClosurePolicyControlsFilteredParentAnchors(t *testing.T) {
 		t.Errorf("anchored external anchors = %v, want the declaration parent", anchored.ExternalAnchors)
 	}
 
-	visibleOnly, err := store.ReadCausalClosure(lawReader, capture.FactIDs, ModeCapturesOnly, "visible_only")
+	visibleOnly, err := store.ReadCausalClosure(context.Background(), lawReader, capture.FactIDs, ModeCapturesOnly, "visible_only")
 	if err != nil {
 		t.Fatalf("ReadCausalClosure(visible_only): %v", err)
 	}
@@ -686,7 +687,7 @@ func TestLawCausalClosurePolicyControlsFilteredParentAnchors(t *testing.T) {
 		t.Errorf("visible_only produced %d external anchors, want 0", len(visibleOnly.ExternalAnchors))
 	}
 
-	_, err = store.ReadCausalClosure(lawReader, capture.FactIDs, ModeCapturesOnly, "exact_set")
+	_, err = store.ReadCausalClosure(context.Background(), lawReader, capture.FactIDs, ModeCapturesOnly, "exact_set")
 	wantErrorContaining(t, err, "closure policy")
 }
 
@@ -705,7 +706,7 @@ func TestLawCausalClosureModeFilterDoesNotPruneTraversal(t *testing.T) {
 		draft("root", Capture, nil, bridge.FactIDs[0]),
 	)
 
-	view, err := store.ReadCausalClosure(lawReader, root.FactIDs, ModeCapturesOnly, "visible_only")
+	view, err := store.ReadCausalClosure(context.Background(), lawReader, root.FactIDs, ModeCapturesOnly, "visible_only")
 	if err != nil {
 		t.Fatalf("ReadCausalClosure: %v", err)
 	}
@@ -741,10 +742,10 @@ func TestLawFullInternalReadsRequireTrustedAuthority(t *testing.T) {
 		VisibilityProfile:    VisibilityFullInternal,
 	}
 
-	_, err := store.ReadOwnerPrefix(untrusted, "owner:internal", 99, ModeBoth)
+	_, err := store.ReadOwnerPrefix(context.Background(), untrusted, "owner:internal", 99, ModeBoth)
 	wantErrorContaining(t, err, "full_internal")
 
-	view, err := store.ReadOwnerPrefix(trusted, "owner:internal", 99, ModeBoth)
+	view, err := store.ReadOwnerPrefix(context.Background(), trusted, "owner:internal", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix(trusted): %v", err)
 	}
@@ -765,7 +766,7 @@ func TestLawCutSliceModeLaws(t *testing.T) {
 	capture := lawAppendDrafts(t, store, "law:cut-mode:capture", "owner:cut-mode",
 		draft("result", Capture, nil),
 	)
-	cut, err := store.PublishCut(lawAppend, FrontierSpec{
+	cut, err := store.PublishCut(context.Background(), lawAppend, FrontierSpec{
 		FrontierID:         "law:cut:mode",
 		TargetTraceOwnerID: "owner:cut-mode",
 		ThroughFactID:      capture.FactIDs[len(capture.FactIDs)-1],
@@ -773,20 +774,20 @@ func TestLawCutSliceModeLaws(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublishCut: %v", err)
 	}
-	before, err := store.FactCount()
+	before, err := store.FactCount(context.Background())
 	if err != nil {
 		t.Fatalf("FactCount: %v", err)
 	}
 
-	both, err := store.ResolveCut(lawReader, cut.FrontierID, ModeBoth)
+	both, err := store.ResolveCut(context.Background(), lawReader, cut.FrontierID, ModeBoth)
 	if err != nil {
 		t.Fatalf("ResolveCut(both): %v", err)
 	}
-	declarations, err := store.ResolveCut(lawReader, cut.FrontierID, ModeDeclarationsOnly)
+	declarations, err := store.ResolveCut(context.Background(), lawReader, cut.FrontierID, ModeDeclarationsOnly)
 	if err != nil {
 		t.Fatalf("ResolveCut(declarations_only): %v", err)
 	}
-	captures, err := store.ResolveCut(lawReader, cut.FrontierID, ModeCapturesOnly)
+	captures, err := store.ResolveCut(context.Background(), lawReader, cut.FrontierID, ModeCapturesOnly)
 	if err != nil {
 		t.Fatalf("ResolveCut(captures_only): %v", err)
 	}
@@ -801,7 +802,7 @@ func TestLawCutSliceModeLaws(t *testing.T) {
 		t.Errorf("captures_only = %v, want %v", captures.FactIDs(), want)
 	}
 
-	after, err := store.FactCount()
+	after, err := store.FactCount(context.Background())
 	if err != nil {
 		t.Fatalf("FactCount after: %v", err)
 	}
@@ -822,7 +823,7 @@ func TestLawRestartPreservesRecordsCutsAndPaths(t *testing.T) {
 		t.Fatalf("first open: %v", err)
 	}
 	receipt := lawAppendDrafts(t, store1, "law:restart", "owner:restart", draft("step", Capture, nil))
-	cut, err := store1.PublishCut(lawAppend, FrontierSpec{
+	cut, err := store1.PublishCut(context.Background(), lawAppend, FrontierSpec{
 		FrontierID:         "law:cut:restart",
 		TargetTraceOwnerID: "owner:restart",
 		ThroughFactID:      receipt.FactIDs[len(receipt.FactIDs)-1],
@@ -831,7 +832,7 @@ func TestLawRestartPreservesRecordsCutsAndPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublishCut: %v", err)
 	}
-	if err := store1.Close(); err != nil {
+	if err := store1.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
@@ -839,16 +840,16 @@ func TestLawRestartPreservesRecordsCutsAndPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer restarted.Close()
+	defer restarted.Close(context.Background())
 
-	prefix, err := restarted.ReadOwnerPrefix(lawReader, "owner:restart", 99, ModeBoth)
+	prefix, err := restarted.ReadOwnerPrefix(context.Background(), lawReader, "owner:restart", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix after restart: %v", err)
 	}
 	if len(prefix.FactIDs()) != len(receipt.FactIDs) {
 		t.Errorf("owner path after restart = %v, want %v", prefix.FactIDs(), receipt.FactIDs)
 	}
-	resolved, err := restarted.ResolveCut(lawReader, cut.FrontierID, ModeBoth)
+	resolved, err := restarted.ResolveCut(context.Background(), lawReader, cut.FrontierID, ModeBoth)
 	if err != nil {
 		t.Fatalf("ResolveCut after restart: %v", err)
 	}

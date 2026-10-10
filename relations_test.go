@@ -4,6 +4,7 @@ package shepherd
 // relation_sequences group in testdata/execution_vectors_v0.json.
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -51,7 +52,7 @@ func TestRelationVectorSequenceReplay(t *testing.T) {
 	vec := doc.RelationSequence
 	store := newMemStore(t)
 
-	parentCreate, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
+	parentCreate, err := store.Append(context.Background(), TrustedAppendContext, CreateExecutionBatch(
 		vec.ParentCreateIntent, vec.ParentExecutionID, vec.ParentTaskRef, map[string]any{}, "", nil,
 	))
 	if err != nil {
@@ -60,26 +61,26 @@ func TestRelationVectorSequenceReplay(t *testing.T) {
 	if parentCreate.FactIDs[0] == "" {
 		t.Fatal("no parent facts")
 	}
-	childCreate, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
+	childCreate, err := store.Append(context.Background(), TrustedAppendContext, CreateExecutionBatch(
 		vec.ChildCreateIntent, vec.ChildExecutionID, vec.ChildTaskRef, vec.ChildInputs,
 		vec.ParentExecutionID, parentCreate.FactIDs[len(parentCreate.FactIDs)-1:],
 	))
 	if err != nil {
 		t.Fatalf("child create: %v", err)
 	}
-	childComplete, err := store.Append(TrustedAppendContext, CompleteExecutionBatch(
+	childComplete, err := store.Append(context.Background(), TrustedAppendContext, CompleteExecutionBatch(
 		vec.ChildCompleteIntent, vec.ChildExecutionID, vec.ChildOutputs,
 		childCreate.FactIDs[len(childCreate.FactIDs)-1:],
 	))
 	if err != nil {
 		t.Fatalf("child complete: %v", err)
 	}
-	if _, err := PublishExecutionFrontier(store, TrustedAppendContext,
+	if _, err := PublishExecutionFrontier(context.Background(), store, TrustedAppendContext,
 		vec.ChildFrontierID, vec.ChildExecutionID, childComplete.FactIDs[len(childComplete.FactIDs)-1], "", "", nil); err != nil {
 		t.Fatalf("child frontier: %v", err)
 	}
 
-	relation, err := store.Append(TrustedAppendContext, CreateExecutionRelationBatch(
+	relation, err := store.Append(context.Background(), TrustedAppendContext, CreateExecutionRelationBatch(
 		vec.RelationIntent, vec.RelationID, RelationSpawned,
 		vec.ParentExecutionID, vec.ChildExecutionID, vec.ChildFrontierID,
 		parentCreate.FactIDs[len(parentCreate.FactIDs)-1:],
@@ -93,7 +94,7 @@ func TestRelationVectorSequenceReplay(t *testing.T) {
 
 	// Relations are parent-owned: the fact must sit on the parent's owner
 	// path, which is what ProjectEffectiveHistory relies on.
-	slice, err := store.ReadOwnerPrefix(reader, vec.ParentExecutionID, 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), reader, vec.ParentExecutionID, 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix(parent): %v", err)
 	}

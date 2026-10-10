@@ -11,6 +11,7 @@ package shepherd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -190,7 +191,7 @@ func replayExecutionVector(t *testing.T, doc executionVectorDoc, vec executionVe
 	for _, step := range vec.Steps {
 		switch step.Kind {
 		case "create":
-			receipt, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
+			receipt, err := store.Append(context.Background(), TrustedAppendContext, CreateExecutionBatch(
 				step.AppendIntentID, vec.ExecutionID, vec.TaskRef, vec.Inputs, "", nil,
 			))
 			if err != nil {
@@ -198,7 +199,7 @@ func replayExecutionVector(t *testing.T, doc executionVectorDoc, vec executionVe
 			}
 			causalTail = receipt.FactIDs[len(receipt.FactIDs)-1]
 		case "publish":
-			receipt, err := store.Append(TrustedAppendContext, AppendBatch{
+			receipt, err := store.Append(context.Background(), TrustedAppendContext, AppendBatch{
 				AppendIntentID: step.AppendIntentID,
 				Groups: []AppendGroup{{
 					TraceOwnerID:  vec.ExecutionID,
@@ -216,7 +217,7 @@ func replayExecutionVector(t *testing.T, doc executionVectorDoc, vec executionVe
 			}
 			causalTail = receipt.FactIDs[len(receipt.FactIDs)-1]
 		case "complete":
-			receipt, err := store.Append(TrustedAppendContext, CompleteExecutionBatch(
+			receipt, err := store.Append(context.Background(), TrustedAppendContext, CompleteExecutionBatch(
 				step.AppendIntentID, vec.ExecutionID, step.Outputs, []string{causalTail},
 			))
 			if err != nil {
@@ -224,7 +225,7 @@ func replayExecutionVector(t *testing.T, doc executionVectorDoc, vec executionVe
 			}
 			terminalFactID = receipt.FactIDs[len(receipt.FactIDs)-1]
 		case "fail":
-			receipt, err := store.Append(TrustedAppendContext, FailExecutionBatch(
+			receipt, err := store.Append(context.Background(), TrustedAppendContext, FailExecutionBatch(
 				step.AppendIntentID, vec.ExecutionID, step.Error, []string{causalTail},
 			))
 			if err != nil {
@@ -232,7 +233,7 @@ func replayExecutionVector(t *testing.T, doc executionVectorDoc, vec executionVe
 			}
 			terminalFactID = receipt.FactIDs[len(receipt.FactIDs)-1]
 		case "frontier":
-			_, err := PublishExecutionFrontier(store, TrustedAppendContext,
+			_, err := PublishExecutionFrontier(context.Background(), store, TrustedAppendContext,
 				step.FrontierID, vec.ExecutionID, terminalFactID, "", "", nil)
 			if err != nil {
 				t.Fatalf("replay frontier: %v", err)
@@ -255,7 +256,7 @@ func TestExecutionVectorRunSequenceReplay(t *testing.T) {
 
 	store := replayExecutionVector(t, doc, vec)
 
-	slice, err := store.ReadOwnerPrefix(reader, vec.ExecutionID, 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), reader, vec.ExecutionID, 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix: %v", err)
 	}
@@ -279,7 +280,7 @@ func TestExecutionVectorRunSequenceReplay(t *testing.T) {
 		}
 	}
 
-	cutoff, err := store.ReadOwnerCutoff(vec.FrontierID)
+	cutoff, err := store.ReadOwnerCutoff(context.Background(), vec.FrontierID)
 	if err != nil {
 		t.Fatalf("ReadOwnerCutoff: %v", err)
 	}
@@ -294,7 +295,7 @@ func TestExecutionVectorRunSequenceReplay(t *testing.T) {
 	}
 
 	// The fold must agree with the vector's recorded terminal state.
-	exec, err := ProjectExecutionFromStore(store, reader, cutoff)
+	exec, err := ProjectExecutionFromStore(context.Background(), store, reader, cutoff)
 	if err != nil {
 		t.Fatalf("ProjectExecutionFromStore: %v", err)
 	}
@@ -323,7 +324,7 @@ func TestExecutionVectorFailSequenceReplay(t *testing.T) {
 
 	store := replayExecutionVector(t, doc, vec)
 
-	slice, err := store.ReadOwnerPrefix(reader, vec.ExecutionID, 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), reader, vec.ExecutionID, 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix: %v", err)
 	}
@@ -336,7 +337,7 @@ func TestExecutionVectorFailSequenceReplay(t *testing.T) {
 		}
 	}
 
-	cutoff, err := store.ReadOwnerCutoff(vec.FrontierID)
+	cutoff, err := store.ReadOwnerCutoff(context.Background(), vec.FrontierID)
 	if err != nil {
 		t.Fatalf("ReadOwnerCutoff: %v", err)
 	}
@@ -345,7 +346,7 @@ func TestExecutionVectorFailSequenceReplay(t *testing.T) {
 		t.Errorf("cutoff = %+v, want %+v", cutoff, want)
 	}
 
-	exec, err := ProjectExecutionFromStore(store, reader, cutoff)
+	exec, err := ProjectExecutionFromStore(context.Background(), store, reader, cutoff)
 	if err != nil {
 		t.Fatalf("ProjectExecutionFromStore: %v", err)
 	}
@@ -365,7 +366,7 @@ func TestExecutionVectorFailSequenceReplay(t *testing.T) {
 func TestTerminalFrontierLawRejectsNonTerminal(t *testing.T) {
 	store := newMemStore(t)
 	execID := ExecutionIDFor("law:terminal:create", "execution")
-	receipt, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
+	receipt, err := store.Append(context.Background(), TrustedAppendContext, CreateExecutionBatch(
 		"law:terminal:create", execID, "Task", nil, "", nil,
 	))
 	if err != nil {
@@ -373,7 +374,7 @@ func TestTerminalFrontierLawRejectsNonTerminal(t *testing.T) {
 	}
 	startedID := receipt.FactIDs[len(receipt.FactIDs)-1]
 
-	_, err = PublishExecutionFrontier(store, TrustedAppendContext,
+	_, err = PublishExecutionFrontier(context.Background(), store, TrustedAppendContext,
 		"frontier:law:terminal", execID, startedID, "", "", nil)
 	if err == nil {
 		t.Fatal("frontier through a started fact was published, want rejection")
@@ -390,14 +391,14 @@ func TestProjectExecutionFoldStates(t *testing.T) {
 	store := newMemStore(t)
 	execID := ExecutionIDFor("fold:run:create", "execution")
 
-	create, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
+	create, err := store.Append(context.Background(), TrustedAppendContext, CreateExecutionBatch(
 		"fold:run:create", execID, "FoldTask", map[string]any{"x": json.Number("1")}, "", nil,
 	))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	pending, err := store.ReadOwnerPrefix(reader, execID, 99, ModeBoth)
+	pending, err := store.ReadOwnerPrefix(context.Background(), reader, execID, 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read pending: %v", err)
 	}
@@ -418,14 +419,14 @@ func TestProjectExecutionFoldStates(t *testing.T) {
 		t.Errorf("started fact = %s, want %s", exec.StartedFactID, create.FactIDs[1])
 	}
 
-	complete, err := store.Append(TrustedAppendContext, CompleteExecutionBatch(
+	complete, err := store.Append(context.Background(), TrustedAppendContext, CompleteExecutionBatch(
 		"fold:run:complete", execID, map[string]any{"done": true},
 		[]string{create.FactIDs[len(create.FactIDs)-1]},
 	))
 	if err != nil {
 		t.Fatalf("complete: %v", err)
 	}
-	running, err := store.ReadOwnerPrefix(reader, execID, 99, ModeBoth)
+	running, err := store.ReadOwnerPrefix(context.Background(), reader, execID, 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read terminal: %v", err)
 	}
@@ -456,14 +457,14 @@ func TestProjectExecutionFoldStates(t *testing.T) {
 func TestProjectExecutionRequiresBothModes(t *testing.T) {
 	store := newMemStore(t)
 	execID := ExecutionIDFor("mode:run:create", "execution")
-	_, err := store.Append(TrustedAppendContext, CreateExecutionBatch(
+	_, err := store.Append(context.Background(), TrustedAppendContext, CreateExecutionBatch(
 		"mode:run:create", execID, "Task", nil, "", nil,
 	))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	slice, err := store.ReadOwnerPrefix(reader, execID, 99, ModeCapturesOnly)
+	slice, err := store.ReadOwnerPrefix(context.Background(), reader, execID, 99, ModeCapturesOnly)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}

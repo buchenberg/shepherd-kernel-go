@@ -237,7 +237,7 @@ func recordMergeProposed(ctx context.Context, child *Scope, proposal *MergePropo
 		causedBy = []string{forkPoint}
 	}
 
-	receipt, err := child.store.Append(TrustedAppendContext, AppendBatch{
+	receipt, err := child.store.Append(ctx, TrustedAppendContext, AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:merge-proposed:%d", ownerID, nextCheckpointSeq.Add(1)),
 		Groups: []AppendGroup{{
 			TraceOwnerID:  ownerID,
@@ -293,7 +293,7 @@ func recordSupervisorDecision(
 		causalParents = []string{causedBy}
 	}
 
-	_, err := parent.store.Append(TrustedAppendContext, AppendBatch{
+	_, err := parent.store.Append(ctx, TrustedAppendContext, AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:merge-decision:%d", ownerID, nextCheckpointSeq.Add(1)),
 		Groups: []AppendGroup{{
 			TraceOwnerID:  ownerID,

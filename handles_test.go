@@ -23,14 +23,14 @@ func TestStartTaskSyncMatchesPythonVector(t *testing.T) {
 
 	reg := NewRegistry()
 	reg.Register(vec.TaskRef, func(control *TaskControl) (map[string]any, error) {
-		if _, err := control.Publish("note", map[string]any{"msg": "hello <>&", "n": json.Number("1.5")}); err != nil {
+		if _, err := control.Publish(context.Background(), "note", map[string]any{"msg": "hello <>&", "n": json.Number("1.5")}); err != nil {
 			return nil, err
 		}
 		return map[string]any{"answer": json.Number("42"), "label": "ok"}, nil
 	})
 
 	store := newMemStore(t)
-	run, err := StartTaskSync(store, reg, vec.TaskRef, vec.RunID, vec.Inputs)
+	run, err := StartTaskSync(context.Background(), store, reg, vec.TaskRef, vec.RunID, vec.Inputs)
 	if err != nil {
 		t.Fatalf("StartTaskSync: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestStartTaskSyncMatchesPythonVector(t *testing.T) {
 		t.Errorf("execution id = %s, want %s", run.ExecutionID(), vec.ExecutionID)
 	}
 
-	slice, err := store.ReadOwnerPrefix(reader, vec.ExecutionID, 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), reader, vec.ExecutionID, 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("ReadOwnerPrefix: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestStartTaskSyncFailedRun(t *testing.T) {
 	})
 	store := newMemStore(t)
 
-	run, err := StartTaskSync(store, reg, "BadTask", "fail:run", nil)
+	run, err := StartTaskSync(context.Background(), store, reg, "BadTask", "fail:run", nil)
 	if err != nil {
 		t.Fatalf("StartTaskSync: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestStartTaskSyncPanicRecovered(t *testing.T) {
 	})
 	store := newMemStore(t)
 
-	run, err := StartTaskSync(store, reg, "PanickingTask", "panic:run", nil)
+	run, err := StartTaskSync(context.Background(), store, reg, "PanickingTask", "panic:run", nil)
 	if err != nil {
 		t.Fatalf("StartTaskSync: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestReadExecutionUnknown(t *testing.T) {
 		return nil, nil
 	})
 	store := newMemStore(t)
-	run, err := StartTaskSync(store, reg, "IdleTask", "idle:run", nil)
+	run, err := StartTaskSync(context.Background(), store, reg, "IdleTask", "idle:run", nil)
 	if err != nil {
 		t.Fatalf("StartTaskSync: %v", err)
 	}
@@ -175,10 +175,10 @@ func TestReadExecutionUnknown(t *testing.T) {
 		captured = control
 		return nil, nil
 	})
-	if _, err := StartTaskSync(store, reg, "CapturingTask", "capture:run", nil); err != nil {
+	if _, err := StartTaskSync(context.Background(), store, reg, "CapturingTask", "capture:run", nil); err != nil {
 		t.Fatalf("capturing run: %v", err)
 	}
-	if _, err := captured.ReadExecution("exec:unknown"); err == nil {
+	if _, err := captured.ReadExecution(context.Background(), "exec:unknown"); err == nil {
 		t.Fatal("ReadExecution accepted an unknown execution")
 	}
 }

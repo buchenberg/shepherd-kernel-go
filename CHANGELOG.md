@@ -4,6 +4,59 @@ Notable changes to `shepherd-kernel-go`. This project follows
 [Semantic Versioning](https://semver.org/); while pre-1.0, minor releases may
 contain breaking changes, which are called out below.
 
+## [Unreleased]
+
+Durability & idioms (plan 05 §4/§6–8, Phase 4). **Breaking**: every store API
+now takes `context.Context` as its first parameter, with the trace-authority
+context second. The registry survives restarts.
+
+### Changed (breaking)
+- **`context.Context` is the first parameter on every store API** —
+  `Append`, `PreviewRecordIDs`, `ReadFact`, `ReadOwnerPrefix`,
+  `ReadPathPrefix`, `ReadCausalClosure`, `PublishFrontier`, `PublishCut`,
+  `ResolveFrontier`, `ResolveCut`, `ReadOwnerCutoff`, `FactCount`,
+  `ContextCount`, `Close` — with the trace-authority context
+  (`AppendContext`/`ReadContext`) second: the auth context is ABI-facing
+  authority, the Go ctx is execution plumbing. Cancellation and deadlines
+  now reach the SQL layer (`BeginTx`, `QueryContext`, `ExecContext`). The
+  runtime facade follows: `PublishExecutionFrontier`,
+  `ProjectExecutionFromStore`, the relations/effective-history projectors,
+  `StartTaskSync`, and the `TaskControl` methods take ctx first.
+  `PruneCheckpoints` gains a ctx.
+- Scope lifecycle records (fork/merge/discard/halt) run on
+  `context.Background()`: a lifecycle event must not be abandoned because a
+  caller's deadline expired mid-record.
+
+### Added
+- **`RecoverScopes(store, RecoverOptions)`**: rebuild the scope tree,
+  terminal states, fork baselines, checkpoint registry, and retained-output
+  registry from the durable trace after a restart. Sandboxes are re-adopted
+  through `RecoverOptions.Resolver` — the host decides what to re-adopt vs
+  orphan-clean; shared children inherit the parent's sandbox; isolated
+  children (now recorded as `isolated` in the fork payload) get their own.
+  A root that never forked is introduced by its checkpoint/output records,
+  recovering as a bare active root.
+- **Checkpoint durability**: a `checkpoint_snapshots` blob table in the
+  trace database stores the full `WorkspaceState` plus the opaque caller
+  snapshot, bounded by a per-store blob limit (`WithCheckpointBlobLimit`,
+  default 1 MiB — an oversized snapshot fails the checkpoint). Restore
+  consumes the blob. A recovered checkpoint whose recorded revision no
+  longer matches the re-adopted workspace is `CheckpointInvalid` — never
+  silently restorable. (Revision, not digest: git mints a fresh stash
+  commit per capture, so a digest rule would invalidate every dirty-tree
+  checkpoint.)
+- **Retained-output recovery**: sealed payloads carry the full sealed and
+  baseline states and the change list, so recovered outputs settle end to
+  end; settled records keep consume-once alive across restarts.
+- **`PruneTerminal()`**: unregister merged/discarded scopes in long-lived
+  hosts; terminal states stay lookupable until pruned. `PruneCheckpoints`
+  also deletes persisted blobs.
+- **Fork payload additions** (open-map keys, backwards-compatible for
+  readers): `isolated`, `sandbox_backend`, and the full `baseline` state.
+- **CI release-verify job**: on tags, a clean-consumer `go get` of the tag
+  and a no-`replace` check on both modules (the guard that would have
+  caught the unbuildable `sandbox/containerd/v0.1.0`).
+
 ## [v0.8.0] - 2026-10-10
 
 Supervision & settlement (plan 04, Phase 3): nothing from a child scope

@@ -72,7 +72,7 @@ func TestScope_ForkRecordsInTrace(t *testing.T) {
 	}
 
 	// Read the parent's trace — should have a scope:forked declaration
-	slice, err := store.ReadOwnerPrefix(TrustedReadContext, "sub:trace-parent", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), TrustedReadContext, "sub:trace-parent", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read trace: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestScope_ForkRecordsInTrace(t *testing.T) {
 	if fp == "" {
 		t.Fatal("child fork point should not be empty")
 	}
-	_, err = store.ReadFact(TrustedReadContext, fp)
+	_, err = store.ReadFact(context.Background(), TrustedReadContext, fp)
 	if err != nil {
 		t.Errorf("fork point record should be readable: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestScope_Merge(t *testing.T) {
 	}
 
 	// Parent trace should have scope:merged capture
-	slice, err := store.ReadOwnerPrefix(TrustedReadContext, "sub:merge-parent", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), TrustedReadContext, "sub:merge-parent", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read trace: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestScope_Discard(t *testing.T) {
 	}
 
 	// Parent trace should have scope:discarded capture
-	slice, err := store.ReadOwnerPrefix(TrustedReadContext, "sub:discard-parent", 99, ModeBoth)
+	slice, err := store.ReadOwnerPrefix(context.Background(), TrustedReadContext, "sub:discard-parent", 99, ModeBoth)
 	if err != nil {
 		t.Fatalf("read trace: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestScope_ForkThenDiscard_LeavesParentUnchanged(t *testing.T) {
 	child, _ := parent.Fork("sub:child", nil)
 
 	// Record something in the child's trace
-	_, err := store.Append(TrustedAppendContext, AppendBatch{
+	_, err := store.Append(context.Background(), TrustedAppendContext, AppendBatch{
 		AppendIntentID: "child:work:1",
 		Groups: []AppendGroup{{
 			TraceOwnerID: "sub:child",
@@ -211,7 +211,7 @@ func TestScope_ForkThenDiscard_LeavesParentUnchanged(t *testing.T) {
 	parent.Discard(child)
 
 	// Parent trace should NOT have the child's tool call
-	parentSlice, err := store.ReadOwnerPrefix(TrustedReadContext, "sub:parent", 99, ModeDeclarationsOnly)
+	parentSlice, err := store.ReadOwnerPrefix(context.Background(), TrustedReadContext, "sub:parent", 99, ModeDeclarationsOnly)
 	if err != nil {
 		t.Fatalf("read parent trace: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestScope_ForkThenDiscard_LeavesParentUnchanged(t *testing.T) {
 	}
 
 	// But the child's records should still be in the store (append-only)
-	childSlice, err := store.ReadOwnerPrefix(TrustedReadContext, "sub:child", 99, ModeDeclarationsOnly)
+	childSlice, err := store.ReadOwnerPrefix(context.Background(), TrustedReadContext, "sub:child", 99, ModeDeclarationsOnly)
 	if err != nil {
 		t.Fatalf("read child trace: %v", err)
 	}
