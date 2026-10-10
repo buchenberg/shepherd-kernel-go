@@ -347,7 +347,10 @@ outlives any sandbox, `Destroy` removes only the sandbox's private active
 layer, and an optional `StateReleaser` interface
 (`ReleaseState`) is the deliberate reclaim path — disk comes back when the
 caller says so, not when a sandbox happens to die. Promoting the release call
-into core's `Sandbox` interface is a separate kernel-API decision.
+into core's `Sandbox` interface is a separate kernel-API decision. The
+cold-namespace live suite that found both defects — including the
+destroy-keeps-states acceptance sequence — is **9/9 green** on this code
+(2026-10-10, released as `sandbox/containerd/v0.1.4`).
 
 ### Workspace State
 
