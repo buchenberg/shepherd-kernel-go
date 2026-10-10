@@ -605,7 +605,8 @@ v0.9.0 tagged; yaah pinned and compiling against ctx APIs.
       (b) split the flat `shepherd` package (kernel / runtime / backends
       share one namespace today). Both are hard to fix after an API
       freeze; both are cosmetic-but-real now. The `SandboxFactory`/
-      `OpenSandbox` registry (the construction seam) landed in v0.10.0 so
+      `OpenSandbox` registry (the construction seam) landed in v0.10.0
+      (PR #31 at `0c7c416`, verified from a clean module) so
       backend *selection* is already decoupled from backend *location*.
 
 ## 14. Execution conventions
