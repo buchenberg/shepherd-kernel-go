@@ -174,7 +174,7 @@ effective-history tree were recorded through the real Python handles (the fail s
 Plan 02 §7 is closed. The Phase 2a review (PR #20, `1a66496`) landed typed
 not-found errors, honest error wrapping, a real `ChildHandle.Snapshot`, and the
 `history_sequence` vectors that made the effective-history fold vector-pinned.
-Phases 3 and 4 remain ⬜.
+Phase 4 remains ⬜.
 
 **Phase 2b is complete** (2026-10-09; merged as PR #22 at `df43d33`, released
 as `v0.7.0`; the nested repin that activates T2b.7's live test merged as PR
@@ -188,7 +188,15 @@ Echo/KV substrates and reproduce ID-for-ID through the Go dispatch.
 was inverted exactly as its comment predicted — and the PR review's five
 findings were addressed in-tree (plan 03 §8), including the honest-outcome
 rule that world-touched failures report `split_state`, never `clean_failure`.
-Phases 3 and 4 remain ⬜.
+Phase 4 remains ⬜.
+
+**Phase 3 is complete** (2026-10-10; merged as PR #27 at `3c4bda1`, released
+as `v0.8.0` — the fix commit that addressed the review's five findings is
+`480fa13`). The check-at-commit merge gate (`ProposeMerge`/`CommitMerge` with
+fork baselines and reviewers) and consume-once settlement (`Seal` +
+select/apply/release/discard over the optional `DeltaApplier` capability)
+are in, measured by the three reference recipes as tests, green on the
+Windows git-worktree carrier in CI.
 
 **Phase 2b's harness exists, has been exercised, and its blocker is cleared**
 (`sandbox/containerd/live_test.go`, committed in `603fdcf`, env-gated exactly as
@@ -487,9 +495,10 @@ tests. Detailed spec: `plans/04-supervision-settlement.md`.
 not hard-required — settlement addresses scopes/outputs, not executions.
 **Deliverable**: v0.8.0.
 
-**Status (2026-10-10): complete — T3.1–T3.8 ✅, on branch
-`parity/p3-supervision-settlement` awaiting review/merge; v0.8.0 is the
-post-merge tag (the PR #19/#24 pattern: ticked there once it resolves).**
+**Status (2026-10-10): complete — T3.1–T3.8 ✅. Merged as PR #27 at
+`3c4bda1`; `v0.8.0` is tagged there and verified end-to-end from a clean
+module (`go get …@v0.8.0` resolves). The Kilo review's five findings
+(3 WARNING, 2 SUGGESTION) were addressed in `480fa13` before the merge.**
 
 | ID | Task | Status | Evidence |
 |---|---|---|---|
