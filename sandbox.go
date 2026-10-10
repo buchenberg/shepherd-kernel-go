@@ -3,7 +3,11 @@ package shepherd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
+	"sort"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -190,4 +194,113 @@ type DeltaApplier interface {
 	// workspace. A delta with no changes (a clean capture) is a no-op.
 	// A conflicting delta returns an error and consumes nothing.
 	ApplyDelta(ctx context.Context, delta WorkspaceState) error
+}
+
+// --- Sandbox backend registry ---
+
+// ErrUnknownSandboxBackend is the sentinel behind UnknownSandboxBackendError,
+// so callers can errors.Is(err, ErrUnknownSandboxBackend) without matching
+// strings.
+var ErrUnknownSandboxBackend = errors.New("shepherd: unknown sandbox backend")
+
+// UnknownSandboxBackendError names the backend that was asked for and the
+// backends that are actually registered, so a config typo fails with the
+// valid options instead of a bare "not found".
+type UnknownSandboxBackendError struct {
+	Backend   string
+	Available []string
+}
+
+func (e *UnknownSandboxBackendError) Error() string {
+	return fmt.Sprintf("shepherd: unknown sandbox backend %q (available: %s)",
+		e.Backend, strings.Join(e.Available, ", "))
+}
+
+func (e *UnknownSandboxBackendError) Is(target error) bool { return target == ErrUnknownSandboxBackend }
+
+// SandboxFactory builds a Sandbox from backend-defined configuration for
+// config-driven backend selection: a host resolves a configured backend name
+// through OpenSandbox instead of importing each backend's constructor.
+//
+// cfg is opaque to the kernel — each backend documents the concrete type it
+// accepts (the built-in git backend takes GitSandboxConfig) and rejects
+// anything else loudly, so a configuration mismatch is a startup error, not
+// a silent default.
+//
+// The returned Sandbox is NOT provisioned: Create remains a separate,
+// explicit lifecycle step, exactly as it is for direct constructor use.
+type SandboxFactory func(cfg any) (Sandbox, error)
+
+// sandboxRegistry is the instance behind the package-level functions, so the
+// registration logic is testable without mutating the global. Registration
+// is expected from init() or host wiring — a duplicate, an empty name, or a
+// nil factory is a programming error and panics (the database/sql driver
+// convention), unlike substrate registration whose runtime inputs get
+// errors.
+type sandboxRegistry struct {
+	mu        sync.Mutex
+	factories map[string]SandboxFactory
+}
+
+func (r *sandboxRegistry) register(backend string, f SandboxFactory) {
+	if backend == "" {
+		panic("shepherd: RegisterSandbox called with an empty backend name")
+	}
+	if f == nil {
+		panic(fmt.Sprintf("shepherd: RegisterSandbox called with a nil factory for %q", backend))
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, dup := r.factories[backend]; dup {
+		panic(fmt.Sprintf("shepherd: sandbox backend %q is already registered", backend))
+	}
+	r.factories[backend] = f
+}
+
+func (r *sandboxRegistry) open(backend string, cfg any) (Sandbox, error) {
+	r.mu.Lock()
+	f, ok := r.factories[backend]
+	r.mu.Unlock()
+	if !ok {
+		return nil, &UnknownSandboxBackendError{Backend: backend, Available: r.backends()}
+	}
+	return f(cfg)
+}
+
+func (r *sandboxRegistry) backends() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	names := make([]string, 0, len(r.factories))
+	for name := range r.factories {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// defaultSandboxRegistry is the package-level registry. The built-in git
+// backend self-registers from sandbox_git.go; the containerd adapter
+// registers when the host imports it — a host that never imports a backend
+// cannot select it, which keeps the dependency tree honest: config can name
+// a backend, only imports can provide one.
+var defaultSandboxRegistry = &sandboxRegistry{factories: map[string]SandboxFactory{}}
+
+// RegisterSandbox registers a backend for OpenSandbox. Intended for
+// init()-time self-registration (the built-in git backend) and host wiring
+// (importing a backend module and registering it under its Backend() name).
+func RegisterSandbox(backend string, f SandboxFactory) {
+	defaultSandboxRegistry.register(backend, f)
+}
+
+// OpenSandbox constructs the named backend's Sandbox from the backend's own
+// configuration type. The sandbox is not provisioned — call Create as the
+// lifecycle contract requires.
+func OpenSandbox(backend string, cfg any) (Sandbox, error) {
+	return defaultSandboxRegistry.open(backend, cfg)
+}
+
+// SandboxBackends lists the registered backend names, sorted, for config
+// diagnostics and doctor output.
+func SandboxBackends() []string {
+	return defaultSandboxRegistry.backends()
 }

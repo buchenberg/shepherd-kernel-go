@@ -494,3 +494,33 @@ func (g *GitSandbox) ReadFile(context.Context, string) ([]byte, error) {
 func (g *GitSandbox) WriteFile(context.Context, string, []byte, fs.FileMode) error {
 	return ErrUnsupported
 }
+
+// --- OpenSandbox registration ---
+
+// GitSandboxConfig is the git backend's OpenSandbox configuration. RepoPath
+// is required; an empty WorktreePath opens the in-place materializer over
+// the repository, a non-empty one opens a detached-worktree sandbox that
+// Create provisions at that path.
+type GitSandboxConfig struct {
+	RepoPath     string
+	WorktreePath string
+}
+
+func init() {
+	RegisterSandbox("git", func(cfg any) (Sandbox, error) {
+		c, ok := cfg.(GitSandboxConfig)
+		if !ok {
+			if cfg == nil {
+				return nil, fmt.Errorf("git sandbox: OpenSandbox requires a GitSandboxConfig; nil is not one — a backend cannot be chosen by omission")
+			}
+			return nil, fmt.Errorf("git sandbox: OpenSandbox configuration is GitSandboxConfig, got %T", cfg)
+		}
+		if c.RepoPath == "" {
+			return nil, fmt.Errorf("git sandbox: GitSandboxConfig.RepoPath is required")
+		}
+		if c.WorktreePath != "" {
+			return NewWorktreeSandbox(c.RepoPath, c.WorktreePath), nil
+		}
+		return NewLocalGitSandbox(c.RepoPath), nil
+	})
+}
