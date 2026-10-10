@@ -54,6 +54,12 @@ func TestRecover_RestartRoundTrip(t *testing.T) {
 		t.Fatalf("child writes: %v", err)
 	}
 
+	// A shared-sandbox child too: recovery must let it inherit the
+	// parent's re-adopted sandbox rather than leave it sandboxless.
+	if _, err := mgr.Fork(parent.ID(), "rec:shared", nil); err != nil {
+		t.Fatalf("fork shared: %v", err)
+	}
+
 	cp, err := mgr.CreateCheckpoint(ctx, parent.ID(), []byte("conversation"))
 	if err != nil {
 		t.Fatalf("checkpoint: %v", err)
@@ -114,6 +120,16 @@ func TestRecover_RestartRoundTrip(t *testing.T) {
 	}
 	if rp.Sandbox() == nil {
 		t.Error("recovered root should have its re-adopted sandbox")
+	}
+	rshared, ok := recovered.Get("scope:rec:shared")
+	if !ok {
+		t.Fatal("shared child not recovered")
+	}
+	if rshared.Sandbox() == nil {
+		t.Error("recovered shared child must inherit the parent's re-adopted sandbox")
+	}
+	if rshared.ownsSandbox {
+		t.Error("a shared child never owns its inherited sandbox")
 	}
 
 	// The recovered child can still propose merges against the recovered

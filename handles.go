@@ -472,8 +472,12 @@ func StartTask(ctx context.Context, store *SQLiteTraceStore, reg *Registry, task
 		frontierID:  "frontier:" + runID + ":terminal",
 		done:        done,
 	}
+	// The detached task must not die with the caller's request: StartTask
+	// returns immediately, and a canceled caller would abort a run whose
+	// Run.Wait is still pending. WithoutCancel keeps the values (none
+	// today) and drops the deadline.
 	go func() {
-		done <- runTaskSyncError(ctx, store, reg, taskRef, runID, inputs, "", nil, "", nil)
+		done <- runTaskSyncError(context.WithoutCancel(ctx), store, reg, taskRef, runID, inputs, "", nil, "", nil)
 	}()
 	return run, nil
 }

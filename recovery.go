@@ -156,21 +156,16 @@ func RecoverScopes(store *SQLiteTraceStore, opts RecoverOptions) (*ScopeManager,
 	}
 	mgr.mu.RUnlock()
 
+	// Pass 1 resolves roots; pass 2 resolves isolated children and lets
+	// shared children inherit — inheritance must see the parent's
+	// re-adopted sandbox, so the order between the passes is not optional.
 	roots := 0
 	for _, scope := range all {
-		scope.mu.Lock()
-		isChild := scope.parent != nil
-		scope.mu.Unlock()
-		if isChild {
-			if edge := edgeFor(edges, scope.ownerID); edge != nil && edge.isolated {
-				sb, err := opts.resolve(scope.id, edge.backend)
-				if err != nil {
-					return nil, fmt.Errorf("recover scope %s: re-adopt sandbox: %w", scope.id, err)
-				}
-				if sb != nil {
-					scope.WithSandbox(sb, true)
-				}
-			}
+		if isChild := func() bool {
+			scope.mu.Lock()
+			defer scope.mu.Unlock()
+			return scope.parent != nil
+		}(); isChild {
 			continue
 		}
 		sb, err := opts.resolve(scope.id, "")
@@ -181,6 +176,33 @@ func RecoverScopes(store *SQLiteTraceStore, opts RecoverOptions) (*ScopeManager,
 			scope.WithSandbox(sb, false)
 		}
 		roots++
+	}
+	for _, scope := range all {
+		if isChild := func() bool {
+			scope.mu.Lock()
+			defer scope.mu.Unlock()
+			return scope.parent != nil
+		}(); !isChild {
+			continue
+		}
+		if edge := edgeFor(edges, scope.ownerID); edge != nil && edge.isolated {
+			sb, err := opts.resolve(scope.id, edge.backend)
+			if err != nil {
+				return nil, fmt.Errorf("recover scope %s: re-adopt sandbox: %w", scope.id, err)
+			}
+			if sb != nil {
+				scope.WithSandbox(sb, true)
+			}
+			continue
+		}
+		// A shared child inherits its parent's re-adopted sandbox, exactly
+		// as it inherited the parent's at fork time; there is nothing to
+		// resolve for it.
+		if parent := scope.Parent(); parent != nil {
+			scope.mu.Lock()
+			scope.sandbox = parent.Sandbox()
+			scope.mu.Unlock()
+		}
 	}
 
 	// Staleness runs after re-adoption: it needs the sandboxes.

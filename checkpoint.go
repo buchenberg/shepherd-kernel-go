@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -166,7 +167,11 @@ func (s *SQLiteTraceStore) loadCheckpointBlobs(gctx context.Context) ([]recovere
 			Revision string         `json:"revision"`
 			Data     map[string]any `json:"data"`
 		}
-		if err := json.Unmarshal([]byte(stateJSON), &state); err != nil {
+		// UseNumber keeps the int/float distinction the canonical layer
+		// depends on -- plain Unmarshal flattens numbers to float64.
+		dec := json.NewDecoder(strings.NewReader(stateJSON))
+		dec.UseNumber()
+		if err := dec.Decode(&state); err != nil {
 			corrupt = append(corrupt, b.CheckpointID)
 			continue
 		}

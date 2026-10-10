@@ -163,7 +163,7 @@ func (s *SQLiteTraceStore) Append(ctx context.Context, auth AppendContext, batch
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return AppendReceipt{}, fmt.Errorf("begin transaction: %w", err)
 	}
@@ -347,7 +347,7 @@ func (s *SQLiteTraceStore) PublishFrontier(ctx context.Context, auth AppendConte
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Frontier{}, fmt.Errorf("begin transaction: %w", err)
 	}
