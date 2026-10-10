@@ -3,8 +3,10 @@ package containerd
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"io/fs"
 	"strings"
+	"sync"
 	"testing"
 
 	shepherd "github.com/buchenberg/shepherd-kernel-go"
@@ -825,4 +827,387 @@ func TestRequireBackend_WithoutDaemon(t *testing.T) {
 	if !strings.Contains(err.Error(), "containerd") {
 		t.Errorf("error = %v, want it to name containerd", err)
 	}
+}
+
+// TestApply_RecordsDeltaBaseAndCaptureCarriesDelta pins the delta plumbing: an
+// Apply of a state that carries a git HEAD records it as the sandbox's delta
+// base, and every Capture from then on stores the base plus the patch against
+// it, so the state can settle through ApplyDelta onto a moved workspace.
+func TestApply_RecordsDeltaBaseAndCaptureCarriesDelta(t *testing.T) {
+	sb, _, _, _ := newTestSandbox(t, "abc")
+	ctx := context.Background()
+	if err := sb.Create(ctx, shepherd.SandboxSpec{}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	baseline, err := sb.Capture(ctx)
+	if err != nil {
+		t.Fatalf("baseline Capture: %v", err)
+	}
+	baseline.Data[StateKeyGitHead] = "basehead"
+
+	if err := sb.Apply(ctx, baseline); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	state, err := sb.Capture(ctx)
+	if err != nil {
+		t.Fatalf("Capture after Apply: %v", err)
+	}
+	if got := state.Data[StateKeyDeltaBase]; got != "basehead" {
+		t.Errorf("delta_base = %v, want the applied state's git HEAD", got)
+	}
+	patchB64, _ := state.Data[StateKeyDeltaPatch].(string)
+	if patchB64 == "" {
+		t.Fatal("delta_patch should be present when the range has changes")
+	}
+	patch, err := base64.StdEncoding.DecodeString(patchB64)
+	if err != nil {
+		t.Fatalf("delta_patch is not valid base64: %v", err)
+	}
+	if !strings.Contains(string(patch), "diff --git") {
+		t.Errorf("delta_patch = %q, want a git patch", string(patch))
+	}
+}
+
+// TestCapture_CleanDeltaOmitsPatch pins the clean-capture encoding: the base
+// rides in the state, the patch does not, and ApplyDelta reads that as a no-op.
+func TestCapture_CleanDeltaOmitsPatch(t *testing.T) {
+	sb, _, tasks, _ := newTestSandbox(t, "abc")
+	tasks.deltaPatchStdout = "\n"
+	ctx := context.Background()
+	if err := sb.Create(ctx, shepherd.SandboxSpec{}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	baseline, err := sb.Capture(ctx)
+	if err != nil {
+		t.Fatalf("baseline Capture: %v", err)
+	}
+	baseline.Data[StateKeyGitHead] = "basehead"
+	if err := sb.Apply(ctx, baseline); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	state, err := sb.Capture(ctx)
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+	if got := state.Data[StateKeyDeltaBase]; got != "basehead" {
+		t.Errorf("delta_base = %v, want basehead", got)
+	}
+	if _, ok := state.Data[StateKeyDeltaPatch]; ok {
+		t.Error("delta_patch should be absent for a clean capture")
+	}
+}
+
+// TestCapture_WithoutBaseCarriesNoDelta pins that a sandbox which never applied
+// a git state produces states with no delta payload, and that this is not an
+// error: those states settle Select-only.
+func TestCapture_WithoutBaseCarriesNoDelta(t *testing.T) {
+	sb, _, _, _ := newTestSandbox(t, "deadbeef")
+	ctx := context.Background()
+	if err := sb.Create(ctx, shepherd.SandboxSpec{}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	state, err := sb.Capture(ctx)
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+	if _, ok := state.Data[StateKeyDeltaBase]; ok {
+		t.Error("delta_base should be absent without an applied git baseline")
+	}
+	if _, ok := state.Data[StateKeyDeltaPatch]; ok {
+		t.Error("delta_patch should be absent without an applied git baseline")
+	}
+}
+
+// TestApplyDelta_RejectsForeignBackend mirrors Apply's backend check: a git
+// state can never be merged here.
+func TestApplyDelta_RejectsForeignBackend(t *testing.T) {
+	sb, _, _, _ := newTestSandbox(t, "")
+	err := sb.ApplyDelta(context.Background(), shepherd.WorkspaceState{Backend: "git"})
+	if err == nil {
+		t.Fatal("ApplyDelta must reject a git workspace state")
+	}
+	if !strings.Contains(err.Error(), "git") {
+		t.Errorf("error should name the offending backend: %v", err)
+	}
+}
+
+// TestApplyDelta_UnbasedDeltaIsUnsupported pins the refusal for a delta that
+// carries no base: ErrUnsupported, not a silent no-op, so a caller that needs
+// the merge verb can fail loudly at selection time.
+func TestApplyDelta_UnbasedDeltaIsUnsupported(t *testing.T) {
+	sb, _, _, _ := newTestSandbox(t, "")
+	err := sb.ApplyDelta(context.Background(), shepherd.WorkspaceState{
+		Backend: BackendName,
+		Data:    map[string]any{StateKeySnapshotKey: "k"},
+	})
+	if !errors.Is(err, shepherd.ErrUnsupported) {
+		t.Fatalf("ApplyDelta without a base = %v, want ErrUnsupported", err)
+	}
+}
+
+// TestApplyDelta_CleanCaptureIsNoOp pins the no-op path: a base with no changes
+// merges nothing and runs no container execs at all.
+func TestApplyDelta_CleanCaptureIsNoOp(t *testing.T) {
+	sb, _, tasks, _ := newTestSandbox(t, "abc")
+	ctx := context.Background()
+	if err := sb.Create(ctx, shepherd.SandboxSpec{}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	afterCreate := len(tasks.allReqs)
+	err := sb.ApplyDelta(ctx, shepherd.WorkspaceState{
+		Backend: BackendName,
+		Data:    map[string]any{StateKeyDeltaBase: "basehead"},
+	})
+	if err != nil {
+		t.Fatalf("ApplyDelta (clean capture): %v", err)
+	}
+	if got := len(tasks.allReqs); got != afterCreate {
+		t.Errorf("clean-capture no-op ran %d execs, want %d (none beyond Create's)", got, afterCreate)
+	}
+}
+
+// TestApplyDelta_AppliesPatchAndCleansUp pins the happy path's shape: the patch
+// is staged to a temp file, the merge script runs, and the temp file is removed.
+func TestApplyDelta_AppliesPatchAndCleansUp(t *testing.T) {
+	sb, _, tasks, _ := newTestSandbox(t, "abc")
+	ctx := context.Background()
+	if err := sb.Create(ctx, shepherd.SandboxSpec{}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	patch := base64.StdEncoding.EncodeToString([]byte("diff --git a/f b/f\n+child\n"))
+	delta := shepherd.WorkspaceState{
+		Backend: BackendName,
+		Data: map[string]any{
+			StateKeyDeltaBase:  "basehead",
+			StateKeyDeltaPatch: patch,
+		},
+	}
+	if err := sb.ApplyDelta(ctx, delta); err != nil {
+		t.Fatalf("ApplyDelta: %v", err)
+	}
+
+	var staged, merged, removed bool
+	for _, req := range tasks.allReqs {
+		script := ""
+		if len(req.Args) >= 2 {
+			script = req.Args[1]
+		}
+		switch {
+		case strings.Contains(script, "base64 -d"):
+			staged = true
+		case strings.Contains(script, "git merge-tree"):
+			merged = true
+		case strings.Contains(script, "rm -f --"):
+			removed = true
+		}
+	}
+	if !staged {
+		t.Error("the delta patch should be staged through WriteFile")
+	}
+	if !merged {
+		t.Error("the merge script should have run")
+	}
+	if !removed {
+		t.Error("the staged patch file should be removed after the merge")
+	}
+}
+
+// TestApplyDelta_ConflictRefusesWithPaths pins the refused-merge path: the
+// script's conflict sentinel surfaces with the conflicting paths named, so a
+// caller can tell a refusal (nothing consumed) from an operational failure.
+func TestApplyDelta_ConflictRefusesWithPaths(t *testing.T) {
+	sb, _, tasks, _ := newTestSandbox(t, "abc")
+	tasks.mergeConflict = true
+	ctx := context.Background()
+	if err := sb.Create(ctx, shepherd.SandboxSpec{}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	patch := base64.StdEncoding.EncodeToString([]byte("diff --git a/f.txt b/f.txt\n+child\n"))
+	err := sb.ApplyDelta(ctx, shepherd.WorkspaceState{
+		Backend: BackendName,
+		Data: map[string]any{
+			StateKeyDeltaBase:  "basehead",
+			StateKeyDeltaPatch: patch,
+		},
+	})
+	if err == nil {
+		t.Fatal("a conflicting delta must fail the call")
+	}
+	if !strings.Contains(err.Error(), "conflicting paths") || !strings.Contains(err.Error(), "f.txt") {
+		t.Errorf("error = %v, want it to name the conflicting paths", err)
+	}
+}
+
+// TestApplyDelta_BeforeCreateFails mirrors the other lifecycle guards: a merge
+// needs a running task to exec in.
+func TestApplyDelta_BeforeCreateFails(t *testing.T) {
+	sb, _, _, _ := newTestSandbox(t, "")
+	patch := base64.StdEncoding.EncodeToString([]byte("diff --git a/f b/f\n+child\n"))
+	err := sb.ApplyDelta(context.Background(), shepherd.WorkspaceState{
+		Backend: BackendName,
+		Data: map[string]any{
+			StateKeyDeltaBase:  "basehead",
+			StateKeyDeltaPatch: patch,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "before Create") {
+		t.Fatalf("ApplyDelta before Create = %v, want a lifecycle error", err)
+	}
+}
+
+// applyBasedState applies a state carrying a git HEAD so the sandbox records a
+// delta base, ready for the failure-path tests below.
+func applyBasedState(t *testing.T, ctx context.Context, sb *ContainerdSandbox) {
+	t.Helper()
+	baseline, err := sb.Capture(ctx)
+	if err != nil {
+		t.Fatalf("baseline Capture: %v", err)
+	}
+	baseline.Data[StateKeyGitHead] = "basehead"
+	if err := sb.Apply(ctx, baseline); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+}
+
+// TestCapture_BaseWithoutGitHeadFailsAndUnpins pins the loud refusal: once a
+// base is recorded, a capture that cannot read the workspace's git HEAD fails
+// rather than handing out a state with no delta payload, and it drops the pin
+// on the committed layer first — no state is handed out, so nothing else could
+// ever release it.
+func TestCapture_BaseWithoutGitHeadFailsAndUnpins(t *testing.T) {
+	sb, _, tasks, _ := newTestSandbox(t, "abc")
+	fl := &fakeLeases{}
+	sb.leases = fl
+	ctx := context.Background()
+	if err := sb.Create(ctx, shepherd.SandboxSpec{}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	applyBasedState(t, ctx, sb)
+
+	// The workspace stops being a readable repository between Apply and the
+	// next Capture.
+	tasks.gitHead = ""
+	_, err := sb.Capture(ctx)
+	if err == nil || !strings.Contains(err.Error(), "read git HEAD") {
+		t.Fatalf("Capture without a readable HEAD = %v, want a loud refusal", err)
+	}
+
+	// added - removed counts the pins still held; the failed capture must have
+	// dropped the pin it just took, leaving only the baseline's.
+	if len(fl.added)-len(fl.removed) != 1 {
+		t.Errorf("pins added=%d removed=%d; want exactly the baseline's pin left held", len(fl.added), len(fl.removed))
+	}
+}
+
+// TestCapture_DeltaFailureFailsAndUnpins pins the delta-generation refusal and
+// its pin drop: the state never reaches the caller, so the pin on its layer
+// must not outlive the call.
+func TestCapture_DeltaFailureFailsAndUnpins(t *testing.T) {
+	sb, _, tasks, _ := newTestSandbox(t, "abc")
+	fl := &fakeLeases{}
+	sb.leases = fl
+	tasks.runErr["sh"] = errors.New("delta script boom")
+	ctx := context.Background()
+	if err := sb.Create(ctx, shepherd.SandboxSpec{}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	applyBasedState(t, ctx, sb)
+
+	_, err := sb.Capture(ctx)
+	if err == nil || !strings.Contains(err.Error(), "capture delta") {
+		t.Fatalf("Capture with a failing delta script = %v, want a loud refusal", err)
+	}
+	if len(fl.added)-len(fl.removed) != 1 {
+		t.Errorf("pins added=%d removed=%d; want exactly the baseline's pin left held", len(fl.added), len(fl.removed))
+	}
+}
+
+// TestApply_StateWithoutGitHeadClearsBase pins the rebind rule: applying a
+// state with no git HEAD moves the sandbox to a workspace that may not contain
+// the old base's repository, so the base must not survive.
+func TestApply_StateWithoutGitHeadClearsBase(t *testing.T) {
+	sb, _, _, _ := newTestSandbox(t, "abc")
+	ctx := context.Background()
+	if err := sb.Create(ctx, shepherd.SandboxSpec{}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	applyBasedState(t, ctx, sb)
+
+	plain, err := sb.Capture(ctx)
+	if err != nil {
+		t.Fatalf("plain Capture: %v", err)
+	}
+	delete(plain.Data, StateKeyGitHead)
+	if err := sb.Apply(ctx, plain); err != nil {
+		t.Fatalf("Apply (no git head): %v", err)
+	}
+
+	state, err := sb.Capture(ctx)
+	if err != nil {
+		t.Fatalf("Capture after rebind: %v", err)
+	}
+	if _, ok := state.Data[StateKeyDeltaBase]; ok {
+		t.Error("delta_base should not survive applying a state with no git HEAD")
+	}
+}
+
+// TestCreate_ResetsBase pins the generation reset: a sandbox reused through
+// Create after a previous life that applied a git state must not diff the new
+// workspace against the old repository's HEAD.
+func TestCreate_ResetsBase(t *testing.T) {
+	sb, _, _, _ := newTestSandbox(t, "abc")
+	ctx := context.Background()
+	if err := sb.Create(ctx, shepherd.SandboxSpec{}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	applyBasedState(t, ctx, sb)
+
+	// The supported reuse flow is Create -> Destroy -> Create.
+	if err := sb.Destroy(ctx); err != nil {
+		t.Fatalf("Destroy before re-Create: %v", err)
+	}
+	if err := sb.Create(ctx, shepherd.SandboxSpec{}); err != nil {
+		t.Fatalf("re-Create: %v", err)
+	}
+	state, err := sb.Capture(ctx)
+	if err != nil {
+		t.Fatalf("Capture after re-Create: %v", err)
+	}
+	if _, ok := state.Data[StateKeyDeltaBase]; ok {
+		t.Error("delta_base should not survive Create: the new generation's workspace may not contain the old base's repository")
+	}
+}
+
+// TestCapture_ConcurrentWithApply drives the data race the base field's
+// locked read exists for: Capture snapshots baseGitHead while Apply reassigns
+// it. Errors are expected and ignored — the point is that -race sees the
+// unsynchronized read, not lifecycle success.
+func TestCapture_ConcurrentWithApply(t *testing.T) {
+	sb, _, _, _ := newTestSandbox(t, "abc")
+	ctx := context.Background()
+	if err := sb.Create(ctx, shepherd.SandboxSpec{}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	state, err := sb.Capture(ctx)
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+	state.Data[StateKeyGitHead] = "basehead"
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 25; i++ {
+			_, _ = sb.Capture(ctx)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 25; i++ {
+			_ = sb.Apply(ctx, state)
+		}
+	}()
+	wg.Wait()
 }
