@@ -26,10 +26,11 @@ Every tool call, every model response, every file mutation becomes a durable, co
 
 ```go
 store, _ := shepherd.NewSQLiteTraceStore("trace.sqlite")
-defer store.Close()
+ctx := context.Background()
+defer store.Close(context.Background())
 
 // Record a tool call intent
-receipt, _ := store.Append(shepherd.TrustedAppendContext, shepherd.AppendBatch{
+receipt, _ := store.Append(ctx, shepherd.TrustedAppendContext, shepherd.AppendBatch{
     AppendIntentID: "session:tool:1",
     Groups: []shepherd.AppendGroup{{
         TraceOwnerID: "agent:main",
@@ -42,7 +43,7 @@ receipt, _ := store.Append(shepherd.TrustedAppendContext, shepherd.AppendBatch{
 })
 
 // Record the outcome
-store.Append(shepherd.TrustedAppendContext, shepherd.AppendBatch{
+store.Append(ctx, shepherd.TrustedAppendContext, shepherd.AppendBatch{
     AppendIntentID: "session:result:1",
     Groups: []shepherd.AppendGroup{{
         TraceOwnerID:  "agent:main",
@@ -113,6 +114,34 @@ forkState, _ := scope.CaptureWorkspace(ctx)   // no lifecycle, stays valid
 scope.ApplyWorkspace(ctx, forkState)          // rewind to the fork point
 // ...variant B...
 ```
+
+Checkpoint snapshots persist in the trace database (bounded by a per-store
+blob limit), so they survive the process:
+
+### Recover after a restart
+
+Scopes, checkpoints, and sealed outputs are rebuilt from the durable trace
+after a crash or restart — the trace is the registry. Sandboxes are never
+invented: the host's resolver decides which worktrees and containers to
+re-adopt and which to orphan-clean:
+
+```go
+mgr, err := shepherd.RecoverScopes(store, shepherd.RecoverOptions{
+    Resolver: func(scopeID, backend string) (shepherd.Sandbox, error) {
+        return mySandboxFor(scopeID) // nil = recover this scope causally only
+    },
+})
+// The tree, terminal states, fork baselines, checkpoints, and retained
+// outputs are back. A checkpoint whose recorded revision no longer matches
+// the re-adopted workspace is CheckpointInvalid — never silently restorable.
+cp := mgr.LatestCheckpoint(scopeID)
+```
+
+Recovered children still propose merges against their recovered fork
+baselines, and unconsumed outputs settle exactly as they would have
+before the restart. Long-lived hosts can call `mgr.PruneTerminal()` to
+unregister merged/discarded scopes when their settled state is no longer
+needed in-process.
 
 ### Isolate a branch in its own worktree
 
@@ -426,15 +455,15 @@ A rule-based engine that watches the effect bus and emits **interventions** when
 
 ```go
 store, err := shepherd.NewSQLiteTraceStore(path)  // ":memory:" for in-memory
-defer store.Close()
+defer store.Close(context.Background())
 store.WithBus(bus)  // optional: attach effect bus
 
-receipt, err := store.Append(ctx, batch)            // Append records
-slice, err := store.ReadOwnerPrefix(ctx, owner, through, modeFilter)
-slice, err := store.ReadCausalClosure(ctx, roots, modeFilter, closurePolicy)
-frontier, err := store.PublishFrontier(ctx, spec)   // Immutable checkpoint
-slice, err := store.ResolveFrontier(ctx, frontierId, modeFilter)
-ids, err := store.PreviewRecordIDs(ctx, batch)      // Dry-run append
+receipt, err := store.Append(ctx, shepherd.TrustedAppendContext, batch)  // Append records
+slice, err := store.ReadOwnerPrefix(ctx, shepherd.TrustedReadContext, owner, through, modeFilter)
+slice, err := store.ReadCausalClosure(ctx, shepherd.TrustedReadContext, roots, modeFilter, closurePolicy)
+frontier, err := store.PublishFrontier(ctx, shepherd.TrustedAppendContext, spec)  // Immutable checkpoint
+slice, err := store.ResolveFrontier(ctx, shepherd.TrustedReadContext, frontierId, modeFilter)
+ids, err := store.PreviewRecordIDs(ctx, shepherd.TrustedAppendContext, batch)  // Dry-run append
 ```
 
 ### Effect Bus
@@ -465,7 +494,7 @@ active := mgr.ActiveScopes()
 cp, err := mgr.CreateCheckpoint(ctx, "scope-id", snapshot)          // single-use
 snapshot, err := mgr.RestoreCheckpoint(ctx, cp.ID)
 latest := mgr.LatestCheckpoint("scope-id")
-mgr.PruneCheckpoints("scope-id")
+mgr.PruneCheckpoints(ctx, "scope-id")                 // also deletes persisted blobs
 
 // Merge gate (plan 04): propose, review, commit-or-discard
 proposal, err := mgr.ProposeMerge(ctx, "child-scope-id", 2000)      // query; classifies create/modify/delete
@@ -477,7 +506,15 @@ out, err := mgr.Seal(ctx, "scope-id")                              // scope stay
 got, ok := mgr.Output(out.ID)
 outs := mgr.OutputsForScope("scope-id")
 err = mgr.Settle(ctx, out.ID, shepherd.SettleSelect)               // or SettleApply / SettleRelease / SettleDiscard
+
+// Restart durability: rebuild the registry from the trace
+mgr, err = shepherd.RecoverScopes(store, shepherd.RecoverOptions{ /* Resolver: re-adopt sandboxes */ })
+pruned := mgr.PruneTerminal()                                      // unregister merged/discarded scopes
 ```
+
+Every store call takes a Go `context.Context` first — cancellation and
+deadlines reach the SQL layer — with the trace-authority context
+(`TrustedAppendContext` / `TrustedReadContext`) second.
 
 ### Scope workspace and checkpoint operations
 
@@ -639,22 +676,19 @@ The `testdata/kernel_abi_v0.json` file contains deterministic test vectors share
 ## Tests
 
 ```bash
-go test -v ./...
+go test ./...          # the full suite; -race is on by default in CI
+go test -race ./...    # the suite under the race detector
+go vet ./...
 ```
 
-161 tests, all passing:
-
-| Area | Tests |
-|---|---|
-| Golden vector digest compatibility (`canonical_test.go`) | 21 |
-| Store: append idempotency, conflict detection, content-addressed identity, frontier publish/resolve, causal closure, mode filtering, witness chains, authorization, persistence | 18 |
-| Effect bus: pub/sub, non-blocking, concurrency | 14 |
-| Scopes: fork/merge/discard, nesting, lifecycle, sandbox ownership | 34 |
-| Supervisor: rules, interventions, built-in rules | 24 |
-| Checkpoints: create/restore, single-use, index hygiene | 18 |
-| Workspace states: capture/apply/diff, reusability, non-mutating contract | 12 |
-| Git sandbox: in-place and worktree modes | 15 |
-| Integration: end-to-end rollback and worktree fork/discard/choose | 5 |
+The suite covers the golden vectors (hash-pinned against the Python
+reference), the store ABI (append idempotency, conflicts, witness chains,
+frontier/cut resolution, authorization), scopes and checkpoints, the merge
+gate and settlement recipes, supervision, both sandbox backends (the
+containerd live suite is env-gated on a daemon), and the restart-recovery
+round trips. CI runs it on Linux, macOS, and Windows with the race
+detector on, plus a golden-drift check against the pinned Python
+reference.
 
 ## Dependencies
 

@@ -162,12 +162,22 @@ Minimal GitHub Actions (`ci.yml`):
 
 ## Acceptance criteria
 
-- [ ] `v0.4.0` tagged on merged `main`; nested containerd module tagged
-      without `replace`; `go get` resolves both.
-- [ ] LICENSE present; CHANGELOG covers v0.1.0–v0.4.0.
-- [ ] Core module compiles/tests on all three OSes in CI; containerd compiles
+- [x] `v0.4.0` tagged on merged `main`; nested containerd module tagged
+      without `replace`; `go get` resolves both. *(And since: v0.5.0–v0.8.0
+      core, v0.1.1–v0.1.4 nested, all verified from clean modules.)*
+- [x] LICENSE present; CHANGELOG covers v0.1.0–v0.4.0. *(And now through
+      v0.8.0 + the Phase 4 Unreleased section.)*
+- [x] Core module compiles/tests on all three OSes in CI; containerd compiles
       on linux, politely `ErrNotImplemented` elsewhere where applicable.
-- [ ] Live containerd smoke test passed once on a real daemon (result noted
-      in README).
-- [ ] Recover-after-restart test suite green; staleness detection works.
-- [ ] Bug batch (§5) merged; golden-drift CI check active.
+- [x] Live containerd smoke test passed once on a real daemon (result noted
+      in README). *(T0.5, 12/12 soak; the cold-namespace re-run 9/9 green on
+      the durable-states release.)*
+- [x] Recover-after-restart test suite green; staleness detection works.
+      *(Phase 4, T4.1–T4.3: `recovery_test.go`.)*
+- [x] Bug batch (§5) merged; golden-drift CI check active.
+
+### Post-merge steps for v0.9.0 (the PR #19 pattern)
+
+- [ ] Tag `v0.9.0` at the Phase 4 merge commit and verify it resolves from a
+      clean module (the release-verify job now automates this check); tick
+      this box in the follow-up docs commit and stamp the CHANGELOG section.

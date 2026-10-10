@@ -70,29 +70,29 @@ divergence (documented decision) · ➖ out of scope · 🟦 Go-only strength.
 
 | Capability | Python (shepherd2) | Go | Verdict |
 |---|---|---|---|
-| Canonical JSON v2 + digest | `kernel/canonical.py` (`ensure_ascii=False`, `allow_nan=False`, repr floats) | `canonical.go` (uses `json.Marshal`: HTML-escapes `<>&`; `%d` for integral floats) | ⚠️ byte-identity risk on floats/escapes — **plan 01** |
-| Golden vectors (digest layer) | `tests/golden/kernel_abi_v0.json` | `testdata/kernel_abi_v0.json` — **byte-identical file** (SHA-256 verified) | ✅ file; ⚠️ vectors cover ints/strings only — extend — **plan 01** |
-| Store-level cross-language vectors | `SQLiteTraceStore` produces witness/context IDs deterministically | no equivalent fixture | ❌ — **plan 01** |
+| Canonical JSON v2 + digest | `kernel/canonical.py` (`ensure_ascii=False`, `allow_nan=False`, repr floats) | `canonical.go` (exact CPython-repr floats, no HTML escaping, corpus-verified) | ✅ landed in v0.5.0 (plan 01, T1.1–T1.2) |
+| Golden vectors (digest layer) | `tests/golden/kernel_abi_v0.json` | `testdata/kernel_abi_v0.json` — **byte-identical file** (SHA-256 verified, drift-gated in CI) | ✅ extended to floats/escapes in v0.5.0 |
+| Store-level cross-language vectors | `SQLiteTraceStore` produces witness/context IDs deterministically | `testdata/store_vectors_v0.json` | ✅ landed in v0.5.0 (T1.5) |
 | Append / intents / receipts | `trace_store.py` (1520 L): atomic batches, intent idempotency + conflict, `AppendIntentConflictError` | `store.go` (1912 L): same semantics, WAL, single connection | ✅ |
 | Witness chain to root | root sentinel `""`, ordinary `kernel.witness.v1`, support closure, cycle rejection | same, `validateWitnessChain`, synthetic owner `kernel:witness` | ✅ |
 | Cuts / frontiers | publish/resolve, immutability, `read_owner_cutoff` re-verification | same (`shepherd2.frontier.owner_cutoff.v1` record + index cross-check) | ✅ |
-| Slices: traversal, mode filter, anchors, visibility | `_trace_slice` pipeline, 11 slice laws | equivalent pipeline; `ExternalAnchor.AnchorKind` never populated (arg-position bug) | ⚠️ bug — **plan 01** |
-| `TraceStore` protocol surface | `append, preview_*, read_fact, read_owner_prefix, read_path_prefix, publish_cut/frontier, resolve_cut/frontier, read_owner_cutoff, read_causal_closure, close` | all except **`ReadPathPrefix`** (table `path_entries` exists) | ⚠️ — **plan 01** |
-| Backend-agnostic conformance suite | `test_trace_store_conformance.py` (438 L, parametrized — explicitly intended to gate a Go backend) | ad-hoc store tests (18) | ❌ port suite — **plan 01** |
-| 25 executable ABI laws | `test_kernel_abi_v0_laws.py` (~790 L) | partial coverage across `canonical_test.go`/`store_test.go` | ⚠️ map + close — **plan 01** |
+| Slices: traversal, mode filter, anchors, visibility | `_trace_slice` pipeline, 11 slice laws | equivalent pipeline; `ExternalAnchor.AnchorKind` populated | ✅ bug fixed in v0.5.0 (plan 01) |
+| `TraceStore` protocol surface | `append, preview_*, read_fact, read_owner_prefix, read_path_prefix, publish_cut/frontier, resolve_cut/frontier, read_owner_cutoff, read_causal_closure, close` | all members | ✅ `ReadPathPrefix` landed in v0.5.0 (T1.6) |
+| Backend-agnostic conformance suite | `test_trace_store_conformance.py` (438 L, parametrized — explicitly intended to gate a Go backend) | `conformance_test.go` (`runConformance` over a `ConformanceStore` interface) | ✅ landed in v0.5.0 (T1.7) |
+| 25 executable ABI laws | `test_kernel_abi_v0_laws.py` (~790 L) | `laws_test.go` + the coverage map in `docs/law-coverage.md` | ✅ landed in v0.5.0 (T1.8) |
 | Authorization model | Slice-A trusted contexts; `full_internal` requires trusted authority; operation kinds | same for append/read; `OpMaterialize` enforced by `Materialize` (any other operation kind rejected); `OpObserve` still reserved | ✅ for materialize (plan 03, landed); `OpObserve` stays reserved |
-| `context.Context` / cancellation | n/a (threading) | store APIs take no `context.Context` | ⚠️ Go-idiom gap — **plan 05** |
+| `context.Context` / cancellation | n/a (threading) | `ctx context.Context` first on every store API, SQL `Context` variants throughout | ✅ landed in v0.9.0 (plan 05 §6, T4.5) |
 
 ### 2.2 Rings 1–2 — schemas and runtime handles
 
 | Capability | Python | Go | Verdict |
 |---|---|---|---|
-| Execution lifecycle schema (`shepherd2.execution.{created,started,completed,failed}.v1`), deterministic `exec:<32hex>` IDs, batch builders, terminal-frontier law, `project_execution` fold | `schemas/execution.py` (315 L) | ❌ | **plan 02** |
-| Relations (`spawned/adopted/abandoned`) + projection | `schemas/relations.py` | ❌ | **plan 02** |
-| Effective-history projection | `schemas/history.py` | ❌ | **plan 02** |
-| Schema library / projection purity (`ProjectionSpec`, mode requirements) | `schemas/schema_library.py` | ❌ | **plan 02** |
-| Run-output descriptor vocabulary (`shepherd2.run_output.v1`, skeleton descriptor/locator) | `schemas/run_outputs.py` (~580 L) | ❌ | ⚠️ minimal subset only — **plan 04** (settlement), rest ➖ |
-| Runtime handles: `Run`, `ChildHandle` (wait/snapshot/cutoff), `TaskControl` (publish/spawn/adopt/abandon), `@task` | `runtime/handles.py` (437 L, sync facade, no scheduler) | ❌ | **plan 02** |
+| Execution lifecycle schema (`shepherd2.execution.{created,started,completed,failed}.v1`), deterministic `exec:<32hex>` IDs, batch builders, terminal-frontier law, `project_execution` fold | `schemas/execution.py` (315 L) | `execution.go` + `execution_vectors_v0.json` (ID-for-ID against the reference) | ✅ landed in v0.6.0 (plan 02) |
+| Relations (`spawned/adopted/abandoned`) + projection | `schemas/relations.py` | `relations.go` + vectors | ✅ landed in v0.6.0 |
+| Effective-history projection | `schemas/history.py` | `history.go` + `history_sequence` vectors | ✅ landed in v0.6.0 |
+| Schema library / projection purity (`ProjectionSpec`, mode requirements) | `schemas/schema_library.py` | `schema_library.go` | ✅ landed in v0.6.0 |
+| Run-output descriptor vocabulary (`shepherd2.run_output.v1`, skeleton descriptor/locator) | `schemas/run_outputs.py` (~580 L) | Go-native `shepherd.run_output.{sealed,settled}.v1` (documented extension, not `shepherd2.run_output.v1`) | ✅ minimal subset landed in v0.8.0 (plan 04); full descriptor vocabulary ➖ |
+| Runtime handles: `Run`, `ChildHandle` (wait/snapshot/cutoff), `TaskControl` (publish/spawn/adopt/abandon), `@task` | `runtime/handles.py` (437 L, sync facade, no scheduler) | `handles.go` (`RunTaskSync` as the `@task` analogue) | ✅ landed in v0.6.0 (plan 02) |
 
 ### 2.3 vNext — substrates and materialization
 
@@ -109,7 +109,7 @@ divergence (documented decision) · ➖ out of scope · 🟦 Go-only strength.
 | Scope fork/merge/discard | `ScopeProxy.child/merge/discard`; vcs-core tree primitives | `Scope`/`ScopeManager` (same verbs, trace-recorded, sandbox-aware) | 🔀 at-parity-in-spirit; Go design kept |
 | Fold invariant `state(t)=fold(effects)`, `ImmutableScope`, `ContextBinding`, `Stream` (truncate_to, by_depth, direct) | `shepherd_core.scope.{model,stream}` (215 + 1172 L) | 🔀 **rejected by design** (GAP-REPORT §3): snapshots beat stream replay for real worktrees | keep rejected |
 | Checkpoint create/restore | `CheckpointManager` (stream truncate + replay + materialization watermark → `ContainmentError`) | `Checkpoint` + `WorkspaceState` via `Sandbox.Capture/Apply` (snapshot-based, single-use) | 🔀 functionally at parity; mechanism differs by design |
-| Checkpoint/scope **durability** | trace records durable; vcs-core projects scope registry | checkpoints + scope registry **in-memory only** — lost on restart | ⚠️ — **plan 05** (recover from trace) |
+| Checkpoint/scope **durability** | trace records durable; vcs-core projects scope registry | `RecoverScopes` rebuilds the registry from the trace; checkpoint blobs persist in the trace DB with staleness detection | ✅ landed in v0.9.0 (plan 05 §4, T4.1–T4.3) |
 | File deltas (`FileDelta`/`FileChangeset`, diff-match-patch, zlib+b64, drift hashes) | `shepherd_contexts.simple_workspace.delta` | 🔀 **rejected**: git is the materializer (GAP-REPORT §5) | keep rejected |
 | Materialization ordering by reversibility tier (AUTO→COMPENSABLE→NONE, reverse rollback) | `_scope/_materialization.py` | 🔀 rejected (git handles FS uniformly) | keep rejected; see §5 backlog |
 | Overlay/container fork-revert (~134 ms, paper) | ContainerDevice + `OverlayEffectExtractor` (Podman, OverlayFS upper-layer walk, whiteouts); vcs-core carriers: clonefile / kernel-overlayfs / fuse / copy | `sandbox/containerd` (overlay **snapshotter** lifecycle: stop→commit→prepare→restart; implemented vs. fakes, daemon path unverified); git worktree carrier | 🔀 different mechanism, same goal; Go path viable — daemon verification **plan 05** |
@@ -121,8 +121,8 @@ divergence (documented decision) · ➖ out of scope · 🟦 Go-only strength.
 |---|---|---|---|
 | Runtime supervision (observe + inject/halt) | provider-boundary recorder, handler frames | `Supervisor` + `EffectBus` (async rules) — 🟦 Go-only real-time bus | 🟦 ahead |
 | Pre-execution interception | ❌ (Python supervises at commit, not pre-tool) | `Supervisor.CheckCall` + `DestructiveToolGuard` (deny) | 🟦 ahead |
-| Check-at-commit supervision (`SubstrateOperationProposed` before settlement; approve-by-return / deny-by-raise; decision recorded) | `dialect/supervision.py` (`SupervisorDenied`, `supervisor_frame`) | ❌ — merge is ungated | **plan 04** |
-| Retained outputs + consume-once settlement (`select/apply/release/discard`) | vcs-core settlement machine + `RunOutput` verbs | ❌ — merge/discard exist but no seal/review/settle lifecycle | **plan 04** (lightweight, sandbox-level) |
+| Check-at-commit supervision (`SubstrateOperationProposed` before settlement; approve-by-return / deny-by-raise; decision recorded) | `dialect/supervision.py` (`SupervisorDenied`, `supervisor_frame`) | `ProposeMerge`/`CommitMerge` + `MergeReviewer`, `SupervisorDeniedError`, `supervisor.decision.v1` records | ✅ landed in v0.8.0 (plan 04) |
+| Retained outputs + consume-once settlement (`select/apply/release/discard`) | vcs-core settlement machine + `RunOutput` verbs | `RetainedOutput`, `Scope.Seal`, `Settle` verbs with the same state machine, `DeltaApplier` for three-way apply | ✅ landed in v0.8.0 (plan 04); recovered across restart in v0.9.0 |
 | Fork-and-choose (best-of-n), retry-until-acceptable, apply-onto-moved recipes | `examples/workspace-handles/*` | primitives exist (isolated forks, diffs, checkpoints); no recipes/tests | **plan 04** |
 
 ### 2.6 Peripheral (all out of scope)

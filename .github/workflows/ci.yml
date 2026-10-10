@@ -3,6 +3,7 @@ name: ci
 on:
   push:
     branches: [main]
+    tags: ['v*', 'sandbox/**']
   pull_request:
     branches: [main]
 
@@ -106,3 +107,48 @@ jobs:
             echo "::error::testdata/kernel_abi_v0.json differs from the reference copy at shepherd2@d34d5ca3. If the reference moved on purpose, reconcile the golden in the same commit and update the pinned hash in golden_provenance_test.go."
             exit 1
           fi
+
+  release-verify:
+    name: release verify (tagged module)
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/sandbox/')
+    steps:
+      - name: checkout the tag
+        uses: actions/checkout@v4
+
+      - name: setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      # A tagged module must be consumable from the module proxy's point of
+      # view: no replace directives (the nested adapter's old ../.. replace
+      # made the published v0.1.0 unbuildable), and every module in the tag
+      # must resolve and build from a clean consumer with no local state.
+      - name: no replace directives in tagged modules
+        run: |
+          fail=0
+          for mod in go.mod sandbox/containerd/go.mod; do
+            if grep -nE '^\s*replace\s' "$mod"; then
+              echo "::error::$mod in tag ${GITHUB_REF_NAME} contains a replace directive -- the published module would be unbuildable"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: core module resolves and builds from a clean consumer
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [ "${tag#sandbox/}" != "$tag" ]; then
+            # A nested-module tag: verify the core requirement it pins too.
+            core=$(grep -m1 'github.com/buchenberg/shepherd-kernel-go v' sandbox/containerd/go.mod | awk '{print $2}')
+            echo "nested tag $tag -> verifying core $core as well"
+            ( cd "$(mktemp -d)" && go mod init verify >/dev/null && \
+              go get "github.com/buchenberg/shepherd-kernel-go@${core}" && \
+              go get "github.com/buchenberg/shepherd-kernel-go/sandbox/containerd@${tag}" )
+          else
+            ( cd "$(mktemp -d)" && go mod init verify >/dev/null && \
+              go get "github.com/buchenberg/shepherd-kernel-go@${tag}" )
+          fi
+          echo "tag ${GITHUB_REF_NAME} resolves end-to-end from a clean module context"
