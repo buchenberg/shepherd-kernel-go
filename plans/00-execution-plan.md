@@ -608,7 +608,9 @@ v0.9.0 tagged; yaah pinned and compiling against ctx APIs.
       `OpenSandbox` registry (the construction seam) landed in v0.10.0
       (PR #31 at `0c7c416`, verified from a clean module) so
       backend *selection* is already decoupled from backend *location*.
-      The nested module followed in `sandbox/containerd/v0.1.5`: repinned to
+      The nested module followed in `sandbox/containerd/v0.1.5` (PR #33,
+      merged at `974bc56`, tagged there and verified from a clean module —
+      it pulls core `v0.10.0`): repinned to
       core `v0.10.0`, self-registering with the registry on import, and
       carrying the backend's `DeltaApplier` implementation — the piece
       settlement's `SettleApply` verb needs on an isolated containerd scope
