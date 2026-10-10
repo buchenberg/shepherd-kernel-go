@@ -217,9 +217,14 @@ Other notes:
   extra tag from the file's constraint so it joins the normal linux build
   graph, and the nested release carried it as `v0.1.3`, tagged at `57a5329`
   and verified end-to-end: `go get …/sandbox/containerd@v0.1.3` pulls core
-  `v0.7.0` from a clean module. The daemon round trip itself has still not
-  been executed — no containerd socket on the dev box; it runs where the
-  12/12 soak ran, same as the rest of the live suite.
+  `v0.7.0` from a clean module. The daemon round trip is now executed and
+  green: 2026-10-10, against a fresh `shepherd-live-cold` namespace (cold
+  image, empty diffIDs cache) on the dev box's daemon, as part of the 9/9
+  live run that verified PR #25 (released as `sandbox/containerd/v0.1.4`) —
+  `TestLive_WorkspaceSubstrateWriteSurvivesRecycle` and
+  `TestLive_WorkspaceSubstrateRecordsExecOutcome` both pass, and
+  `TestLive_DestroyRemovesActiveLayerKeepsStates` proves the
+  write → capture → destroy → apply → verify acceptance sequence end-to-end.
 - The "containerd fake" half of the acceptance criterion is covered at the
   interface level by the core module's `fakeSandbox` tests; the nested
   module's `fakeSnapshotter` suite already owns the adapter lifecycle and

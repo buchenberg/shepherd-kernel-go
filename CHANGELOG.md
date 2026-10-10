@@ -6,6 +6,12 @@ contain breaking changes, which are called out below.
 
 ## [Unreleased]
 
+> Everything in this section shipped 2026-10-10 as the nested-module release
+> `sandbox/containerd/v0.1.4`, tagged at `ce07f36` (the PR #25 merge). Core is
+> unchanged and stays at `v0.7.0`; `go get …/sandbox/containerd@v0.1.4` pulls
+> core `v0.7.0` from a clean module. The cold-namespace live suite — the
+> condition that found both defects — is 9/9 green on this code.
+
 containerd backend (`sandbox/containerd/`): captured states are now durable
 across sandbox teardown, and a cold-daemon defect in image resolution is fixed.
 Both were found by the first live run against a cold daemon (fresh namespace,

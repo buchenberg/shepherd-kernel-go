@@ -197,6 +197,21 @@ exposed a tenth (GC-vulnerable snapshots) that unit tests could not reach, and
 T0.9 fixed it. **The soak is green**, so a materialization
 path built on this backend will not fail nondeterministically under load.
 
+**The containerd state-durability fix is merged and released** (2026-10-10;
+PR #25 merged at `ce07f36`, the six review findings — the orphaned pin on
+`advance` failure, the silent no-op without a lease manager, and the three
+test-coverage gaps — addressed in `3964041`). States are durable by
+construction: `Capture` pins each committed layer on a namespace-scoped
+`shepherd-states` lease, `Destroy` removes only the sandbox's private active
+layer, and `ReleaseState` is the deliberate reclaim path. Released as
+`sandbox/containerd/v0.1.4`, tagged at the merge and verified end-to-end from
+a clean module (`go get …/sandbox/containerd@v0.1.4` pulls core `v0.7.0`; core
+itself is unchanged). The live suite re-run against the condition that found
+the defects — fresh namespace, cold image, empty diffIDs cache — is **9/9
+green** (2026-10-10), and plan 03's acceptance sequence
+(write → capture → destroy → apply → verify) passes on a live daemon for the
+first time, via `TestLive_DestroyRemovesActiveLayerKeepsStates`.
+
 ### Sequencing consequence
 
 The §4 dependency graph puts a **hard gate** at Phase 1 → Phase 2. Nothing in
@@ -446,7 +461,7 @@ cut only after v0.6.0 merges (avoid interleaved minors).
 | T2b.4 | `WorkspaceSubstrate` over `Sandbox`: declaration schemas `workspace.file.{write}.v1`, `workspace.exec.v1` (delete omitted — recorded decision, plan 03 §7.2); capability-gated dispatch (git in-place → honest failure; worktree/containerd → full); applied-captures with path digest / exit code / stdout digest | ✅ | `substrate_workspace.go` + `substrate_test.go` fake-sandbox tests: capability gate → `clean_failure` with nothing applied; mid-batch failure → `split_state` with captures and anchors only for the landed records; exec exit code is an observed result, not a failure |
 | T2b.5 | Cross-language vectors: Echo + `materialize` capture record IDs vs Python for identical requests | ✅ | `testdata/materialize_vectors_v0.json` (generator `generate_materialize_vectors.py`, byte-reproducible, hash-pinned in `golden_provenance_test.go`): request digests, echo + KV sequences, ledger-replay-across-restart — replayed ID-for-ID by `materialize_vectors_test.go` |
 | T2b.6 | README "Materializing recorded intents" section | ✅ | `README.md` — "What You Can Do With It" section + materialization API reference |
-| T2b.7 | containerd live integration (linux CI, env-gated `SHEPHERD_CONTAINERD_ADDR`): WorkspaceSubstrate over live daemon — write→capture→destroy→apply→verify | ✅ | `sandbox/containerd/workspace_live_test.go` — committed dormant in PR #22 (the nested module compiles against published core only), activated by the repin to `v0.7.0` in PR #23: build tag dropped, file joins the normal linux graph, runtime-skips without a daemon. The daemon round trip runs where the 12/12 soak ran |
+| T2b.7 | containerd live integration (linux CI, env-gated `SHEPHERD_CONTAINERD_ADDR`): WorkspaceSubstrate over live daemon — write→capture→destroy→apply→verify | ✅ | `sandbox/containerd/workspace_live_test.go` — committed dormant in PR #22 (the nested module compiles against published core only), activated by the repin to `v0.7.0` in PR #23: build tag dropped, file joins the normal linux graph, runtime-skips without a daemon. The daemon round trip is executed and green: 2026-10-10, 9/9 live tests against a fresh cold namespace on the dev box's daemon (the PR #25 verification, released as `sandbox/containerd/v0.1.4`) |
 **Exit criteria**: plan-03 §6 boxes checked ✅; ledger idempotency proven by
 crash-window test ✅ (`TestMaterializeCrashWindowReplayIsConsistent`);
 v0.7.0 tagged ✅ (`df43d33`, published). The nested
