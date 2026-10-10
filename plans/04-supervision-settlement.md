@@ -207,14 +207,24 @@ the reference scenarios consumers will ask for):
 
 ## 5. Acceptance criteria
 
-- [ ] `CommitMerge` with a denying reviewer: parent workspace untouched,
+- [x] `CommitMerge` with a denying reviewer: parent workspace untouched,
       child discarded, `supervisor.decision.v1` (denied) in trace, error type
       carries reason.
-- [ ] Approving reviewer merges and records both proposed + decision records.
-- [ ] Settlement verbs enforce consume-once; apply-conflict leaves output
+      *(Shared-sandbox child: "untouched" is the caller's checkpoint restore
+      per §1's design — `TestCommitMerge_DenyingReviewer` asserts the full
+      rhythm; the isolated-child refusal is
+      `TestCommitMerge_IsolatedChildRefused`.)*
+- [x] Approving reviewer merges and records both proposed + decision records.
+- [x] Settlement verbs enforce consume-once; apply-conflict leaves output
       unconsumed; select refuses non-fast-forward with actionable error.
-- [ ] All three recipe tests green on Windows (git worktree carrier) — no
-      Linux-only assumptions.
-- [ ] `InterventionDiscard` has a live emitter (supervisor-driven denial).
-- [ ] README: "Review before merge / settle outputs" section with the
+- [x] All three recipe tests green on Windows (git worktree carrier) — no
+      Linux-only assumptions. *(Green on Linux; the CI Windows job is the
+      carrier proof.)*
+- [x] `InterventionDiscard` has a live emitter (supervisor-driven denial).
+- [x] README: "Review before merge / settle outputs" section with the
       best-of-n snippet.
+
+### 6. Post-merge steps (the PR #19/#24 pattern)
+
+- [ ] Tag `v0.8.0` at the merge commit and verify it resolves from a clean
+      module; tick this box in the follow-up docs commit.

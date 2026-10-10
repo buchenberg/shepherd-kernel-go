@@ -487,16 +487,20 @@ tests. Detailed spec: `plans/04-supervision-settlement.md`.
 not hard-required — settlement addresses scopes/outputs, not executions.
 **Deliverable**: v0.8.0.
 
-| ID | Task | Files | Est | Deps |
-|---|---|---|---|---|
-| T3.1 | Fork-time baseline: `ForkIsolated`/`Fork` capture parent `WorkspaceState` digest into `shepherd.scope.forked.v1` payload (`baseline_digest`, additive) | `scope.go`, `scope_manager.go` (+tests) | 0.75d | — |
-| T3.2 | `ProposedChange`/`MergeProposal` + `ScopeManager.ProposeMerge` (diff vs baseline; shared-sandbox fallback = latest parent capture) | `scope_manager.go` or new `merge_gate.go` | 1.5d | T3.1 |
-| T3.3 | `CommitMerge` + reviewer contract + `SupervisorDeniedError`; records `shepherd.merge.proposed.v1` and `shepherd.supervisor.decision.v1`; deny → Discard + error; plain `Merge` remains (documented opt-out) | same | 1.5d | T3.2 |
-| T3.4 | Built-in reviewers (`DraftsOnlyReviewer(prefix)`, `DestructivePathReviewer(patterns)`) + `Supervisor.ReviewMerge` (gives `InterventionDiscard` a live emitter) | `supervisor.go` (+tests) | 1d | T3.3 |
-| T3.5 | Settlement core: `RetainedOutput`, `Scope.Seal` (+`shepherd.run_output.{sealed,settled}.v1`), state machine (`unconsumed → selected/applied/released/discarded`, `invalid`), `ErrOutputConsumed`, `ErrApplyConflict` (apply failure does **not** consume); select = fast-forward-only; apply = three-way with path-disjointness guard | new `settlement.go` (+tests) | 3d | T3.1 |
-| T3.6 | `ScopeManager` output registry (`Seal/Output/OutputsForScope/Settle`) | `scope_manager.go` | 0.75d | T3.5 |
-| T3.7 | Recipes as tests: `TestExample_BestOfN`, `TestExample_RetryUntilAcceptable` (CheckCall pre-deny + merge-review commit-deny + checkpoint/restore in one loop), `TestExample_ApplyOntoMovedWorkspace` (disjoint succeeds / overlap conflicts unconsumed) — must pass on Windows git-worktree carrier | `examples_test.go` | 2d | T3.3–T3.6 |
-| T3.8 | README "Review before merge / settle outputs" section with best-of-n snippet | `README.md` | 0.5d | T3.7 |
+**Status (2026-10-10): complete — T3.1–T3.8 ✅, on branch
+`parity/p3-supervision-settlement` awaiting review/merge; v0.8.0 is the
+post-merge tag (the PR #19/#24 pattern: ticked there once it resolves).**
+
+| ID | Task | Status | Evidence |
+|---|---|---|---|
+| T3.1 | Fork-time baseline: `ForkIsolated`/`Fork` capture parent `WorkspaceState` digest into `shepherd.scope.forked.v1` payload (`baseline_digest`, additive) | ✅ | `scope.go` — `Fork` captures the parent state (a failed capture fails the fork), records the digest, hands the child `Scope.Baseline()`. Pure-causal forks carry none and are refused loudly downstream. `TestFork_RecordsBaselineDigest` |
+| T3.2 | `ProposedChange`/`MergeProposal` + `ScopeManager.ProposeMerge` (diff vs baseline; shared-sandbox fallback = latest parent capture) | ✅ | `merge_gate.go` — `classifyChanges` parses the unified diff (`---`/`+++` authoritative for create/delete, the git header is not); list-only files stay reviewable. `TestClassifyChanges`, `TestProposeMerge_ClassifiesChildChanges` |
+| T3.3 | `CommitMerge` + reviewer contract + `SupervisorDeniedError`; records `shepherd.merge.proposed.v1` and `shepherd.supervisor.decision.v1`; deny → Discard + error; plain `Merge` remains (documented opt-out) | ✅ | `merge_gate.go` — hard appends before review (a trace that cannot carry the proposal must not carry a decision). Nil reviewers rejected. Isolated children refused: Merge is causal-only, approval would destroy the worktree holding the approved work — settlement owns that transfer. `TestCommitMerge_{DenyingReviewer,ApprovingReviewer,RequiresReviewer,IsolatedChildRefused}` |
+| T3.4 | Built-in reviewers (`DraftsOnlyReviewer(prefix)`, `DestructivePathReviewer(patterns)`) + `Supervisor.ReviewMerge` (gives `InterventionDiscard` a live emitter) | ✅ | `merge_gate.go` + `supervisor.go` — proposals reach rules as `merge:proposed` effect events. `TestDestructivePathReviewer`, `TestSupervisor_ReviewMerge` |
+| T3.5 | Settlement core: `RetainedOutput`, `Scope.Seal` (+`shepherd.run_output.{sealed,settled}.v1`), state machine (`unconsumed → selected/applied/released/discarded`, `invalid`), `ErrOutputConsumed`, `ErrApplyConflict` (apply failure does **not** consume); select = fast-forward-only; apply = three-way with path-disjointness guard | ✅ | `settlement.go` — sealed record appended hard (it is the durable half); settled advisory (effects already happened). Select is fast-forward-only in the strictest sense (digest equality with the fork baseline — a dirty-at-fork parent is told to apply rather than lose content). Apply's three-way is the new optional `DeltaApplier` sandbox capability (git: stash-apply across the shared object store). `settlement_test.go` |
+| T3.6 | `ScopeManager` output registry (`Seal/Output/OutputsForScope/Settle`) | ✅ | `scope_manager.go` — `Settle` holds the output's lock for the whole validate → act → mark sequence, so concurrent settles cannot double-claim. `TestSeal_FreezesChanges`, `TestSettle_*` |
+| T3.7 | Recipes as tests: `TestExample_BestOfN`, `TestExample_RetryUntilAcceptable` (CheckCall pre-deny + merge-review commit-deny + checkpoint/restore in one loop), `TestExample_ApplyOntoMovedWorkspace` (disjoint succeeds / overlap conflicts unconsumed) — must pass on Windows git-worktree carrier | ✅ | `examples_test.go` — all three green on the git worktree carrier, no OS-specific assumptions; CI's Windows job is the carrier proof |
+| T3.8 | README "Review before merge / settle outputs" section with best-of-n snippet | ✅ | `README.md` — "Review before merge / settle outputs" + Scope Manager API block; `CHANGELOG.md` carries the Unreleased section |
 
 **Exit criteria**: plan-04 §5 boxes checked; recipes green on Windows + Linux;
 v0.8.0 tagged.
