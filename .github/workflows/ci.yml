@@ -142,11 +142,15 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           if [ "${tag#sandbox/}" != "$tag" ]; then
             # A nested-module tag: verify the core requirement it pins too.
+            # go get wants the bare version -- GITHUB_REF_NAME is the full
+            # subpath tag (sandbox/containerd/vX.Y.Z), which is not a valid
+            # version operand, so strip the module path off it.
             core=$(grep -m1 'github.com/buchenberg/shepherd-kernel-go v' sandbox/containerd/go.mod | awk '{print $2}')
-            echo "nested tag $tag -> verifying core $core as well"
+            nested="${tag#sandbox/containerd/}"
+            echo "nested tag $tag -> verifying nested $nested against core $core"
             ( cd "$(mktemp -d)" && go mod init verify >/dev/null && \
               go get "github.com/buchenberg/shepherd-kernel-go@${core}" && \
-              go get "github.com/buchenberg/shepherd-kernel-go/sandbox/containerd@${tag}" )
+              go get "github.com/buchenberg/shepherd-kernel-go/sandbox/containerd@${nested}" )
           else
             ( cd "$(mktemp -d)" && go mod init verify >/dev/null && \
               go get "github.com/buchenberg/shepherd-kernel-go@${tag}" )
