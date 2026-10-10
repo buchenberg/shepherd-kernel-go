@@ -188,8 +188,8 @@ Echo/KV substrates and reproduce ID-for-ID through the Go dispatch.
 was inverted exactly as its comment predicted — and the PR review's five
 findings were addressed in-tree (plan 03 §8), including the honest-outcome
 rule that world-touched failures report `split_state`, never `clean_failure`.
-**Phase 4 is complete** (2026-10-10; branch `parity/p4-durability-idioms`,
-release `v0.9.0` post-merge). `RecoverScopes` rebuilds the registry from the
+**Phase 4 is complete — the parity plan is done** (2026-10-10; merged as
+PR #29 at `c605eb3`, released as `v0.9.0`). `RecoverScopes` rebuilds the registry from the
 trace, checkpoint blobs persist restorably with staleness detection, and
 the ctx sweep made `context.Context` the first parameter on every store API.
 
@@ -529,9 +529,10 @@ change. Detailed spec: `plans/05-persistence-hygiene-release.md` §4, §6–8.
 **Deliverable**: v0.9.0 — **breaking**: `context.Context` becomes the first
 parameter across store APIs.
 
-**Status (2026-10-10): complete — T4.1–T4.7 ✅ on branch
-`parity/p4-durability-idioms`; v0.9.0 is the post-merge tag (the PR #19
-pattern: ticked in the follow-up once it resolves).**
+**Status (2026-10-10): complete — T4.1–T4.7 ✅. Merged as PR #29 at
+`c605eb3` (review findings addressed in `106431d`); `v0.9.0` is tagged there
+and verified end-to-end from a clean module — and, for the first time, by the
+release-verify CI job (T4.6), which passed on its live debut.**
 
 | ID | Task | Status | Evidence |
 |---|---|---|---|---|
