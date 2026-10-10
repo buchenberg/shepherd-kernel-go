@@ -4,7 +4,7 @@ Notable changes to `shepherd-kernel-go`. This project follows
 [Semantic Versioning](https://semver.org/); while pre-1.0, minor releases may
 contain breaking changes, which are called out below.
 
-## [Unreleased]
+## [v0.8.0] - 2026-10-10
 
 Supervision & settlement (plan 04, Phase 3): nothing from a child scope
 reaches the parent without passing a review gate, and child results are
