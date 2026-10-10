@@ -594,6 +594,19 @@ v0.9.0 tagged; yaah pinned and compiling against ctx APIs.
 - [ ] Decision: API freeze of Ring-0-adjacent surface (store, canonical,
       schemas, handles) as the v1 contract; Sandbox/Supervisor remain
       explicitly extensible.
+- [ ] Decision (architectural review, 2026-10-10): two packaging questions
+      deferred to this window rather than settled now —
+      (a) move the git backend to a subpackage *within the core module*
+      (`shepherd/sandbox/git`) for namespace separation without a nested
+      module (an API break: `NewLocalGitSandbox`/`NewWorktreeSandbox` move;
+      deliberately NOT a separate Go module — git has zero external
+      dependencies and is the test carrier, so nesting would buy nothing
+      and cost the T0.8b repin dance);
+      (b) split the flat `shepherd` package (kernel / runtime / backends
+      share one namespace today). Both are hard to fix after an API
+      freeze; both are cosmetic-but-real now. The `SandboxFactory`/
+      `OpenSandbox` registry (the construction seam) landed in v0.10.0 so
+      backend *selection* is already decoupled from backend *location*.
 
 ## 14. Execution conventions
 

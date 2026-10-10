@@ -4,6 +4,27 @@ Notable changes to `shepherd-kernel-go`. This project follows
 [Semantic Versioning](https://semver.org/); while pre-1.0, minor releases may
 contain breaking changes, which are called out below.
 
+## [Unreleased]
+
+### Added
+- **Sandbox backend registry** — the construction seam for config-driven
+  backend selection: `RegisterSandbox(backend, SandboxFactory)`,
+  `OpenSandbox(backend, cfg)`, `SandboxBackends()`. The factory's `cfg` is
+  opaque to the kernel; each backend defines its own config type
+  (`GitSandboxConfig` for the built-in git backend, which now
+  self-registers). Unknown names fail with `ErrUnknownSandboxBackend`
+  listing the registered backends. `OpenSandbox` does not provision —
+  `Create` remains the explicit lifecycle step. A host that never imports
+  a backend cannot select it: config can name a backend, only imports can
+  provide one.
+
+### Changed (docs)
+- README: the containerd backend's framing is now "runs anywhere a
+  containerd daemon runs — native Linux, WSL2, or a Linux server";
+  "Linux-only" is stated as the build-tag fact it is. The backend section
+  documents why git is in-module and containerd is nested (dependency
+  weight and the test carrier, not modularity), and the sandbox registry.
+
 ## [v0.9.0] - 2026-10-10
 
 Durability & idioms (plan 05 §4/§6–8, Phase 4). **Breaking**: every store API

@@ -312,18 +312,24 @@ store separate from the trace, and the echo substrate is the test fixture.
 │  └────┬──────────────────────────────┬────────┘  │
 │       │                              │           │
 │  ┌────▼──────────────────┐  ┌────────▼────────┐  │
-│  │ Sandbox               │  │ EffectBus       │  │
+│  │ Sandbox (interface)   │  │ EffectBus       │  │
 │  │  Capture / Apply /    │  │  Non-blocking   │  │
 │  │  Diff / Exec          │  │  pub/sub        │  │
-│  │  git · containerd     │  └────────┬────────┘  │
+│  │  git · containerd*    │  └────────┬────────┘  │
 │  └───────────────────────┘           │           │
-│                                      │           │
 │  ┌───────────────────────────────────▼────────┐  │
 │  │ SQLiteTraceStore                           │  │
 │  │  Content-addressed, append-only            │  │
 │  └────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────┘
 ```
+
+\* `git` is built into the core module; the containerd backend is a nested
+module (`sandbox/containerd`) that runs anywhere a containerd daemon runs —
+native Linux, **WSL2**, or a Linux server. "Linux-only" is a build-tag
+statement about the daemon client, not a hardware statement. Any
+implementation of the `Sandbox` interface is swappable in, and
+`OpenSandbox` resolves a configured backend name to a constructed sandbox.
 
 ## Core Concepts
 
@@ -409,10 +415,12 @@ daemon's garbage collector could reclaim it before the successor was prepared
 made the suite fail 3 runs in 5, a different test each time.
 
 The sandbox now holds a labelled lease for its lifetime, and **12 consecutive
-live runs are green**. The harness needs a Linux host with a running containerd
-daemon; a stock image and the overlayfs snapshotter suffice, and no root-owned
-FIFO directory is required. It is Linux-only and can never be this module's
-default.
+live runs are green**. The harness needs a Linux environment with a running
+containerd daemon — native Linux, WSL2, or a server all qualify (the harness
+was designed with a WSL2 host in mind: the FIFODir knob exists precisely so a
+non-root WSL2 client can drive the daemon); a stock image and the overlayfs
+snapshotter suffice. The module is Linux-gated at build time and can never be
+this module's default.
 
 **State durability.** A first run against a *cold* daemon (fresh namespace, no
 image) found an eleventh defect the warm-daemon runs had masked, and a twelfth
@@ -531,14 +539,38 @@ snapshot, err := scope.RestoreCheckpoint(ctx, cp)
 
 ### Sandbox backends
 
+Two implementations exist, packaged differently on purpose:
+
+- **git** — built into the core module. It is a materializer, not an
+  isolation boundary (`Isolated: false` in-place, `true` for a detached
+  worktree), has zero external dependencies, and is the carrier the
+  kernel's own test suite rides on.
+- **containerd** — a nested module (`sandbox/containerd`) so its
+  dependency tree stays out of the core. It runs **anywhere a containerd
+  daemon runs: native Linux, WSL2, or a Linux server** — "Linux-only" is a
+  build-tag statement about the daemon client (`//go:build linux`), not a
+  hardware statement, and the module compiles out politely on other
+  platforms.
+
+Any type implementing the `Sandbox` interface is swappable in — the
+kernel never inspects a backend beyond the opaque
+`WorkspaceState.Backend` string. For config-driven selection, backends
+register factories and the host resolves a configured name:
+
 ```go
-// In-place: materializes on your repository. Destroy is a no-op.
-sb := shepherd.NewLocalGitSandbox(repoPath)
+// Config-driven construction: the git backend self-registers; a host
+// that imports the containerd module registers it the same way.
+sb, err := shepherd.OpenSandbox("git", shepherd.GitSandboxConfig{RepoPath: repoPath})
+// (containerd, once imported and registered: its own config struct)
 
-// Worktree: a detached git worktree this scope owns.
-sb := shepherd.NewWorktreeSandbox(repoPath, worktreePath)
+_, err := shepherd.OpenSandbox("podman", nil)   // -> ErrUnknownSandboxBackend, listing what IS registered
+backends := shepherd.SandboxBackends()          // sorted names, for config diagnostics
 
-err := sb.Create(ctx, shepherd.SandboxSpec{})
+// Direct constructors remain available:
+sb := shepherd.NewLocalGitSandbox(repoPath)      // in-place: materializes on your repository. Destroy is a no-op.
+sb = shepherd.NewWorktreeSandbox(repoPath, wt)    // worktree: a detached git worktree this scope owns
+
+err := sb.Create(ctx, shepherd.SandboxSpec{})    // OpenSandbox does NOT provision; Create is the lifecycle step
 defer sb.Destroy(ctx)
 
 ws, err := sb.Capture(ctx)
