@@ -438,6 +438,22 @@ cold-namespace live suite that found both defects — including the
 destroy-keeps-states acceptance sequence — is **9/9 green** on this code
 (2026-10-10, released as `sandbox/containerd/v0.1.4`).
 
+**Delta merges.** Since `sandbox/containerd/v0.1.5` the backend implements
+`shepherd.DeltaApplier`, so settlement's apply verb (`SettleApply`) works on
+containerd scopes: a sealed output merges onto a parent whose workspace moved
+past the fork, without resetting it. `Apply` records the applied state's git
+HEAD as the sandbox's delta base and every `Capture` carries a git binary
+patch from that base to the captured tree; `ApplyDelta` merges at the tree
+level (`git merge-tree --write-tree`) in the object database, so a conflicting
+delta refuses with the working tree untouched — no markers, no partial
+application — and a clean one lands as unstaged changes that leave the
+caller's staged work alone. The package also self-registers with
+`shepherd.OpenSandbox` under `"containerd"` when imported, so
+config-driven backend selection needs no host wiring beyond the import.
+The merge machinery is pinned live by
+`TestLive_ApplyDeltaMergesOntoMovedParent` and
+`TestLive_ApplyDeltaConflictRefusesUntouched`.
+
 ### Workspace State
 
 A **`WorkspaceState`** is a backend-neutral snapshot of a workspace — the replacement for the git-specific stash/HEAD pair:
@@ -559,9 +575,9 @@ kernel never inspects a backend beyond the opaque
 register factories and the host resolves a configured name:
 
 ```go
-// Config-driven construction: the git backend self-registers; a host
-// registers the containerd backend at wiring time (shepherd.RegisterSandbox
-// with a factory over the nested module's constructor).
+// Config-driven construction: the git backend self-registers in-core, and
+// the containerd backend self-registers when its package is imported
+// (sandbox/containerd v0.1.5+ pins a registry-carrying core).
 sb, err := shepherd.OpenSandbox("git", shepherd.GitSandboxConfig{RepoPath: repoPath})
 
 _, err = shepherd.OpenSandbox("podman", nil)    // -> ErrUnknownSandboxBackend, listing what IS registered

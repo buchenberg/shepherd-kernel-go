@@ -4,6 +4,60 @@ Notable changes to `shepherd-kernel-go`. This project follows
 [Semantic Versioning](https://semver.org/); while pre-1.0, minor releases may
 contain breaking changes, which are called out below.
 
+## [sandbox/containerd/v0.1.5] - 2026-10-10
+
+The nested module repins to core `v0.10.0` (from `v0.7.0`), which is what
+carries the sandbox registry and the settlement surface — until this release,
+importing the adapter alongside a current yaah pin would silently compile
+against pre-ctx core. Core itself is unchanged and stays at `v0.10.0`;
+`go get …/sandbox/containerd@v0.1.5` pulls core `v0.10.0` from a clean module.
+
+### Added (containerd)
+- **`ApplyDelta` — the containerd backend now implements
+  `shepherd.DeltaApplier`**, so a sealed containerd output can settle through
+  `SettleApply` onto a parent that moved since the fork, the verb yaah's
+  isolated-workspace plan reaches for in its apply-out.
+  - `Apply` records the applied state's git HEAD as the sandbox's delta
+    base; every `Capture` from then on carries, in the state's `Data`,
+    `delta_base` plus `delta_patch` — a base64 git binary patch from the base
+    to the captured working tree, untracked files included. A state from a
+    sandbox that never applied a git state carries neither key and settles
+    `SettleSelect`-only; `ApplyDelta` on it returns `ErrUnsupported` instead
+    of pretending.
+  - The merge runs at the tree level in the repository's object database
+    (`git merge-tree --write-tree` over the reconstructed delta tree, the
+    working tree as it stands, and the base tree), so a conflicting delta
+    refuses with the working tree untouched — no conflict markers, no
+    partial application — and the refusal names the conflicting paths. A
+    clean merge lands as unstaged working tree changes; the caller's staged
+    work survives, because the final materialization is a plain `git apply`
+    whose preimage is the working tree itself.
+  - The patch payload rides the state's `Data`, so it persists through
+    `Seal`'s trace record and `RecoverScopes` — a recovered output is still
+    settle-able.
+- **OpenSandbox self-registration**: importing the package registers the
+  backend under `containerd` (the same `init()` convention as the in-core
+  git backend), so config-driven selection no longer needs host wiring —
+  `shepherd.OpenSandbox("containerd", containerd.Config{…})` resolves it, and
+  a host that also calls `RegisterSandbox("containerd", …)` itself must not
+  (duplicate registration panics, by the registry's design).
+
+### Changed (containerd)
+- **The module pins core `v0.10.0`** (from `v0.7.0`), which carries the
+  ctx-first store APIs; the module's own live tests were swept accordingly
+  (`store.Close/Append/ReadFact` now take the context). The adapter's own
+  API is unchanged.
+- `WorkspaceState.Data` gained two keys (`delta_base`, `delta_patch`); states
+  are otherwise unchanged and apply as before.
+
+> Release hygiene: tagged at the merge commit, release-verify CI job guards
+> the clean-module resolution. The live acceptance for `ApplyDelta` — merge
+> onto a moved parent with uncommitted pre-fork work preserved and staging
+> intact, and an add/add conflict refusing with the tree untouched and the
+> delta still consumable — is `TestLive_ApplyDeltaMergesOntoMovedParent` and
+> `TestLive_ApplyDeltaConflictRefusesUntouched` in
+> `sandbox/containerd/live_test.go`.
+
 ## [v0.10.0] - 2026-10-10
 
 ### Added
