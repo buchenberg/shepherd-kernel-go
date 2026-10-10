@@ -3,6 +3,7 @@ package shepherd
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -15,6 +16,7 @@ type ScopeManager struct {
 	store       *SQLiteTraceStore
 	scopes      map[string]*Scope
 	checkpoints map[string]*Checkpoint
+	outputs     map[string]*RetainedOutput
 	mu          sync.RWMutex
 }
 
@@ -26,6 +28,7 @@ func NewScopeManager(store *SQLiteTraceStore) *ScopeManager {
 		store:       store,
 		scopes:      make(map[string]*Scope),
 		checkpoints: make(map[string]*Checkpoint),
+		outputs:     make(map[string]*RetainedOutput),
 	}
 }
 
@@ -160,6 +163,63 @@ func (m *ScopeManager) AllScopes() []*Scope {
 		all = append(all, s)
 	}
 	return all
+}
+
+// --- Retained output registry ---
+
+// Seal seals a scope's workspace as a retained output and registers it, which
+// is what makes the output settle-able: Settle and RetainedOutput.Settle
+// resolve the output and its scopes through the manager. The scope stays
+// active — sealing does not merge.
+func (m *ScopeManager) Seal(ctx context.Context, scopeID string) (*RetainedOutput, error) {
+	m.mu.RLock()
+	scope, ok := m.scopes[scopeID]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("scope %s not found", scopeID)
+	}
+
+	out, err := scope.Seal(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	if existing, exists := m.outputs[out.ID]; exists {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("output ID collision: %s already exists (scope %s)", out.ID, existing.ScopeID)
+	}
+	out.mgr = m
+	m.outputs[out.ID] = out
+	m.mu.Unlock()
+
+	return out, nil
+}
+
+// Output returns a registered retained output by ID, or false if not found.
+func (m *ScopeManager) Output(id string) (*RetainedOutput, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out, ok := m.outputs[id]
+	return out, ok
+}
+
+// OutputsForScope returns the retained outputs sealed by a scope, oldest
+// first (by seal sequence).
+func (m *ScopeManager) OutputsForScope(scopeID string) []*RetainedOutput {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var outs []*RetainedOutput
+	for _, out := range m.outputs {
+		if out.ScopeID == scopeID {
+			outs = append(outs, out)
+		}
+	}
+	sort.Slice(outs, func(i, j int) bool {
+		return outs[i].SealedAt.Before(outs[j].SealedAt)
+	})
+	return outs
 }
 
 // --- Checkpoint registry ---
