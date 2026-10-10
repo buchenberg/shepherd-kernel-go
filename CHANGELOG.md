@@ -50,8 +50,13 @@ against pre-ctx core. Core itself is unchanged and stays at `v0.10.0`;
 - `WorkspaceState.Data` gained two keys (`delta_base`, `delta_patch`); states
   are otherwise unchanged and apply as before.
 
-> Release hygiene: tagged at the merge commit, release-verify CI job guards
-> the clean-module resolution. The live acceptance for `ApplyDelta` — merge
+> Everything in this section shipped 2026-10-10 as the nested-module release
+> `sandbox/containerd/v0.1.5`, tagged at `974bc56` (the PR #33 merge); core
+> stays at `v0.10.0`. Verified end-to-end from a clean module:
+> `go get …/sandbox/containerd@v0.1.5` pulls core `v0.10.0`. The live suite
+> on the final commit is green — 11/11, including both ApplyDelta acceptance
+> tests. The release-verify CI job guards the clean-module resolution on the
+> tag. The live acceptance for `ApplyDelta` — merge
 > onto a moved parent with uncommitted pre-fork work preserved and staging
 > intact, and an add/add conflict refusing with the tree untouched and the
 > delta still consumable — is `TestLive_ApplyDeltaMergesOntoMovedParent` and
