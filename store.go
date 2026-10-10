@@ -59,6 +59,9 @@ type SQLiteTraceStore struct {
 	db   *sql.DB
 	mu   sync.Mutex
 	bus  *EffectBus // optional; nil = no real-time publishing
+	// checkpointBlobLimit bounds the caller snapshot bytes persisted per
+	// checkpoint (plan 05 §4). Zero means DefaultCheckpointBlobLimit.
+	checkpointBlobLimit int64
 }
 
 // WithBus attaches an effect bus to the store. When set, every successful
@@ -69,6 +72,31 @@ type SQLiteTraceStore struct {
 func (s *SQLiteTraceStore) WithBus(bus *EffectBus) *SQLiteTraceStore {
 	s.bus = bus
 	return s
+}
+
+// WithCheckpointBlobLimit bounds the opaque snapshot bytes persisted per
+// checkpoint. A checkpoint whose snapshot exceeds the limit fails loudly at
+// creation — the host externalizes large state instead of silently growing
+// the trace database. Zero restores the default.
+func (s *SQLiteTraceStore) WithCheckpointBlobLimit(limit int64) *SQLiteTraceStore {
+	if limit <= 0 {
+		limit = DefaultCheckpointBlobLimit
+	}
+	s.checkpointBlobLimit = limit
+	return s
+}
+
+// DefaultCheckpointBlobLimit is the default per-checkpoint snapshot cap:
+// 1 MiB, generous for serialized conversation history, small enough that a
+// long session cannot balloon the trace database unnoticed.
+const DefaultCheckpointBlobLimit = 1 << 20
+
+// checkpointBlobLimitOrDefault resolves the effective limit.
+func (s *SQLiteTraceStore) checkpointBlobLimitOrDefault() int64 {
+	if s.checkpointBlobLimit > 0 {
+		return s.checkpointBlobLimit
+	}
+	return DefaultCheckpointBlobLimit
 }
 
 // NewSQLiteTraceStore creates a new trace store at the given path.
@@ -405,6 +433,63 @@ func (s *SQLiteTraceStore) FactCount(ctx context.Context) (int, error) {
 	return count, err
 }
 
+// scannedRecord is one record selected by schema ref, with the owner path it
+// was read from and its decoded payload. Recovery is the caller: the
+// lifecycle, checkpoint, and settlement schemas are open-map payloads, so
+// records are the durable registry a restart rebuilds from.
+type scannedRecord struct {
+	RecordID  string
+	OwnerID   string
+	SchemaRef string
+	Payload   map[string]any
+}
+
+// scanRecordsBySchema returns every retained record whose schema_ref is one
+// of the given refs, each with its owner path (path_ref) and payload. A
+// record retained on multiple paths appears once per path; lifecycle
+// records are single-path by construction.
+func (s *SQLiteTraceStore) scanRecordsBySchema(gctx context.Context, schemaRefs ...string) ([]scannedRecord, error) {
+	if len(schemaRefs) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.Repeat("?,", len(schemaRefs))
+	placeholders = placeholders[:len(placeholders)-1]
+
+	args := make([]any, 0, len(schemaRefs))
+	for _, ref := range schemaRefs {
+		args = append(args, ref)
+	}
+
+	rows, err := s.db.QueryContext(gctx, `
+		SELECT records.record_id, path_entries.path_ref, records.schema_ref, records.body_json
+		FROM records
+		JOIN path_entries ON path_entries.record_id = records.record_id
+		WHERE records.schema_ref IN (`+placeholders+`)
+		ORDER BY path_entries.path_ref, path_entries.path_ordinal ASC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("scan records by schema: %w", err)
+	}
+	defer rows.Close()
+
+	var out []scannedRecord
+	for rows.Next() {
+		var rec scannedRecord
+		var bodyJSON string
+		if err := rows.Scan(&rec.RecordID, &rec.OwnerID, &rec.SchemaRef, &bodyJSON); err != nil {
+			return nil, fmt.Errorf("scan record row: %w", err)
+		}
+		// bodyFromJSON keeps the int/float distinction the canonical layer
+		// depends on; plain Unmarshal would silently flatten numbers.
+		body, err := bodyFromJSON(bodyJSON)
+		if err != nil {
+			return nil, fmt.Errorf("decode payload of record %s: %w", rec.RecordID, err)
+		}
+		rec.Payload = body.Payload
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
 // ContextCount returns the retained context count for diagnostics.
 func (s *SQLiteTraceStore) ContextCount(ctx context.Context) (int, error) {
 	var count int
@@ -507,6 +592,15 @@ func (s *SQLiteTraceStore) createSchema() error {
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_path_entries_record ON path_entries(record_id);
+
+		CREATE TABLE IF NOT EXISTS checkpoint_snapshots (
+			checkpoint_id TEXT PRIMARY KEY,
+			scope_id TEXT NOT NULL,
+			seq INTEGER NOT NULL,
+			state_json TEXT NOT NULL,
+			snapshot BLOB NOT NULL,
+			created_at_unixnano INTEGER NOT NULL
+		);
 
 		CREATE TABLE IF NOT EXISTS frontiers (
 			frontier_id TEXT PRIMARY KEY,

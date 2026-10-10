@@ -213,14 +213,16 @@ func (s *Scope) Fork(childOwnerID string, snapshot any) (*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.forkWithBaseline(childOwnerID, snapshot, baseline)
+	return s.forkWithBaseline(childOwnerID, snapshot, baseline, false, "")
 }
 
 // forkWithBaseline is Fork after the baseline decision, so the scope
 // manager can capture the baseline outside its own lock (a git capture is
 // a subprocess bounded by gitTimeout; the registry must not wait on it)
-// and still register atomically.
-func (s *Scope) forkWithBaseline(childOwnerID string, snapshot any, baseline WorkspaceState) (*Scope, error) {
+// and still register atomically. isolated records that the child was
+// forked with its own substrate, which is what recovery needs to know
+// whether a re-adopted sandbox belongs to the child alone.
+func (s *Scope) forkWithBaseline(childOwnerID string, snapshot any, baseline WorkspaceState, isolated bool, sandboxBackend string) (*Scope, error) {
 	s.mu.Lock()
 	if s.state != ScopeActive {
 		s.mu.Unlock()
@@ -240,10 +242,24 @@ func (s *Scope) forkWithBaseline(childOwnerID string, snapshot any, baseline Wor
 	forkPayload := map[string]any{
 		"child_owner": childOwnerID,
 	}
+	if isolated {
+		forkPayload["isolated"] = true
+		if sandboxBackend != "" {
+			forkPayload["sandbox_backend"] = sandboxBackend
+		}
+	}
 	if baseline.Backend != "" {
 		digest, err := baseline.Digest()
 		if err == nil {
 			forkPayload["baseline_digest"] = digest
+		}
+		// The full baseline state rides in the payload so recovery can
+		// rebuild a child that can still propose merges and seal outputs:
+		// the digest alone cannot restore a WorkspaceState.
+		forkPayload["baseline"] = map[string]any{
+			"backend":  baseline.Backend,
+			"revision": baseline.Revision,
+			"data":     baseline.Data,
 		}
 	}
 

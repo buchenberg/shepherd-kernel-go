@@ -235,6 +235,21 @@ func (s *Scope) Seal(ctx context.Context) (*RetainedOutput, error) {
 					"state_digest":    stateDigest,
 					"baseline_digest": baselineDigest,
 					"change_count":    len(out.changes),
+					// The full states and the change list ride in the payload so
+					// recovery (plan 05 section 4) rebuilds settle-able outputs:
+					// digests alone cannot restore a WorkspaceState, and the
+					// overlap guard needs the paths.
+					"state": map[string]any{
+						"backend":  ws.Backend,
+						"revision": ws.Revision,
+						"data":     ws.Data,
+					},
+					"baseline": map[string]any{
+						"backend":  baseline.Backend,
+						"revision": baseline.Revision,
+						"data":     baseline.Data,
+					},
+					"changes": changesPayload(out.changes),
 				},
 			}},
 		}},
@@ -246,6 +261,15 @@ func (s *Scope) Seal(ctx context.Context) (*RetainedOutput, error) {
 		out.sealedFactID = receipt.FactIDs[0]
 	}
 	return out, nil
+}
+
+// changesPayload renders a change list as trace payload entries.
+func changesPayload(changes []ProposedChange) []map[string]any {
+	out := make([]map[string]any, 0, len(changes))
+	for _, c := range changes {
+		out = append(out, map[string]any{"path": c.Path, "kind": c.Kind})
+	}
+	return out
 }
 
 // stateFor maps a settlement action to its terminal output state.
